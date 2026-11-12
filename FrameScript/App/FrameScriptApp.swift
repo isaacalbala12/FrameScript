@@ -23,6 +23,7 @@ struct FrameScriptApp: App {
                 AppRootView()
             }
             .environment(appState)
+            .backupsSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
                 appDelegate.attach(appState)
@@ -195,6 +196,10 @@ struct FrameScriptApp: App {
             Button(appState.localized("menu.generateBRoll")) { appState.generateBRollForSelectedScene() }
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
+                .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("backups.menu")) { appState.showBackupsWindow() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .showBackups))
                 .disabled(!appState.hasOpenProject)
         }
     }

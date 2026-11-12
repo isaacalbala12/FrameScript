@@ -1932,6 +1932,7 @@ final class ProjectStore {
 
     func saveCurrentProject(to url: URL, wordsPerMinute: Int) throws {
         prepareForSave(wordsPerMinute: wordsPerMinute)
+        BackupsCenter.backUpBeforeOverwrite(project: project, fileURL: url)
         do {
             try projectWriter(project, url)
         } catch {

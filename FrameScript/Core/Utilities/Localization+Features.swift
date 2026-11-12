@@ -7,6 +7,8 @@ extension L10n {
     static let featureTables: [[AppLanguage: [String: String]]] = [
         simracingTemplateStrings,
         autosaveStrings,
-        [.spanish: autosaveSpanish]
+        [.spanish: autosaveSpanish],
+        backupsStrings,
+        [.spanish: backupsSpanish]
     ]
 }
