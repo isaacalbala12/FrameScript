@@ -1001,9 +1001,15 @@ final class AppState {
             return
         }
         guard let selectedSceneIndex else { return }
-        let nextID = project.scenes.indices.contains(selectedSceneIndex + 1)
-            ? project.scenes[selectedSceneIndex + 1].id
-            : project.scenes.indices.contains(selectedSceneIndex - 1) ? project.scenes[selectedSceneIndex - 1].id : nil
+        // `selectedSceneIndex` is an index into visual (sorted) order, while
+        // `project.scenes` keeps insertion order. Subscripting storage with it
+        // selects an unrelated scene after "Add Scene After".
+        let orderedScenes = project.scenes.sortedByOrder
+        let nextID = orderedScenes.indices.contains(selectedSceneIndex + 1)
+            ? orderedScenes[selectedSceneIndex + 1].id
+            : orderedScenes.indices.contains(selectedSceneIndex - 1)
+                ? orderedScenes[selectedSceneIndex - 1].id
+                : orderedScenes.indices.contains(selectedSceneIndex) ? orderedScenes[selectedSceneIndex].id : nil
         transitionEditorContext(sceneID: .some(nextID)) {
             projectStore.deleteScene(at: selectedSceneIndex, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             scheduleAutosaveIfNeeded()
@@ -1101,8 +1107,10 @@ final class AppState {
 
     func moveSelection(_ delta: Int) {
         guard let selectedSceneIndex else { return }
-        let nextIndex = max(0, min(project.scenes.count - 1, selectedSceneIndex + delta))
-        selectScene(project.scenes[nextIndex].id)
+        let orderedScenes = project.scenes.sortedByOrder
+        guard !orderedScenes.isEmpty else { return }
+        let nextIndex = max(0, min(orderedScenes.count - 1, selectedSceneIndex + delta))
+        selectScene(orderedScenes[nextIndex].id)
     }
 
     func analyzeSelectedScene() async {
