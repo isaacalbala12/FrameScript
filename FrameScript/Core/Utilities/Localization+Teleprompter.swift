@@ -24,7 +24,7 @@ extension L10n {
             "teleprompter.close": "Close",
             "teleprompter.noText": "This scene has no text.",
             "teleprompter.ready": "Press Space to start",
-            "teleprompter.hint": "Space play/pause  ·  ↑↓ speed  ·  ←→ scene  ·  Home start  ·  [ ] text size  ·  ; ' width  ·  H/V mirror  ·  Esc close",
+            "teleprompter.hint": "Space play/pause  ·  ↑↓ speed  ·  ←→ scene  ·  Home start  ·  [ ] text size  ·  ; ' width  ·  H/M mirror  ·  V follow voice  ·  Esc close",
             "teleprompter.wpmValue": "%d WPM",
             "teleprompter.pointsValue": "%d pt"
         ],
@@ -49,7 +49,7 @@ extension L10n {
             "teleprompter.close": "Закрыть",
             "teleprompter.noText": "В этой сцене нет текста.",
             "teleprompter.ready": "Нажмите пробел, чтобы начать",
-            "teleprompter.hint": "Пробел — пуск/пауза  ·  ↑↓ — скорость  ·  ←→ — сцены  ·  Home — начало  ·  [ ] — размер  ·  ; ' — ширина  ·  H/V — отражение  ·  Esc — закрыть",
+            "teleprompter.hint": "Пробел — пуск/пауза  ·  ↑↓ — скорость  ·  ←→ — сцены  ·  Home — начало  ·  [ ] — размер  ·  ; ' — ширина  ·  H/M — отражение  ·  V — следование за голосом  ·  Esc — закрыть",
             "teleprompter.wpmValue": "%d сл/мин",
             "teleprompter.pointsValue": "%d пт"
         ]
@@ -79,7 +79,7 @@ extension L10n {
         "teleprompter.close": "Cerrar",
         "teleprompter.noText": "Esta escena no tiene texto.",
         "teleprompter.ready": "Pulsa espacio para empezar",
-        "teleprompter.hint": "Espacio reproducir/pausar  ·  ↑↓ velocidad  ·  ←→ escena  ·  Inicio principio  ·  [ ] tamaño  ·  ; ' ancho  ·  H/V espejo  ·  Esc cerrar",
+        "teleprompter.hint": "Espacio reproducir/pausar  ·  ↑↓ velocidad  ·  ←→ escena  ·  Inicio principio  ·  [ ] tamaño  ·  ; ' ancho  ·  H/M espejo  ·  V seguir mi voz  ·  Esc cerrar",
         "teleprompter.wpmValue": "%d ppm",
         "teleprompter.pointsValue": "%d pt"
     ]

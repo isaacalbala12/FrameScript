@@ -11,6 +11,7 @@ extension L10n {
         backupsStrings,
         [.spanish: backupsSpanish],
         teleprompterStrings,
-        [.spanish: teleprompterSpanish]
+        [.spanish: teleprompterSpanish],
+        voiceFollowStrings
     ]
 }

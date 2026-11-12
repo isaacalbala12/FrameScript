@@ -195,6 +195,31 @@ public struct SpeechFollower: Sendable {
         segmentRestartNeedsForwardProgress = false
     }
 
+    /// Move the anchor to a script word without replaying the script.
+    ///
+    /// The teleprompter uses this when voice following starts mid-scene and
+    /// when live script edits re-tokenize the document: the new follower keeps
+    /// the reader's word instead of starting again at the top of the script.
+    public mutating func seek(toToken index: Int, at timestamp: TimeInterval? = nil) {
+        guard !script.isEmpty else {
+            reset(at: timestamp ?? lastTimestamp)
+            return
+        }
+        let clamped = min(max(0, index), script.tokens.count - 1)
+        anchorTokenIndex = clamped
+        furthestSentenceIndex = script.tokens[clamped].sentenceIndex
+        lastConfidence = 0
+        lastMatchedWordCount = 0
+        lastHypothesisText = nil
+        pendingForwardJump = nil
+        lowConfidenceSince = nil
+        lost = false
+        segmentRestartNeedsForwardProgress = false
+        if let timestamp {
+            lastTimestamp = max(lastTimestamp, timestamp)
+        }
+    }
+
     /// Feed one full partial transcript. Returns the resulting position.
     @discardableResult
     public mutating func process(_ hypothesis: SpeechHypothesis) -> SpeechFollowState {

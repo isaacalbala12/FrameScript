@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import FrameScriptCore
 import Observation
 import QuartzCore
 
@@ -43,6 +44,16 @@ enum TeleprompterDisplays {
 @Observable
 final class TeleprompterModel {
     let language: AppLanguage
+    /// Recognition language for voice following, derived from the project's
+    /// primary language. `nil` when the project language has no F9 locale.
+    let speechLanguage: SpeechLanguage?
+    let voiceFollow: TeleprompterVoiceFollow
+    var voiceSmoother = TeleprompterVoiceSmoother()
+    var voiceLastTick: TimeInterval?
+    var lastVoicePhase: TeleprompterVoiceFollow.Phase = .off
+    var voiceFollowAlert: VoiceFollowAlert?
+    var onReadingSessionFinished: ((TeleprompterReadingSession) -> Void)?
+    let fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)?
 
     var sections: [TeleprompterSection]
     var settings: TeleprompterSettings {
@@ -55,9 +66,9 @@ final class TeleprompterModel {
     /// Status-bar offset, throttled to 10 Hz so the overlay does not re-render
     /// at the scroll cadence.
     private(set) var displayOffset: Double = 0
-    private(set) var isPlaying = false
+    var isPlaying = false
     private(set) var currentSectionIndex: Int
-    private(set) var controlsVisible = true
+    var controlsVisible = true
     private(set) var countdown: Int?
     private(set) var isAwaitingLayout = true
     private var isWindowVisible = true
@@ -85,11 +96,11 @@ final class TeleprompterModel {
     private let sceneProvider: TeleprompterSceneProvider?
     private weak var textRenderer: TeleprompterTextRendering?
     private var sourceSnapshot: [TeleprompterSceneText] = []
-    private var engine = TeleprompterScrollEngine()
+    var engine = TeleprompterScrollEngine()
     private var tickTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var countdownTask: Task<Void, Never>?
-    private var hideControlsTask: Task<Void, Never>?
+    var hideControlsTask: Task<Void, Never>?
     private var settingsSaveTask: Task<Void, Never>?
     private var hasStartedOnce = false
     private var hasAppliedInitialSection = false
@@ -106,7 +117,10 @@ final class TeleprompterModel {
         language: AppLanguage,
         settingsStore: TeleprompterSettingsStore,
         sceneProvider: TeleprompterSceneProvider? = nil,
-        resumeAnchor: TeleprompterReadingAnchor? = nil
+        resumeAnchor: TeleprompterReadingAnchor? = nil,
+        speechLanguage: SpeechLanguage? = .spanish,
+        speechRecognizer: (any SpeechRecognizing)? = nil,
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
     ) {
         let resolvedStart: Int
         if let resumeAnchor,
@@ -120,11 +134,20 @@ final class TeleprompterModel {
 
         self.sections = sections
         self.language = language
+        self.speechLanguage = speechLanguage
         self.settingsStore = settingsStore
         self.settings = settingsStore.load()
         self.currentSectionIndex = resolvedStart
         self.pendingInitialSectionIndex = resolvedStart
         self.sceneProvider = sceneProvider
+        self.fallbackWordsPerMinuteProvider = fallbackWordsPerMinuteProvider
+        self.voiceFollow = TeleprompterVoiceFollow(recognizer: speechRecognizer ?? LiveSpeechRecognizer())
+        self.voiceFollow.onFailure = { [weak self] failure in
+            self?.handleVoiceFollowFailure(failure)
+        }
+        self.voiceFollow.onSessionFinished = { [weak self] session in
+            self?.onReadingSessionFinished?(session)
+        }
         startTicking()
         startRefreshing()
     }
@@ -308,6 +331,7 @@ final class TeleprompterModel {
 
     func pause() {
         cancelCountdown()
+        stopVoiceFollowing(pausePlayback: false)
         isPlaying = false
         engine.isPlaying = false
         engine.resetTimestamp()
@@ -350,7 +374,6 @@ final class TeleprompterModel {
         )
         currentSectionIndex = index
         applyOffset(target)
-        voiceTargetOffset = nil
     }
 
     // MARK: Reading anchors
@@ -467,6 +490,10 @@ final class TeleprompterModel {
     // MARK: Lifecycle
 
     func stop() {
+        voiceFollow.stop(now: ProcessInfo.processInfo.systemUptime, emitSession: true)
+        voiceTargetOffset = nil
+        voiceLastTick = nil
+        lastVoicePhase = .off
         tickTask?.cancel()
         refreshTask?.cancel()
         countdownTask?.cancel()
@@ -494,8 +521,21 @@ final class TeleprompterModel {
         let anchor = isAwaitingLayout
             ? pendingReadingAnchor
             : readingAnchor(mirrorVertical: settings.mirrorVertical, readingLineFraction: settings.readingLineFraction)
+        let voicePosition: VoiceFollowPosition? = if voiceFollow.isEnabled {
+            voiceFollow.currentLocation.map {
+                VoiceFollowPosition(sceneID: $0.sceneID, characterOffset: $0.characterOffset)
+            } ?? currentVoicePosition()
+        } else {
+            nil
+        }
 
         sections = newSections
+        if voiceFollow.isEnabled, let speechLanguage {
+            voiceFollow.updateDocument(
+                VoiceFollowDocument(sections: newSections, language: speechLanguage),
+                preserving: voicePosition
+            )
+        }
         pendingReadingAnchor = anchor
         isAwaitingLayout = true
         layoutRevision += 1
@@ -535,7 +575,7 @@ final class TeleprompterModel {
         }
     }
 
-    private func tick() {
+    func tick(now: TimeInterval = CACurrentMediaTime()) {
         guard isWindowVisible, !isAwaitingLayout else { return }
         engine.maxOffset = maxOffset
         if engine.offset > maxOffset {
@@ -543,7 +583,8 @@ final class TeleprompterModel {
         }
         engine.pointsPerSecond = pointsPerSecond
         engine.isPlaying = isPlaying
-        engine.advance(to: CACurrentMediaTime())
+        voiceFollowTick(now: now)
+        engine.advance(to: now)
 
         if abs(offset - engine.offset) > 0.001 {
             offset = engine.offset
@@ -566,7 +607,6 @@ final class TeleprompterModel {
             currentSectionIndex = index
         }
 
-        let now = CACurrentMediaTime()
         if now - lastDisplayUpdate >= 0.1 {
             lastDisplayUpdate = now
             displayOffset = offset
@@ -580,6 +620,15 @@ final class TeleprompterModel {
         displayOffset = offset
         lastDisplayUpdate = CACurrentMediaTime()
         textRenderer?.setScrollOffset(offset)
+        if voiceFollow.isEnabled {
+            voiceFollow.rebase(to: currentVoicePosition())
+            voiceSmoother.reset(at: offset)
+            voiceTargetOffset = offset
+            voiceLastTick = nil
+            lastVoicePhase = voiceFollow.phase
+        } else {
+            voiceTargetOffset = nil
+        }
     }
 
     private func updateDisplayOffset(force: Bool) {
@@ -640,7 +689,7 @@ final class TeleprompterModel {
         countdown = nil
     }
 
-    private func beginPlayback() {
+    func beginPlayback() {
         guard !sections.isEmpty else { return }
         hasStartedOnce = true
         isPlaying = true

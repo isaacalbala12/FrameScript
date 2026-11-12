@@ -40,6 +40,18 @@ public struct SpeechRecognitionEvent: Sendable, Equatable {
     public let segment: Int
     /// Monotonic host uptime when the event was produced.
     public let timestamp: TimeInterval
+
+    public init(
+        text: String,
+        isFinal: Bool,
+        segment: Int,
+        timestamp: TimeInterval
+    ) {
+        self.text = text
+        self.isFinal = isFinal
+        self.segment = segment
+        self.timestamp = timestamp
+    }
 }
 
 public enum SpeechRecognitionError: Error, Sendable, Equatable {

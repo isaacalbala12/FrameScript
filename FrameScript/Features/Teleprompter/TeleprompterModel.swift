@@ -228,6 +228,8 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
     var readingLineFraction: Double
     var countdownEnabled: Bool
     var preferredDisplayID: UInt32?
+    /// UID of the remembered microphone. `nil` means the system default input.
+    var preferredAudioInputUID: String?
 
     init(
         wordsPerMinute: Double = 150,
@@ -237,7 +239,8 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
         mirrorVertical: Bool = false,
         readingLineFraction: Double = 1.0 / 3.0,
         countdownEnabled: Bool = false,
-        preferredDisplayID: UInt32? = nil
+        preferredDisplayID: UInt32? = nil,
+        preferredAudioInputUID: String? = nil
     ) {
         self.wordsPerMinute = wordsPerMinute
         self.fontSize = fontSize
@@ -247,6 +250,7 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
         self.readingLineFraction = readingLineFraction
         self.countdownEnabled = countdownEnabled
         self.preferredDisplayID = preferredDisplayID
+        self.preferredAudioInputUID = preferredAudioInputUID
     }
 
     static let defaults = TeleprompterSettings()
@@ -277,7 +281,8 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
                 fallback: 1.0 / 3.0
             ),
             countdownEnabled: try container.decodeIfPresent(Bool.self, forKey: .countdownEnabled) ?? false,
-            preferredDisplayID: try container.decodeIfPresent(UInt32.self, forKey: .preferredDisplayID)
+            preferredDisplayID: try container.decodeIfPresent(UInt32.self, forKey: .preferredDisplayID),
+            preferredAudioInputUID: try container.decodeIfPresent(String.self, forKey: .preferredAudioInputUID)
         )
     }
 
@@ -290,7 +295,8 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
             mirrorVertical: mirrorVertical,
             readingLineFraction: Self.clamp(readingLineFraction, to: Limits.readingLineFraction, fallback: 1.0 / 3.0),
             countdownEnabled: countdownEnabled,
-            preferredDisplayID: preferredDisplayID
+            preferredDisplayID: preferredDisplayID,
+            preferredAudioInputUID: preferredAudioInputUID
         )
     }
 
