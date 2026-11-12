@@ -74,7 +74,12 @@ struct AppRootView: View {
             }
             .sheet(item: Binding(
                 get: { SubscriptionAIRuntime.shared.pendingPrompt },
-                set: { SubscriptionAIRuntime.shared.pendingPrompt = $0 }
+                set: { newValue in
+                    SubscriptionAIRuntime.shared.pendingPrompt = newValue
+                    if newValue == nil {
+                        SubscriptionAIRuntime.shared.clearOpenError()
+                    }
+                }
             )) { prompt in
                 SubscriptionAIPendingQuestionSheet(prompt: prompt)
                     .environment(appState)
