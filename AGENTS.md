@@ -31,3 +31,13 @@ Use a derived-data path unique to your checkout (as above) so parallel agents do
 - Every piece of pure logic gets unit tests. Tests must not need network, microphone, OBS, or T3.
 - Commit on your branch with clear messages. Do not push. Do not merge.
 - Final report: what you built, files touched, test counts (actual numbers from the run), and anything left undone or uncertain. Do not claim something works unless you ran it.
+
+## Running the app (the user works on this Mac at the same time)
+
+Never bring FrameScript to the foreground or steal focus.
+
+- Launch in the background without activating: `open -g -n /path/to/FrameScript.app` (never plain `open`, never `activate`, never `osascript … tell application … to activate`).
+- Do NOT send synthetic keyboard/mouse events (no `System Events` keystrokes/clicks, no cliclick). Drive behaviour through unit/integration tests or DEBUG launch arguments/hooks instead.
+- Screenshots: capture only the FrameScript window, even if it is behind other apps:
+  `WID=$(swift -e 'import CoreGraphics; let l = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as! [[String: Any]]; for w in l where (w["kCGWindowOwnerName"] as? String) == "FrameScript" && (w["kCGWindowLayer"] as? Int) == 0 { print(w["kCGWindowNumber"]!); break }')` then `screencapture -x -o -l "$WID" /tmp/<name>.png`.
+- Always quit the instance you launched when done (`pkill -f "<derived-data path>/.*FrameScript.app"`), never other running instances.
