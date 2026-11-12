@@ -12,7 +12,12 @@ struct FrameScriptApp: App {
                 AppRootView()
             }
             .environment(appState)
-            .onAppear { shortcutRouter.start(using: appState) }
+            .onAppear {
+                shortcutRouter.start(using: appState)
+#if DEBUG
+                appState.presentTeleprompterForUITestingIfRequested()
+#endif
+            }
             .onDisappear { shortcutRouter.stop() }
         }
         .windowStyle(.hiddenTitleBar)
@@ -126,6 +131,10 @@ struct FrameScriptApp: App {
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("mode.editing")) { appState.selectMode(.editing) }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
+                .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))
                 .disabled(!appState.hasOpenProject)
             Divider()
             Button(appState.localized("command.toggleSidebar")) { appState.isSidebarVisible.toggle() }

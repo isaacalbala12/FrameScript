@@ -55,6 +55,12 @@ struct TopToolbar: View {
                     action: appState.exportProject
                 )
 
+                toolbarButton(
+                    systemName: "text.bubble",
+                    help: appState.localized("toolbar.teleprompter"),
+                    action: appState.presentTeleprompter
+                )
+
                 toolbarDivider
 
                 Button {
