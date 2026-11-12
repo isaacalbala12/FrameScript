@@ -3,8 +3,19 @@ import SwiftUI
 
 @main
 struct FrameScriptApp: App {
-    @State private var appState = AppState()
+    @NSApplicationDelegateAdaptor(FrameScriptAppDelegate.self) private var appDelegate
+    @State private var appState: AppState
     @Environment(\.openSettings) private var openSettings
+
+    init() {
+        // Must run before AppState creates its settings and recents stores.
+        SandboxDataMigration.migrateIfNeeded()
+        _appState = State(initialValue: AppState())
+        // This is a process-wide AppKit setting, so enable automatic spelling
+        // language detection once at launch instead of mutating it from the
+        // script editor's updateNSView (which also owns notes text views).
+        NSSpellChecker.shared.automaticallyIdentifiesLanguages = true
+    }
 
     var body: some SwiftUI.Scene {
         WindowGroup {
@@ -12,8 +23,10 @@ struct FrameScriptApp: App {
                 AppRootView()
             }
             .environment(appState)
+            .backupsSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
+                appDelegate.attach(appState)
 #if DEBUG
                 appState.presentTeleprompterForUITestingIfRequested()
 #endif
@@ -190,6 +203,10 @@ struct FrameScriptApp: App {
             Button(appState.localized("menu.generateBRoll")) { appState.generateBRollForSelectedScene() }
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
+                .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("backups.menu")) { appState.showBackupsWindow() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .showBackups))
                 .disabled(!appState.hasOpenProject)
         }
     }

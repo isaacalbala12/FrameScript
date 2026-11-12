@@ -1,0 +1,73 @@
+{
+  "fileVersion": 3,
+  "project": {
+    "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "title": "Legacy v3 project",
+    "createdAt": "2024-03-01T10:00:00Z",
+    "updatedAt": "2024-03-01T11:00:00Z",
+    "templateID": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    "scenes": [
+      {
+        "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "order": 0,
+        "sectionType": "Example",
+        "title": "Full v3 scene",
+        "scriptText": "X one two three",
+        "notes": "v3 notes",
+        "estimatedDuration": 3.0,
+        "textSegments": [
+          {
+            "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "sceneID": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "order": 0,
+            "sourceText": "X one two three",
+            "segmentType": "scene",
+            "timingEstimate": 3.0
+          }
+        ],
+        "aiComments": [
+          {
+            "id": "12121212-1212-4212-8212-121212121212",
+            "sceneID": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            "segmentID": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "type": "pacing",
+            "severity": "suggestion",
+            "message": "Tighten this beat.",
+            "suggestion": "Drop the second sentence.",
+            "status": "dismissed"
+          }
+        ],
+        "bRollItems": [
+          {
+            "id": "13131313-1313-4313-8313-131313131313",
+            "textAnchor": {
+              "startUTF16": 0,
+              "lengthUTF16": 3,
+              "selectedText": "one",
+              "prefixContext": "",
+              "suffixContext": " two three"
+            },
+            "sourceType": "Screen recording",
+            "descriptionText": "show the lap",
+            "notes": "b-roll notes"
+          }
+        ],
+        "editingItems": [
+          {
+            "id": "14141414-1414-4414-8414-141414141414",
+            "textAnchor": {
+              "startUTF16": 2,
+              "lengthUTF16": 3,
+              "selectedText": "one",
+              "prefixContext": "X ",
+              "suffixContext": " two three"
+            },
+            "description": "hard cut",
+            "notes": "editing notes"
+          }
+        ]
+      }
+    ],
+    "exportPresets": []
+  }
+}

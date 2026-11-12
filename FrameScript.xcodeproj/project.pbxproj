@@ -23,6 +23,11 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXBuildFile section */
+		FS00000000000000000000042 /* FrameScriptCore in Frameworks */ = {isa = PBXBuildFile; productRef = FS00000000000000000000041 /* FrameScriptCore */; };
+		FS00000000000000000000044 /* FrameScriptCore in Frameworks */ = {isa = PBXBuildFile; productRef = FS00000000000000000000043 /* FrameScriptCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		FS00000000000000000000001 /* FrameScript.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FrameScript.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FS00000000000000000000016 /* FrameScriptUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FrameScriptUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -52,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FS00000000000000000000042 /* FrameScriptCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -66,6 +72,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FS00000000000000000000044 /* FrameScriptCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,7 @@
 			);
 			name = FrameScript;
 			packageProductDependencies = (
+				FS00000000000000000000041 /* FrameScriptCore */,
 			);
 			productName = FrameScript;
 			productReference = FS00000000000000000000001 /* FrameScript.app */;
@@ -158,6 +166,7 @@
 			);
 			name = FrameScriptTests;
 			packageProductDependencies = (
+				FS00000000000000000000043 /* FrameScriptCore */,
 			);
 			productName = FrameScriptTests;
 			productReference = FS00000000000000000000028 /* FrameScriptTests.xctest */;
@@ -196,6 +205,9 @@
 			);
 			mainGroup = FS00000000000000000000004;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FS00000000000000000000040 /* XCLocalSwiftPackageReference "Packages/FrameScriptCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FS00000000000000000000005 /* Products */;
 			projectDirPath = "";
@@ -557,6 +569,26 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FS00000000000000000000040 /* XCLocalSwiftPackageReference "Packages/FrameScriptCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/FrameScriptCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FS00000000000000000000041 /* FrameScriptCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FS00000000000000000000040 /* XCLocalSwiftPackageReference "Packages/FrameScriptCore" */;
+			productName = FrameScriptCore;
+		};
+		FS00000000000000000000043 /* FrameScriptCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FS00000000000000000000040 /* XCLocalSwiftPackageReference "Packages/FrameScriptCore" */;
+			productName = FrameScriptCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = FS00000000000000000000010 /* Project object */;
 }

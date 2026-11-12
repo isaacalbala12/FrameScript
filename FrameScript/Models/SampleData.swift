@@ -9,7 +9,7 @@ enum SampleData {
         FrameTemplate(id: UUID(uuidString: "10000000-0000-0000-0000-000000000005")!, category: .script, name: "Product Review", builtIn: true, structureDefinition: ["Hook", "Product context", "What works", "What does not", "Verdict", "CTA"], customFields: []),
         FrameTemplate(id: UUID(uuidString: "10000000-0000-0000-0000-000000000006")!, category: .script, name: "Commentary / Essay", builtIn: true, structureDefinition: ["Thesis", "Context", "Argument", "Counterpoint", "Implication", "Closing"], customFields: []),
         FrameTemplate(id: UUID(uuidString: "10000000-0000-0000-0000-000000000007")!, category: .script, name: "Tutorial", builtIn: true, structureDefinition: ["Goal", "Requirements", "Step 1", "Step 2", "Common mistake", "Recap"], customFields: [])
-    ]
+    ] + SimracingTemplates.frameTemplates
 
     static var defaultProject: FrameProject {
         project(named: "Untitled Script", template: templates.first, blankProjectStart: .oneEmptyScene)
@@ -21,8 +21,17 @@ enum SampleData {
         blankProjectStart: BlankProjectStart = .oneEmptyScene,
         defaultSceneName: String = "New scene",
         exportPresetName: String = "Editor handoff",
+        language: AppLanguage = .english,
         sceneNameResolver: (String) -> String = { $0 }
     ) -> FrameProject {
+        if let template, template.builtIn, let blueprint = SimracingTemplates.definition(for: template) {
+            return blueprint.makeProject(
+                named: title,
+                template: template,
+                language: language,
+                exportPresetName: exportPresetName
+            )
+        }
         let structure: [String]
         if template?.isBlank == true {
             structure = blankProjectStart == .oneEmptyScene ? [""] : []
@@ -38,10 +47,14 @@ enum SampleData {
     }
 
     static func demoProject(language: AppLanguage) -> FrameProject {
-        language == .russian ? russianDemoProject : englishDemoProject
+        switch SimracingCopy.resolvedLanguage(language) {
+        case .spanish: spanishDemoProject
+        case .russian: russianDemoProject
+        case .english, .system: englishDemoProject
+        }
     }
 
-    private struct VisualSpec {
+    struct VisualSpec {
         let phrase: String
         let source: BRollSourceType
         let description: String
@@ -53,7 +66,7 @@ enum SampleData {
         let status: BRollStatus
     }
 
-    private struct EditSpec {
+    struct EditSpec {
         let phrase: String
         let cut: String
         let transition: String
@@ -66,27 +79,27 @@ enum SampleData {
         let notes: String
     }
 
-    private struct ReviewSpec {
+    struct ReviewSpec {
         let type: String
         let severity: AICommentSeverity
         let message: String
         let suggestion: String
     }
 
-    private static func visual(_ phrase: String, _ source: BRollSourceType, _ description: String, mood: String, framing: String, motion: String, duration: TimeInterval, notes: String, status: BRollStatus) -> VisualSpec {
+    static func visual(_ phrase: String, _ source: BRollSourceType, _ description: String, mood: String, framing: String, motion: String, duration: TimeInterval, notes: String, status: BRollStatus) -> VisualSpec {
         VisualSpec(phrase: phrase, source: source, description: description, mood: mood, framing: framing, motion: motion, duration: duration, notes: notes, status: status)
     }
 
-    private static func edit(_ phrase: String, cut: String, transition: String, subtitles: String, emphasis: String, zoom: String, sfx: String, music: String, graphics: String, notes: String) -> EditSpec {
+    static func edit(_ phrase: String, cut: String, transition: String, subtitles: String, emphasis: String, zoom: String, sfx: String, music: String, graphics: String, notes: String) -> EditSpec {
         EditSpec(phrase: phrase, cut: cut, transition: transition, subtitles: subtitles, emphasis: emphasis, zoom: zoom, sfx: sfx, music: music, graphics: graphics, notes: notes)
     }
 
-    private static func review(_ type: String, _ severity: AICommentSeverity, _ message: String, _ suggestion: String) -> ReviewSpec {
+    static func review(_ type: String, _ severity: AICommentSeverity, _ message: String, _ suggestion: String) -> ReviewSpec {
         ReviewSpec(type: type, severity: severity, message: message, suggestion: suggestion)
     }
 
-    private static func anchor(_ phrase: String, in text: String) -> TextAnchor {
-        guard let range = text.range(of: phrase) else { preconditionFailure("Demo anchor phrase must exist in its final script") }
+    static func anchor(_ phrase: String, in text: String) -> TextAnchor {
+        guard let range = text.range(of: phrase) else { preconditionFailure("Demo anchor phrase must exist in its final script: \(phrase)") }
         let full = text as NSString
         let nsRange = NSRange(range, in: text)
         let prefixStart = max(0, nsRange.location - 48)
@@ -100,7 +113,7 @@ enum SampleData {
         )
     }
 
-    private static func scene(
+    static func scene(
         order: Int,
         type: SectionType,
         title: String,
@@ -108,7 +121,8 @@ enum SampleData {
         notes: String,
         visuals: [VisualSpec],
         edits: [EditSpec],
-        reviews: [ReviewSpec]
+        reviews: [ReviewSpec],
+        templateType: String = "Product showcase"
     ) -> Scene {
         let id = UUID()
         let segment = TextSegment(sceneID: id, order: 0, sourceText: text, segmentType: .scene, timingEstimate: DurationEstimator.estimate(text: text, wordsPerMinute: 150))
@@ -123,10 +137,10 @@ enum SampleData {
             textSegments: [segment],
             aiComments: reviews.map { AIComment(sceneID: id, segmentID: segment.id, type: $0.type, severity: $0.severity, message: $0.message, suggestion: $0.suggestion, status: .new) },
             bRollItems: visuals.map { spec in
-                BRollItem(textAnchor: anchor(spec.phrase, in: text), templateType: "Product showcase", sourceType: spec.source, descriptionText: spec.description, mood: spec.mood, framing: spec.framing, motion: spec.motion, duration: spec.duration, notes: spec.notes, status: spec.status)
+                BRollItem(textAnchor: anchor(spec.phrase, in: text), templateType: templateType, sourceType: spec.source, descriptionText: spec.description, mood: spec.mood, framing: spec.framing, motion: spec.motion, duration: spec.duration, notes: spec.notes, status: spec.status)
             },
             editingItems: edits.map { spec in
-                EditingItem(textAnchor: anchor(spec.phrase, in: text), templateType: "Product showcase", cutStyle: spec.cut, transition: spec.transition, subtitleStyle: spec.subtitles, emphasis: spec.emphasis, zoom: spec.zoom, sfx: spec.sfx, musicCue: spec.music, graphics: spec.graphics, notes: spec.notes)
+                EditingItem(textAnchor: anchor(spec.phrase, in: text), templateType: templateType, cutStyle: spec.cut, transition: spec.transition, subtitleStyle: spec.subtitles, emphasis: spec.emphasis, zoom: spec.zoom, sfx: spec.sfx, musicCue: spec.music, graphics: spec.graphics, notes: spec.notes)
             }
         )
     }

@@ -196,7 +196,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
-    case analyzeCurrentScene, openSettings, showShortcuts
+    case analyzeCurrentScene, openSettings, showShortcuts, showBackups
 
     var id: String { rawValue }
 
@@ -255,6 +255,7 @@ enum ShortcutRegistry {
         .init(command: .saveAs, localizationKey: "project.saveAs", category: .project, factoryDefault: .init("s", modifiers: [.command, .shift]), order: 4),
         .init(command: .import, localizationKey: "menu.import", category: .project, factoryDefault: .init("i", modifiers: [.command, .shift]), order: 5),
         .init(command: .export, localizationKey: "project.export", category: .project, factoryDefault: .init("e", modifiers: [.command]), order: 6),
+        .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 7),
         .init(command: .addScene, localizationKey: "scene.add", category: .scenes, factoryDefault: .init("n", modifiers: [.command, .option]), order: 0),
         .init(command: .duplicateScene, localizationKey: "scene.duplicate", category: .scenes, factoryDefault: .init("d", modifiers: [.command]), order: 1),
         .init(command: .deleteScene, localizationKey: "scene.delete", category: .scenes, factoryDefault: .init(key: .delete, modifiers: [.command]), order: 2),
@@ -274,8 +275,24 @@ enum ShortcutRegistry {
     ]
 
     static func definition(for command: ShortcutCommand) -> ShortcutDefinition {
-        // The registry is static and intentionally complete; fail fast during development if it drifts.
-        definitions.first(where: { $0.command == command })!
+        if let definition = definitions.first(where: { $0.command == command }) {
+            return definition
+        }
+        // The registry is static and intentionally complete; fail fast during
+        // development if it drifts. In release builds, keep displaying the
+        // command with an unassigned-style fallback instead of crashing.
+        assertionFailure("Missing ShortcutDefinition for \(command.rawValue)")
+        return fallbackDefinition(for: command)
+    }
+
+    static func fallbackDefinition(for command: ShortcutCommand) -> ShortcutDefinition {
+        ShortcutDefinition(
+            command: command,
+            localizationKey: "command.\(command.rawValue)",
+            category: .application,
+            factoryDefault: .init("0", modifiers: [.command, .option, .control, .shift]),
+            order: Int.max
+        )
     }
 
     static func binding(for command: ShortcutCommand, overrides: [ShortcutCommand: ShortcutOverride]) -> ShortcutBinding? {
