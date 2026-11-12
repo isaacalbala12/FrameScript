@@ -6,20 +6,29 @@ extension AppState {
     /// whole project, matching a run-through that begins mid-script.
     func presentTeleprompter() {
         guard hasOpenProject else { return }
-        let ordered = project.scenes.sortedByOrder
-        guard !ordered.isEmpty else { return }
+        let scenes = teleprompterScenes()
+        guard !scenes.isEmpty else { return }
 
-        let snapshots = ordered.map { scene in
-            TeleprompterSceneText(id: scene.id, title: scene.title, text: scene.scriptText)
+        let startIndex = project.scenes.sortedByOrder.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
+        let provider: TeleprompterSceneProvider = { [weak self] in
+            guard let self, self.hasOpenProject else { return [] }
+            return self.teleprompterScenes()
         }
-        let sections = TeleprompterConverter.makeSections(from: snapshots)
-        let startIndex = ordered.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
 
         TeleprompterPresenter.shared.show(
-            source: StaticTeleprompterSource(sections: sections),
+            source: StaticTeleprompterSource(
+                sections: TeleprompterContentBuilder.sections(from: scenes)
+            ),
+            provider: provider,
             startingSectionIndex: startIndex,
             language: currentLanguage
         )
+    }
+
+    private func teleprompterScenes() -> [TeleprompterSceneText] {
+        project.scenes.sortedByOrder.map { scene in
+            TeleprompterSceneText(id: scene.id, title: scene.title, text: scene.scriptText)
+        }
     }
 }
 
@@ -31,13 +40,26 @@ extension AppState {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("--framescript-ui-test-open-teleprompter") else { return }
 
-        if arguments.contains("--framescript-ui-test-teleprompter-sample") {
+        let sampleScenes: [TeleprompterSceneText]
+        if arguments.contains("--framescript-ui-test-teleprompter-long") {
+            sampleScenes = TeleprompterUITestSample.longScenes()
+        } else if arguments.contains("--framescript-ui-test-teleprompter-sample") {
+            sampleScenes = TeleprompterUITestSample.scenes()
+        } else {
+            sampleScenes = []
+        }
+
+        if !sampleScenes.isEmpty {
+            let autoplay = arguments.contains("--framescript-ui-test-teleprompter-autoplay")
             TeleprompterPresenter.shared.show(
-                source: TeleprompterUITestSample.source(),
+                source: StaticTeleprompterSource(
+                    sections: TeleprompterContentBuilder.sections(from: sampleScenes)
+                ),
+                provider: { sampleScenes },
                 startingSectionIndex: 0,
                 language: currentLanguage
             )
-            if arguments.contains("--framescript-ui-test-teleprompter-autoplay") {
+            if autoplay {
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(400))
                     TeleprompterPresenter.shared.playForUITesting()
@@ -62,10 +84,10 @@ extension AppState {
     }
 }
 
-/// Synthetic marker fixture for visual checks of the debug build only.
+/// Synthetic marker fixture for visual and performance checks of debug builds.
 private enum TeleprompterUITestSample {
-    static func source() -> StaticTeleprompterSource {
-        let scenes = [
+    static func scenes() -> [TeleprompterSceneText] {
+        [
             TeleprompterSceneText(
                 id: UUID(),
                 title: "Hook",
@@ -82,7 +104,20 @@ private enum TeleprompterUITestSample {
                 text: "Gracias por leer. / Nos vemos en la siguiente toma."
             )
         ]
-        return StaticTeleprompterSource(sections: TeleprompterConverter.makeSections(from: scenes))
+    }
+
+    static func longScenes() -> [TeleprompterSceneText] {
+        (0..<40).map { sceneIndex in
+            let lines = (0..<50).map { lineIndex in
+                let number = sceneIndex * 50 + lineIndex + 1
+                return "Línea \(number) del guion largo con *énfasis* y **fuerza** para comprobar el rendimiento del teleprompter en una toma real. / Pausa breve."
+            }
+            return TeleprompterSceneText(
+                id: UUID(),
+                title: "Escena \(sceneIndex + 1)",
+                text: lines.joined(separator: "\n")
+            )
+        }
     }
 }
 #endif

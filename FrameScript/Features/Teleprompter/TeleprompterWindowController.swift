@@ -17,13 +17,17 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         sections: [TeleprompterSection],
         startingSectionIndex: Int,
         language: AppLanguage,
-        settingsStore: TeleprompterSettingsStore
+        settingsStore: TeleprompterSettingsStore,
+        sceneProvider: TeleprompterSceneProvider?,
+        resumeAnchor: TeleprompterReadingAnchor?
     ) {
         let model = TeleprompterModel(
             sections: sections,
             startingSectionIndex: startingSectionIndex,
             language: language,
-            settingsStore: settingsStore
+            settingsStore: settingsStore,
+            sceneProvider: sceneProvider,
+            resumeAnchor: resumeAnchor
         )
         self.model = model
 
@@ -51,9 +55,14 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             window.setFrame(frame(on: screen), display: false)
         }
         showWindow(nil)
+        bringForward()
+    }
+
+    func bringForward() {
+        guard let window else { return }
+        installMonitors()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        installMonitors()
         model.showControlsTemporarily()
     }
 
@@ -99,6 +108,11 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         } else {
             window.setFrame(frame(on: screen), display: true)
         }
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window else { return }
+        model.setWindowVisible(window.occlusionState.contains(.visible))
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
@@ -152,11 +166,17 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             return false
         }
 
+        // Let focused AppKit controls keep Space and arrow-key behaviour.
+        if isControlFocused(in: event), [49, 123, 124, 125, 126, 115, 116, 121].contains(event.keyCode) {
+            return false
+        }
+
         switch event.keyCode {
         case 53: // Escape
             model.close()
             return true
         case 49: // Space
+            guard !event.isARepeat else { return true }
             model.togglePlayback()
             model.showControlsTemporarily()
             return true
@@ -169,14 +189,17 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             model.showControlsTemporarily()
             return true
         case 123, 116: // Left arrow, Page Up
+            guard !event.isARepeat else { return true }
             model.previousSection()
             model.showControlsTemporarily()
             return true
         case 124, 121: // Right arrow, Page Down
+            guard !event.isARepeat else { return true }
             model.nextSection()
             model.showControlsTemporarily()
             return true
         case 115: // Home
+            guard !event.isARepeat else { return true }
             model.restartSection()
             model.showControlsTemporarily()
             return true
@@ -217,6 +240,11 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         return true
     }
 
+    private func isControlFocused(in event: NSEvent) -> Bool {
+        guard let responder = event.window?.firstResponder else { return false }
+        return responder is NSSlider || responder is NSTextField
+    }
+
     // MARK: Lifecycle
 
     func windowWillClose(_ notification: Notification) {
@@ -231,24 +259,33 @@ final class TeleprompterPresenter {
     static let shared = TeleprompterPresenter()
 
     private var controller: TeleprompterWindowController?
+    private var lastAnchor: TeleprompterReadingAnchor?
+
+    var activeModel: TeleprompterModel? {
+        controller?.model
+    }
 
     func show(
         source: TeleprompterSource,
+        provider: TeleprompterSceneProvider?,
         startingSectionIndex: Int,
         language: AppLanguage
     ) {
-        guard !source.sections.isEmpty else { return }
-
         if let existing = controller {
-            existing.close()
-            controller = nil
+            existing.bringForward()
+            return
         }
 
+        let sections = source.sections
+        guard !sections.isEmpty else { return }
+
         let controller = TeleprompterWindowController(
-            sections: source.sections,
+            sections: sections,
             startingSectionIndex: startingSectionIndex,
             language: language,
-            settingsStore: TeleprompterSettingsStore()
+            settingsStore: TeleprompterSettingsStore(),
+            sceneProvider: provider,
+            resumeAnchor: lastAnchor
         )
         controller.presenter = self
         self.controller = controller
@@ -257,8 +294,18 @@ final class TeleprompterPresenter {
 
     func controllerDidClose(_ controller: TeleprompterWindowController) {
         if self.controller === controller {
+            lastAnchor = controller.model.readingAnchor(
+                mirrorVertical: controller.model.settings.mirrorVertical,
+                readingLineFraction: controller.model.settings.readingLineFraction
+            )
             self.controller = nil
         }
+    }
+
+    /// Speech-follower hook: the follower maps its matched text to a content
+    /// offset and hands it to the active teleprompter.
+    func setVoiceTargetOffset(_ offset: Double?) {
+        controller?.model.voiceTargetOffset = offset
     }
 
     /// Debug-only hook used by the app launch arguments to verify scrolling.

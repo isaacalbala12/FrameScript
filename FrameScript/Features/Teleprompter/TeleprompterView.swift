@@ -2,28 +2,8 @@ import SwiftUI
 
 private enum TeleprompterPalette {
     static let background = Color.black
-    static let text = Color.white
-    static let emphasis = Color(red: 1.0, green: 0.84, blue: 0.36)
-    static let strongEmphasis = Color(red: 1.0, green: 0.94, blue: 0.62)
-    static let cue = Color.white.opacity(0.34)
-    static let pause = Color.white.opacity(0.30)
     static let guide = Color.white.opacity(0.16)
-    static let chrome = Color.white.opacity(0.9)
     static let status = Color.white.opacity(0.32)
-}
-
-private struct TeleprompterContentHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private struct TeleprompterSectionHeightsKey: PreferenceKey {
-    static let defaultValue: [Int: CGFloat] = [:]
-    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
 }
 
 struct TeleprompterRootView: View {
@@ -33,23 +13,42 @@ struct TeleprompterRootView: View {
         GeometryReader { proxy in
             ZStack(alignment: .top) {
                 TeleprompterPalette.background.ignoresSafeArea()
-                scrollingContent(viewport: proxy.size)
+
+                TeleprompterTextCanvas(
+                    model: model,
+                    revision: model.layoutRevision,
+                    sections: model.sections,
+                    fontSize: model.settings.fontSize,
+                    columnWidth: model.effectiveColumnWidth,
+                    viewportSize: proxy.size,
+                    readingLineFraction: model.settings.readingLineFraction,
+                    mirrorVertical: model.settings.mirrorVertical
+                )
+                .scaleEffect(
+                    x: model.settings.mirrorHorizontal ? -1 : 1,
+                    y: model.settings.mirrorVertical ? -1 : 1
+                )
+
                 readingLine(viewport: proxy.size)
                 statusBar
-                if let countdown = model.countdown {
-                    countdownOverlay(countdown)
-                }
-                if model.controlsVisible || !model.isPlaying || model.countdown != nil {
+
+                if model.countdown == nil && (model.controlsVisible || !model.isPlaying) {
                     TeleprompterControls(model: model)
                         .transition(.opacity)
+                }
+
+                if let countdown = model.countdown {
+                    countdownOverlay(countdown)
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: model.controlsVisible)
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
-            .onAppear { model.updateViewport(height: proxy.size.height) }
-            .onChange(of: proxy.size.height) { _, height in
-                model.updateViewport(height: height)
+            .onAppear {
+                model.updateViewport(width: proxy.size.width, height: proxy.size.height)
+            }
+            .onChange(of: proxy.size) { _, size in
+                model.updateViewport(width: size.width, height: size.height)
             }
         }
         .background(TeleprompterPalette.background)
@@ -58,60 +57,6 @@ struct TeleprompterRootView: View {
             model.showControlsTemporarily()
         }
         .onExitCommand { model.close() }
-    }
-
-    // MARK: Content
-
-    private func scrollingContent(viewport: CGSize) -> some View {
-        let columnWidth = min(model.settings.columnWidth, max(260, viewport.width - 96))
-        let bottomInset = max(160, viewport.height * (1 - model.settings.readingLineFraction) + 48)
-
-        return ZStack(alignment: .top) {
-            VStack(alignment: .center, spacing: 0) {
-                ForEach(Array(model.sections.enumerated()), id: \.offset) { index, section in
-                    TeleprompterSectionView(
-                        section: section,
-                        index: index,
-                        fontSize: model.settings.fontSize,
-                        showsHeader: true,
-                        noTextLabel: model.localized("teleprompter.noText")
-                    )
-                    .frame(width: columnWidth, alignment: .leading)
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: TeleprompterSectionHeightsKey.self,
-                                value: [index: proxy.size.height]
-                            )
-                        }
-                    }
-                }
-            }
-            .padding(.top, TeleprompterModel.contentTopInset)
-            .padding(.bottom, bottomInset)
-            .frame(maxWidth: .infinity)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: TeleprompterContentHeightKey.self,
-                        value: proxy.size.height
-                    )
-                }
-            }
-            .onPreferenceChange(TeleprompterContentHeightKey.self) { height in
-                model.updateContentHeight(height)
-            }
-            .onPreferenceChange(TeleprompterSectionHeightsKey.self) { heights in
-                model.updateSectionHeights(heights.mapValues { Double($0) })
-            }
-            .offset(y: -model.offset)
-        }
-        .frame(width: viewport.width, height: viewport.height, alignment: .top)
-        .clipped()
-        .scaleEffect(
-            x: model.settings.mirrorHorizontal ? -1 : 1,
-            y: model.settings.mirrorVertical ? -1 : 1
-        )
     }
 
     // MARK: Guides and status
@@ -174,155 +119,56 @@ struct TeleprompterRootView: View {
                 .monospacedDigit()
             Text(model.localized("teleprompter.ready"))
                 .font(.system(size: 16, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.62))
+                .foregroundStyle(.white.opacity(0.72))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.opacity(0.55))
+        .background(Color.black.opacity(0.72))
         .allowsHitTesting(false)
     }
 }
 
-// MARK: - Section rendering
+// MARK: - TextKit canvas
 
-private struct TeleprompterSectionView: View {
-    let section: TeleprompterSection
-    let index: Int
+private struct TeleprompterTextCanvas: NSViewRepresentable {
+    let model: TeleprompterModel
+    let revision: Int
+    let sections: [TeleprompterSection]
     let fontSize: Double
-    let showsHeader: Bool
-    let noTextLabel: String
+    let columnWidth: Double
+    let viewportSize: CGSize
+    let readingLineFraction: Double
+    let mirrorVertical: Bool
 
-    private var blocks: [TeleprompterBlock] {
-        TeleprompterBlock.make(from: section.runs)
+    func makeNSView(context: Context) -> TeleprompterTextRenderer {
+        let renderer = TeleprompterTextRenderer(frame: .zero)
+        model.attachRenderer(renderer)
+        render(renderer)
+        return renderer
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if showsHeader {
-                header
-            }
-            if blocks.isEmpty {
-                Text(noTextLabel)
-                    .font(.system(size: fontSize * 0.45, weight: .regular, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.24))
-                    .padding(.bottom, fontSize * 0.5)
-            } else {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    switch block {
-                    case .inline(let runs):
-                        inlineText(runs)
-                    case .pause(let seconds):
-                        pauseGlyph(seconds)
-                    case .cue(let label):
-                        cueLabel(label)
-                    }
+    func updateNSView(_ renderer: TeleprompterTextRenderer, context: Context) {
+        render(renderer)
+    }
+
+    func dismantleNSView(_ renderer: TeleprompterTextRenderer, coordinator: Context) {
+        model.detachRenderer(renderer)
+    }
+
+    private func render(_ renderer: TeleprompterTextRenderer) {
+        _ = revision
+        renderer.render(
+            sections: sections,
+            fontSize: fontSize,
+            columnWidth: columnWidth,
+            viewportSize: viewportSize,
+            readingLineFraction: readingLineFraction,
+            mirrorVertical: mirrorVertical,
+            onMetrics: { metrics in
+                Task { @MainActor in
+                    model.updateTextMetrics(metrics)
                 }
             }
-        }
-        .padding(.bottom, fontSize * 1.05)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: fontSize * 0.24) {
-            Text(String(format: "%02d", index + 1))
-                .monospacedDigit()
-            Text(section.title.uppercased())
-                .lineLimit(1)
-            Rectangle()
-                .fill(.white.opacity(0.10))
-                .frame(height: 1)
-        }
-        .font(.system(size: fontSize * 0.32, weight: .semibold, design: .rounded))
-        .foregroundStyle(.white.opacity(0.38))
-        .tracking(1.6)
-        .padding(.bottom, fontSize * 0.5)
-    }
-
-    private func inlineText(_ runs: [TeleprompterRun]) -> some View {
-        runs.reduce(Text("")) { result, run in
-            switch run {
-            case .text(let value):
-                return result + Text(value)
-            case .emphasis(let value, let strong):
-                return result + Text(value)
-                    .bold(strong)
-                    .italic(!strong)
-                    .foregroundStyle(strong ? TeleprompterPalette.strongEmphasis : TeleprompterPalette.emphasis)
-            case .pause, .cue:
-                return result
-            }
-        }
-        .font(.system(size: fontSize, weight: .medium, design: .rounded))
-        .foregroundStyle(TeleprompterPalette.text)
-        .lineSpacing(fontSize * 0.30)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, fontSize * 0.18)
-    }
-
-    private func pauseGlyph(_ seconds: TimeInterval) -> some View {
-        VStack(spacing: fontSize * 0.10) {
-            Image(systemName: "pause.fill")
-                .font(.system(size: fontSize * 0.24, weight: .bold))
-            if seconds >= 1 {
-                Text(String(format: "%.1fs", seconds))
-                    .font(.system(size: fontSize * 0.18, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-            }
-        }
-        .foregroundStyle(TeleprompterPalette.pause)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, fontSize * 0.55)
-        .accessibilityHidden(true)
-    }
-
-    private func cueLabel(_ label: String) -> some View {
-        HStack(spacing: fontSize * 0.18) {
-            Rectangle()
-                .fill(.white.opacity(0.20))
-                .frame(width: fontSize * 0.6, height: 1)
-            Text(label.uppercased())
-                .font(.system(size: fontSize * 0.36, weight: .medium, design: .monospaced))
-                .foregroundStyle(TeleprompterPalette.cue)
-                .tracking(1.1)
-                .lineLimit(2)
-            Rectangle()
-                .fill(.white.opacity(0.08))
-                .frame(height: 1)
-        }
-        .padding(.vertical, fontSize * 0.35)
-    }
-}
-
-private enum TeleprompterBlock {
-    case inline([TeleprompterRun])
-    case pause(TimeInterval)
-    case cue(String)
-
-    static func make(from runs: [TeleprompterRun]) -> [TeleprompterBlock] {
-        var blocks: [TeleprompterBlock] = []
-        var inline: [TeleprompterRun] = []
-
-        func flushInline() {
-            guard !inline.isEmpty else { return }
-            blocks.append(.inline(inline))
-            inline.removeAll(keepingCapacity: true)
-        }
-
-        for run in runs {
-            switch run {
-            case .text, .emphasis:
-                inline.append(run)
-            case .pause(let seconds):
-                flushInline()
-                blocks.append(.pause(seconds))
-            case .cue(let label):
-                flushInline()
-                blocks.append(.cue(label))
-            }
-        }
-        flushInline()
-        return blocks
+        )
     }
 }
 
@@ -337,27 +183,27 @@ private struct TeleprompterControls: View {
             sliderRow
             Text(model.localized("teleprompter.hint"))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.30))
+                .foregroundStyle(.white.opacity(0.34))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .padding(.horizontal, 24)
         .padding(.top, 38)
         .padding(.bottom, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity)
         .background {
             LinearGradient(
                 stops: [
                     .init(color: .black.opacity(0), location: 0),
-                    .init(color: .black.opacity(0.72), location: 0.30),
-                    .init(color: .black.opacity(0.96), location: 0.62),
+                    .init(color: .black.opacity(0.80), location: 0.30),
+                    .init(color: .black.opacity(0.97), location: 0.62),
                     .init(color: .black.opacity(0.99), location: 1)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .ignoresSafeArea()
         }
+        .frame(maxHeight: .infinity, alignment: .bottom)
     }
 
     private var transportRow: some View {

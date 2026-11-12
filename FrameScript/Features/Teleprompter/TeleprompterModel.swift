@@ -1,29 +1,21 @@
 import Foundation
+import FrameScriptCore
 
 // MARK: - Rendering input
 
-/// One renderable piece of teleprompter text. The set is intentionally small so
-/// a future `FrameScriptCore` markup pass can produce it without knowing how the
-/// teleprompter window draws.
-enum TeleprompterRun: Equatable, Sendable {
-    case text(String)
-    case emphasis(String, strong: Bool)
-    case pause(seconds: TimeInterval)
-    case cue(label: String)
-}
-
-/// A scene-sized block of teleprompter content.
+/// A scene-sized block of teleprompter content. Runs come from
+/// `FrameScriptCore.ScriptMarkup`, so the teleprompter and the editor share one
+/// parser.
 struct TeleprompterSection: Identifiable, Equatable, Sendable {
     let sceneID: UUID
     let title: String
-    let runs: [TeleprompterRun]
+    let runs: [MarkupRun]
 
     var id: UUID { sceneID }
 }
 
-/// Produces ordered teleprompter sections. The app currently feeds it a
-/// snapshot of the open project; the voice follower and the Markdown importer
-/// can reuse the same contract later.
+/// Produces ordered teleprompter sections. The app feeds it a snapshot of the
+/// open project; the voice follower can reuse the same contract later.
 protocol TeleprompterSource {
     var sections: [TeleprompterSection] { get }
 }
@@ -40,223 +32,50 @@ struct TeleprompterSceneText: Equatable, Sendable {
     let text: String
 }
 
-// MARK: - Temporary local converter
-
-/// Local stand-in for the FrameScriptCore markup parser (wave 2).
-///
-/// Recognised syntax:
-/// - `*word*` / `**word**` emphasis
-/// - ` / ` short pause (0.5 s), ` // ` long pause (1 s)
-/// - `[2s]`, `[pausa 2s]`, `[pause 2]`, `[pausa]` explicit pauses
-/// - whole `[LABEL: value]` lines as cues
-// TEMP: replaced by FrameScriptCore Markup in wave 2.
-enum TeleprompterConverter {
-    static let shortPauseSeconds: TimeInterval = 0.5
-    static let longPauseSeconds: TimeInterval = 1.0
-
-    static func makeSections(from scenes: [TeleprompterSceneText]) -> [TeleprompterSection] {
+enum TeleprompterContentBuilder {
+    static func sections(from scenes: [TeleprompterSceneText]) -> [TeleprompterSection] {
         scenes.map { scene in
-            TeleprompterSection(sceneID: scene.id, title: scene.title, runs: runs(from: scene.text))
+            TeleprompterSection(
+                sceneID: scene.id,
+                title: scene.title,
+                runs: ScriptMarkup.runs(scene.text)
+            )
         }
-    }
-
-    static func runs(from text: String) -> [TeleprompterRun] {
-        let normalized = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        let lines = normalized.components(separatedBy: "\n")
-        var runs: [TeleprompterRun] = []
-
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let cue = cueLabel(in: trimmed) {
-                append(.cue(label: cue), to: &runs)
-            } else if !trimmed.isEmpty {
-                for run in inlineRuns(from: trimmed) {
-                    append(run, to: &runs)
-                }
-            }
-            if index < lines.count - 1 {
-                append(.text("\n"), to: &runs)
-            }
-        }
-
-        while case .text(let value)? = runs.last, value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            runs.removeLast()
-        }
-        return runs
-    }
-
-    private static func append(_ run: TeleprompterRun, to runs: inout [TeleprompterRun]) {
-        if case .text(let value) = run {
-            guard !value.isEmpty else { return }
-            if case .text(let existing)? = runs.last {
-                runs[runs.count - 1] = .text(existing + value)
-                return
-            }
-        }
-        runs.append(run)
-    }
-
-    private static func inlineRuns(from line: String) -> [TeleprompterRun] {
-        let characters = Array(line)
-        var runs: [TeleprompterRun] = []
-        var buffer = ""
-        var index = 0
-
-        func flush() {
-            guard !buffer.isEmpty else { return }
-            runs.append(.text(buffer))
-            buffer.removeAll(keepingCapacity: true)
-        }
-
-        while index < characters.count {
-            let character = characters[index]
-
-            if character == "*" {
-                let isStrong = index + 1 < characters.count && characters[index + 1] == "*"
-                let markerLength = isStrong ? 2 : 1
-                if let close = closingAsterisk(in: characters, from: index + markerLength, markerLength: markerLength),
-                   close > index + markerLength {
-                    flush()
-                    let content = String(characters[(index + markerLength)..<close])
-                    runs.append(.emphasis(content, strong: isStrong))
-                    index = close + markerLength
-                    continue
-                }
-            }
-
-            if character == "/" {
-                let previousIsWhitespace = index > 0 && characters[index - 1].isWhitespace
-                if previousIsWhitespace {
-                    if index + 2 < characters.count,
-                       characters[index + 1] == "/",
-                       characters[index + 2].isWhitespace {
-                        trimTrailingWhitespace(&buffer)
-                        flush()
-                        runs.append(.pause(seconds: longPauseSeconds))
-                        index += 2
-                        while index < characters.count, characters[index].isWhitespace {
-                            index += 1
-                        }
-                        continue
-                    }
-                    if index + 1 < characters.count, characters[index + 1].isWhitespace {
-                        trimTrailingWhitespace(&buffer)
-                        flush()
-                        runs.append(.pause(seconds: shortPauseSeconds))
-                        index += 1
-                        while index < characters.count, characters[index].isWhitespace {
-                            index += 1
-                        }
-                        continue
-                    }
-                }
-            }
-
-            if character == "[",
-               let close = characters[index...].firstIndex(of: "]") {
-                let inner = String(characters[(index + 1)..<close])
-                if let seconds = explicitPauseSeconds(inner) {
-                    flush()
-                    runs.append(.pause(seconds: seconds))
-                    index = close + 1
-                    continue
-                }
-            }
-
-            buffer.append(character)
-            index += 1
-        }
-
-        flush()
-        return runs
-    }
-
-    private static func trimTrailingWhitespace(_ buffer: inout String) {
-        while buffer.last?.isWhitespace == true {
-            buffer.removeLast()
-        }
-    }
-
-    private static func closingAsterisk(
-        in characters: [Character],
-        from start: Int,
-        markerLength: Int
-    ) -> Int? {
-        guard start < characters.count else { return nil }
-        var index = start
-        while index + markerLength <= characters.count {
-            if characters[index] == "*" {
-                if markerLength == 2 {
-                    if index + 1 < characters.count, characters[index + 1] == "*" {
-                        return index
-                    }
-                } else if !(index + 1 < characters.count && characters[index + 1] == "*") {
-                    return index
-                } else {
-                    index += 2
-                    continue
-                }
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    /// `[2s]`, `[pausa]`, `[pausa 2s]`, `[pause 1.5]`, `[3 segundos]`…
-    /// Returns `nil` for every other bracketed token (cues, labels, notes).
-    static func explicitPauseSeconds(_ inner: String) -> TimeInterval? {
-        var body = inner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !body.isEmpty else { return nil }
-
-        var hadKeyword = false
-        for keyword in ["pausa", "pause"] where body.hasPrefix(keyword) {
-            hadKeyword = true
-            body = String(body.dropFirst(keyword.count))
-            break
-        }
-        body = body.trimmingCharacters(in: .whitespaces)
-
-        guard hadKeyword || body.first?.isNumber == true else { return nil }
-
-        for suffix in ["segundos", "segundo", "seconds", "second", "segs", "seg", "s"] where body.hasSuffix(suffix) {
-            body = String(body.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
-            break
-        }
-
-        if body.isEmpty {
-            return hadKeyword ? longPauseSeconds : nil
-        }
-        guard let value = Double(body.replacingOccurrences(of: ",", with: ".")), value > 0 else {
-            return nil
-        }
-        return min(value, 10)
-    }
-
-    /// A whole line shaped like `[LABEL: value]` becomes a dimmed cue label.
-    static func cueLabel(in line: String) -> String? {
-        guard line.hasPrefix("["), line.hasSuffix("]"), line.count > 2 else { return nil }
-        let inner = String(line.dropFirst().dropLast())
-        guard let colon = inner.firstIndex(of: ":") else { return nil }
-
-        let label = inner[..<colon].trimmingCharacters(in: .whitespaces)
-        let value = inner[inner.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-        guard !label.isEmpty else { return nil }
-
-        let allowed = CharacterSet.letters
-            .union(.decimalDigits)
-            .union(CharacterSet(charactersIn: " _-"))
-        guard label.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
-
-        return value.isEmpty ? label : "\(label) · \(value)"
     }
 }
+
+/// A reading position that survives relayouts and live script edits. The
+/// character offset indexes the visible (spoken) characters of the scene, so
+/// changing the font or column width keeps the same words under the guide.
+struct TeleprompterReadingAnchor: Equatable, Sendable {
+    let sceneID: UUID
+    let characterOffset: Int
+}
+
+/// Geometry reported by the AppKit renderer after laying out the text.
+struct TeleprompterTextMetrics: Equatable, Sendable {
+    var contentHeight: Double = 0
+    var sectionStarts: [Double] = []
+    var sectionHeights: [Double] = []
+    var visibleCharacterCounts: [Int] = []
+    /// Monotonic renderer generation, used to ignore metrics from a layout
+    /// that a newer render already replaced.
+    var generation: Int = 0
+}
+
+/// The scroll surface the model drives. The AppKit text view conforms to this
+/// so 60 Hz scrolling never rebuilds a SwiftUI text tree.
+@MainActor
+protocol TeleprompterTextRendering: AnyObject {
+    func setScrollOffset(_ offset: Double)
+}
+
+typealias TeleprompterSceneProvider = @MainActor () -> [TeleprompterSceneText]
 
 // MARK: - Timing
 
 enum TeleprompterTiming {
-    static func wordCount(in runs: [TeleprompterRun]) -> Int {
+    static func wordCount(in runs: [MarkupRun]) -> Int {
         var count = 0
         for run in runs {
             switch run {
@@ -269,14 +88,14 @@ enum TeleprompterTiming {
         return count
     }
 
-    static func pauseSeconds(in runs: [TeleprompterRun]) -> TimeInterval {
+    static func pauseSeconds(in runs: [MarkupRun]) -> TimeInterval {
         runs.reduce(0) { total, run in
             guard case .pause(let seconds) = run else { return total }
             return total + seconds
         }
     }
 
-    static func estimatedDuration(for runs: [TeleprompterRun], wordsPerMinute: Double) -> TimeInterval {
+    static func estimatedDuration(for runs: [MarkupRun], wordsPerMinute: Double) -> TimeInterval {
         let minutes = Double(wordCount(in: runs)) / max(1, wordsPerMinute)
         return minutes * 60 + pauseSeconds(in: runs)
     }
@@ -324,9 +143,9 @@ enum TeleprompterLayout {
     }
 
     /// Section whose content is under the reading line.
-    static func currentSectionIndex(offset: Double, readingLineY: Double, starts: [Double]) -> Int {
+    static func currentSectionIndex(offset: Double, readingContentY: Double, starts: [Double]) -> Int {
         guard !starts.isEmpty else { return 0 }
-        let readingPoint = offset + readingLineY
+        let readingPoint = offset + readingContentY
         var result = 0
         for (index, start) in starts.enumerated() where start <= readingPoint {
             result = index
@@ -334,15 +153,59 @@ enum TeleprompterLayout {
         return result
     }
 
-    /// Offset that puts a scene header just above the reading line.
+    /// Content coordinate of the reading line.
+    ///
+    /// Vertically mirrored content is flipped around the viewport centre: the
+    /// visual guide at `fraction` from the top corresponds to
+    /// `1 - fraction` in content coordinates.
+    static func readingContentY(
+        viewportHeight: Double,
+        fraction: Double,
+        mirrorVertical: Bool
+    ) -> Double {
+        let clamped = min(1, max(0, fraction))
+        return viewportHeight * (mirrorVertical ? 1 - clamped : clamped)
+    }
+
+    /// Offset that puts a scene header just above the reading line. The lead is
+    /// signed because a vertically mirrored guide is approached from the other
+    /// direction.
     static func offsetForSection(
         _ index: Int,
         starts: [Double],
-        readingLineY: Double,
+        readingContentY: Double,
+        mirrorVertical: Bool,
         lead: Double = 48
     ) -> Double {
         guard starts.indices.contains(index) else { return 0 }
-        return max(0, starts[index] - readingLineY + lead)
+        let signedLead = mirrorVertical ? -lead : lead
+        return max(0, starts[index] - readingContentY + signedLead)
+    }
+
+    /// Fraction of the scene under the guide, used to derive a character
+    /// anchor from the current scroll offset.
+    static func sceneProgress(
+        offset: Double,
+        readingContentY: Double,
+        start: Double,
+        height: Double
+    ) -> Double {
+        guard height > 0 else { return 0 }
+        let point = offset + readingContentY
+        return min(1, max(0, (point - start) / height))
+    }
+
+    /// Inverse of ``sceneProgress``: where a character anchor sits in content
+    /// coordinates.
+    static func contentY(
+        forCharacterOffset characterOffset: Int,
+        characterCount: Int,
+        start: Double,
+        height: Double
+    ) -> Double {
+        guard characterCount > 0, height > 0 else { return start }
+        let clamped = min(characterCount, max(0, characterOffset))
+        return start + (Double(clamped) / Double(characterCount)) * height
     }
 }
 
@@ -353,7 +216,8 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
         static let wordsPerMinute = 60.0...300.0
         static let fontSize = 24.0...160.0
         static let columnWidth = 320.0...1600.0
-        static let readingLineFraction = 0.15...0.60
+        /// Allows ⅔ and beyond, which beam-splitter users need for a low guide.
+        static let readingLineFraction = 0.15...0.70
     }
 
     var wordsPerMinute: Double
