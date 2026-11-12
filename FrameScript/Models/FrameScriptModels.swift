@@ -1359,6 +1359,9 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
     case openRouter = "OpenRouter"
     case groq = "Groq"
     case googleAIStudio = "Google AI Studio"
+    case t3Code = "T3 Code (suscripción)"
+    case claudeCode = "Claude Code (suscripción)"
+    case codex = "Codex (suscripción)"
 
     var id: String { rawValue }
 

@@ -202,6 +202,7 @@ final class AppState {
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
+        SubscriptionAIRuntime.shared.attach(appState: self)
     }
 
     func configure() {
@@ -332,6 +333,9 @@ final class AppState {
         guard settings.aiPreferences.enableInlineAutocomplete else { return .blockedPreferenceDisabled }
         let provider = settings.aiPreferences.provider
         guard provider != .disabled else { return .blockedProviderDisabled }
+        // Inline autocomplete stays on the API providers. Subscription CLIs
+        // take seconds and must never run while typing.
+        guard !provider.isSubscriptionBacked else { return .blockedProviderDisabled }
         guard aiProviderConfigurationStore.hasStoredKey(for: provider) else { return .blockedMissingKeyMetadata }
         return .eligible
     }
@@ -1132,7 +1136,9 @@ final class AppState {
             : "Scene: \(scene.title)\nFull scene: \(scene.scriptText)\nTarget anchor: \(target.selectedText)"
         do {
             let provider = settings.aiPreferences.provider
-            let apiKey = try dependencies.providerCredentials.apiKey(for: provider)
+            let apiKey = provider.isSubscriptionBacked
+                ? ""
+                : try dependencies.providerCredentials.apiKey(for: provider)
             let response = try await dependencies.llmProvider.complete(request: LLMRequest(
                 task: kind,
                 provider: provider,
@@ -1252,7 +1258,11 @@ final class AppState {
     }
 
     private func providerAPIKeyIfNeeded() throws -> String {
-        settings.aiPreferences.provider == .disabled ? "" : try providerAPIKey(for: settings.aiPreferences.provider)
+        let provider = settings.aiPreferences.provider
+        guard provider != .disabled else { return "" }
+        // Subscription-backed providers authenticate through the local CLI.
+        guard !provider.isSubscriptionBacked else { return "" }
+        return try providerAPIKey(for: provider)
     }
 
     func performRecovery(_ action: AppRecoveryAction) {

@@ -69,6 +69,17 @@ struct AppRootView: View {
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }
+            .overlay(alignment: .topTrailing) {
+                SubscriptionAIActivityOverlay()
+            }
+            .sheet(item: Binding(
+                get: { SubscriptionAIRuntime.shared.pendingPrompt },
+                set: { SubscriptionAIRuntime.shared.pendingPrompt = $0 }
+            )) { prompt in
+                SubscriptionAIPendingQuestionSheet(prompt: prompt)
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
             .background(ProjectWindowReader { appState.setProjectWindow($0) })
     }
 }

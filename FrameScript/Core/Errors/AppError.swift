@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 import Observation
 import Security
 
@@ -84,7 +85,8 @@ struct AppError: Identifiable, LocalizedError, Equatable, Sendable {
         if let fileName = context.fileName, !fileName.isEmpty {
             message += " \(String(format: L10n.tr("error.fileName", language: language), fileName))"
         }
-        if let reason = context.reason, !reason.isEmpty, kind == .aiProvider {
+        if let reason = context.reason, !reason.isEmpty,
+           kind == .aiProvider || kind == .aiConfiguration {
             message += " \(reason)"
         }
         let suggestion = recoveryAction.map {
@@ -286,6 +288,37 @@ extension AppError {
 
     static func ai(_ error: Error) -> AppError? {
         if error is CancellationError { return nil }
+        if let error = error as? SubscriptionAIError {
+            switch error {
+            case .autocompleteNotSupported:
+                return nil
+            case .pendingQuestion:
+                // The sheet already explains the question and offers T3.
+                return nil
+            case let .notConfigured(detail):
+                return AppError(
+                    kind: .aiConfiguration,
+                    context: AppErrorContext(reason: detail),
+                    recoveryAction: .openAISettings
+                )
+            }
+        }
+        if let error = error as? AgentCLIError {
+            switch error {
+            case .cancelled:
+                return nil
+            case .invalidConfiguration, .binaryNotFound, .projectNotFound, .noProviderAvailable:
+                return AppError(
+                    kind: .aiConfiguration,
+                    context: AppErrorContext(reason: error.localizedDescription),
+                    recoveryAction: .openAISettings
+                )
+            case .timedOut:
+                return AppError(kind: .aiProvider, context: AppErrorContext(reason: error.localizedDescription))
+            default:
+                return AppError(kind: .aiProvider, context: AppErrorContext(reason: error.localizedDescription))
+            }
+        }
         if let error = error as? LLMProviderError {
             switch error {
             case .missingAPIKey, .invalidBaseURL:
