@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FS00000000000000000000050 /* FrameScriptCore in Frameworks */ = {isa = PBXBuildFile; productRef = FS00000000000000000000051 /* FrameScriptCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		FS00000000000000000000018 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FS00000000000000000000050 /* FrameScriptCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = FrameScript;
 			packageProductDependencies = (
+				FS00000000000000000000051 /* FrameScriptCore */,
 			);
 			productName = FrameScript;
 			productReference = FS00000000000000000000001 /* FrameScript.app */;
@@ -196,6 +202,9 @@
 			);
 			mainGroup = FS00000000000000000000004;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FS00000000000000000000052 /* XCLocalSwiftPackageReference "FrameScriptCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FS00000000000000000000005 /* Products */;
 			projectDirPath = "";
@@ -268,6 +277,20 @@
 			targetProxy = FS00000000000000000000038 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FS00000000000000000000052 /* XCLocalSwiftPackageReference "FrameScriptCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/FrameScriptCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FS00000000000000000000051 /* FrameScriptCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FrameScriptCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		FS00000000000000000000012 /* Debug */ = {
