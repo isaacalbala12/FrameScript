@@ -195,7 +195,7 @@ enum ShortcutCategory: String, CaseIterable, Hashable {
 enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
-    case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode
+    case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
 
     var id: String { rawValue }
@@ -268,6 +268,7 @@ enum ShortcutRegistry {
         .init(command: .toggleContentsPanel, localizationKey: "command.toggleSidebar", category: .workspace, factoryDefault: .init("\\", modifiers: [.command]), order: 4),
         .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 5),
         .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 6),
+        .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 7),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .openSettings, localizationKey: "command.openSettings", category: .application, factoryDefault: .init(",", modifiers: [.command]), order: 0),
         .init(command: .showShortcuts, localizationKey: "command.showShortcuts", category: .application, factoryDefault: .init("/", modifiers: [.command, .shift]), order: 1)

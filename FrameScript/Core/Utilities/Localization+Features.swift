@@ -9,6 +9,8 @@ extension L10n {
         autosaveStrings,
         [.spanish: autosaveSpanish],
         backupsStrings,
-        [.spanish: backupsSpanish]
+        [.spanish: backupsSpanish],
+        teleprompterStrings,
+        [.spanish: teleprompterSpanish]
     ]
 }
