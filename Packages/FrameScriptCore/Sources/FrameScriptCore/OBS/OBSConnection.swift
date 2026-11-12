@@ -95,6 +95,8 @@ public struct OBSConnectionConfig: Sendable, Equatable {
     public var connectTimeout: Duration
     /// Default timeout for requests that do not override it.
     public var requestTimeout: Duration
+    /// Interval between WebSocket pings while connected. `nil` disables keepalive.
+    public var keepaliveInterval: Duration?
     public var eventSubscriptions: OBSEventSubscriptions
     public var reconnect: OBSReconnectPolicy
 
@@ -104,6 +106,7 @@ public struct OBSConnectionConfig: Sendable, Equatable {
         password: String? = nil,
         connectTimeout: Duration = .seconds(10),
         requestTimeout: Duration = .seconds(10),
+        keepaliveInterval: Duration? = .seconds(10),
         eventSubscriptions: OBSEventSubscriptions = .all,
         reconnect: OBSReconnectPolicy = .disabled
     ) {
@@ -112,6 +115,7 @@ public struct OBSConnectionConfig: Sendable, Equatable {
         self.password = password
         self.connectTimeout = connectTimeout
         self.requestTimeout = requestTimeout
+        self.keepaliveInterval = keepaliveInterval
         self.eventSubscriptions = eventSubscriptions
         self.reconnect = reconnect
     }

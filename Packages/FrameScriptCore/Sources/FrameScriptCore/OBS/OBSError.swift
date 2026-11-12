@@ -16,6 +16,10 @@ public enum OBSError: Error, Sendable, Equatable, LocalizedError {
     case authenticationFailed
     /// The server refused the RPC version (close code 4010).
     case unsupportedRPCVersion(serverVersion: Int?)
+    /// The server invalidated the session (close code 4011). Reconnecting is not allowed.
+    case sessionInvalidated
+    /// The client was permanently shut down with `shutdown()`.
+    case clientShutdown
     /// The first message was not a valid `Hello`, or the handshake was interrupted.
     case handshakeFailed(String)
     /// OBS answered a request with `result: false`.
@@ -49,6 +53,10 @@ public enum OBSError: Error, Sendable, Equatable, LocalizedError {
             } else {
                 "OBS does not support obs-websocket RPC version \(OBSMessageCodec.rpcVersion)."
             }
+        case .sessionInvalidated:
+            "OBS invalidated the session; reconnect manually."
+        case .clientShutdown:
+            "The OBS client was shut down."
         case .handshakeFailed(let detail):
             "The obs-websocket handshake failed: \(detail)"
         case .requestFailed(let requestType, let statusCode, let comment):
@@ -77,11 +85,12 @@ public enum OBSError: Error, Sendable, Equatable, LocalizedError {
     /// Whether an automatic reconnect could plausibly succeed without user action.
     public var isRetryable: Bool {
         switch self {
-        case .obsNotRunning, .connectionFailed, .connectionTimeout, .transportClosed, .disconnected:
+        case .obsNotRunning, .connectionFailed, .connectionTimeout, .transportClosed:
             true
         case .notConnected, .authenticationRequired, .authenticationFailed,
-             .unsupportedRPCVersion, .handshakeFailed, .requestFailed,
-             .requestTimeout, .protocolViolation:
+             .unsupportedRPCVersion, .sessionInvalidated, .clientShutdown,
+             .handshakeFailed, .requestFailed, .requestTimeout, .protocolViolation,
+             .disconnected:
             false
         }
     }

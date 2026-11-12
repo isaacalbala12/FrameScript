@@ -24,8 +24,13 @@ actor FakeOBSSession {
     private var readWaiters: [CheckedContinuation<OBSTransportEvent, Never>] = []
     private var closedEvent: OBSTransportClose?
     private var isClosed = false
+    private var holdClientClose = false
+    private var clientCloseContinuation: CheckedContinuation<Void, Never>?
+    private var pingFailuresRemaining = 0
 
     private(set) var connectionCount = 0
+    private(set) var clientCloseCount = 0
+    private(set) var pingCount = 0
 
     init(helloText: String?) {
         self.helloText = helloText
@@ -81,8 +86,40 @@ actor FakeOBSSession {
         incoming.append(text)
     }
 
-    func closeFromClient() {
+    func closeFromClient() async {
+        clientCloseCount += 1
+        if holdClientClose {
+            await withCheckedContinuation { continuation in
+                clientCloseContinuation = continuation
+            }
+        }
         close(code: nil, reason: nil)
+    }
+
+    func ping() throws {
+        pingCount += 1
+        if pingFailuresRemaining > 0 {
+            pingFailuresRemaining -= 1
+            throw OBSTransportFailure(phase: .ping, message: "Ping failed")
+        }
+    }
+
+    func failNextPings(_ count: Int) {
+        pingFailuresRemaining = count
+    }
+
+    func holdNextClientClose() {
+        holdClientClose = true
+    }
+
+    func releaseClientClose() {
+        holdClientClose = false
+        clientCloseContinuation?.resume()
+        clientCloseContinuation = nil
+    }
+
+    func socketIsClosed() -> Bool {
+        isClosed
     }
 
     // MARK: Server side
@@ -205,6 +242,10 @@ struct FakeOBSTransport: OBSTransport {
 
     func receive() async throws -> OBSTransportEvent {
         await session.read()
+    }
+
+    func ping() async throws {
+        try await session.ping()
     }
 
     func close() async {

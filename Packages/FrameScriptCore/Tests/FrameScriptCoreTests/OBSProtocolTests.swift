@@ -561,6 +561,9 @@ struct OBSConfigurationTests {
         #expect(!OBSError.authenticationFailed.isRetryable)
         #expect(!OBSError.authenticationRequired.isRetryable)
         #expect(!OBSError.requestTimeout(requestType: "GetVersion", after: .seconds(1)).isRetryable)
+        #expect(!OBSError.sessionInvalidated.isRetryable)
+        #expect(!OBSError.disconnected.isRetryable)
+        #expect(!OBSError.clientShutdown.isRetryable)
     }
 
     @Test func requestFailureDescribesStatusCodeAndComment() {

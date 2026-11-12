@@ -551,6 +551,245 @@ struct OBSClientEventTests {
     }
 }
 
+// MARK: - Lifecycle
+
+@Suite("OBS client lifecycle")
+struct OBSClientLifecycleTests {
+    @Test func cancellingConnectClosesSocketAndDoesNotReconnect() async throws {
+        let session = FakeOBSSession(helloText: nil)
+        let provider = FakeSessionProvider([session])
+        let policy = OBSReconnectPolicy(
+            isEnabled: true,
+            initialDelay: .milliseconds(5),
+            multiplier: 1,
+            maxDelay: .milliseconds(5),
+            maxAttempts: 3
+        )
+        let client = OBSClient(
+            config: OBSConnectionConfig(
+                connectTimeout: .seconds(5),
+                reconnect: policy
+            ),
+            transportFactory: fakeFactory(for: provider)
+        )
+
+        let connectTask = Task { try await client.connect(host: "localhost") }
+        let opened = try await waitUntil { await session.connectionCount > 0 }
+        #expect(opened)
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        connectTask.cancel()
+        let error = await captureError { try await connectTask.value }
+        let elapsed = clock.now - start
+
+        #expect(error as? OBSError == .disconnected)
+        #expect(elapsed < .seconds(1))
+        #expect(await session.clientCloseCount > 0)
+        #expect(await session.socketIsClosed())
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await provider.factoryCalls == 1)
+
+        let state = await client.connectionState
+        #expect(state == .disconnected)
+        await client.disconnect()
+    }
+
+    @Test func disconnectAbortsAnInFlightConnect() async throws {
+        let session = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let client = makeClient(session: session, connectTimeout: .seconds(5))
+
+        let connectTask = Task { try await client.connect(host: "localhost") }
+        let identify = try decodeEnvelope(try await session.nextIncoming())
+        #expect(identify.op == OBSOpCode.identify.rawValue)
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        await client.disconnect()
+        let error = await captureError { try await connectTask.value }
+        let elapsed = clock.now - start
+
+        #expect(error as? OBSError == .disconnected)
+        #expect(elapsed < .seconds(1))
+        #expect(await session.clientCloseCount > 0)
+
+        let state = await client.connectionState
+        #expect(state == .disconnected)
+    }
+
+    @Test func staleConnectionEndDoesNotReconnectOverANewManualConnection() async throws {
+        let firstSession = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let secondSession = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let provider = FakeSessionProvider([firstSession, secondSession])
+        let policy = OBSReconnectPolicy(
+            isEnabled: true,
+            initialDelay: .milliseconds(5),
+            multiplier: 1,
+            maxDelay: .milliseconds(5),
+            maxAttempts: 3
+        )
+        let client = OBSClient(
+            config: OBSConnectionConfig(
+                connectTimeout: .seconds(1),
+                reconnect: policy
+            ),
+            transportFactory: fakeFactory(for: provider)
+        )
+
+        let firstConnect = Task { try await client.connect(host: "localhost") }
+        _ = try await firstSession.nextIncoming()
+        try await firstSession.pushIdentified()
+        try await firstConnect.value
+
+        // Block the old socket's close so handleConnectionEnded is still suspended
+        // while the manual reconnect below completes.
+        await firstSession.holdNextClientClose()
+        await firstSession.close(code: 1006, reason: "Network lost")
+
+        let disconnected = try await waitUntil {
+            await client.connectionState == .disconnected
+        }
+        #expect(disconnected)
+
+        let secondConnect = Task { try await client.connect(host: "localhost") }
+        _ = try await secondSession.nextIncoming()
+        try await secondSession.pushIdentified()
+        try await secondConnect.value
+        #expect(await client.isConnected)
+
+        await firstSession.releaseClientClose()
+        try await Task.sleep(for: .milliseconds(80))
+
+        // The stale close must not start a reconnect loop over the healthy manual
+        // connection, nor tear it down.
+        #expect(await provider.factoryCalls == 2)
+        let state = await client.connectionState
+        #expect(state.isConnected)
+        #expect(await secondSession.socketIsClosed() == false)
+
+        await client.disconnect()
+    }
+
+    @Test func connectingAgainClosesThePreviousSocket() async throws {
+        let firstSession = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let secondSession = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let provider = FakeSessionProvider([firstSession, secondSession])
+        let client = OBSClient(
+            config: OBSConnectionConfig(connectTimeout: .seconds(1)),
+            transportFactory: fakeFactory(for: provider)
+        )
+
+        let firstConnect = Task { try await client.connect(host: "localhost") }
+        _ = try await firstSession.nextIncoming()
+        try await firstSession.pushIdentified()
+        try await firstConnect.value
+
+        let secondConnect = Task { try await client.connect(host: "localhost") }
+        _ = try await secondSession.nextIncoming()
+        try await secondSession.pushIdentified()
+        try await secondConnect.value
+
+        #expect(await firstSession.clientCloseCount > 0)
+        #expect(await firstSession.socketIsClosed())
+        #expect(await provider.factoryCalls == 2)
+
+        let state = await client.connectionState
+        #expect(state.isConnected)
+        await client.disconnect()
+    }
+
+    @Test func sessionInvalidatedDoesNotReconnect() async throws {
+        let session = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let provider = FakeSessionProvider([session])
+        let policy = OBSReconnectPolicy(
+            isEnabled: true,
+            initialDelay: .milliseconds(5),
+            multiplier: 1,
+            maxDelay: .milliseconds(5),
+            maxAttempts: 3
+        )
+        let client = OBSClient(
+            config: OBSConnectionConfig(
+                connectTimeout: .seconds(1),
+                reconnect: policy
+            ),
+            transportFactory: fakeFactory(for: provider)
+        )
+
+        let connectTask = Task { try await client.connect(host: "localhost") }
+        _ = try await session.nextIncoming()
+        try await session.pushIdentified()
+        try await connectTask.value
+
+        await session.close(
+            code: OBSWebSocketCloseCode.sessionInvalidated,
+            reason: "Session invalidated."
+        )
+
+        let failed = try await waitUntil {
+            let state = await client.connectionState
+            if case .failed = state { return true }
+            return false
+        }
+        #expect(failed)
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await provider.factoryCalls == 1)
+
+        let state = await client.connectionState
+        #expect(!state.isConnected)
+        await client.disconnect()
+    }
+
+    @Test func keepalivePingsAndDetectsADeadSocket() async throws {
+        let session = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let client = OBSClient(
+            config: OBSConnectionConfig(keepaliveInterval: .milliseconds(20)),
+            transportFactory: fakeFactory(for: session)
+        )
+        try await connect(client, to: session)
+
+        let pinged = try await waitUntil { await session.pingCount >= 2 }
+        #expect(pinged)
+
+        await session.failNextPings(1)
+
+        let disconnected = try await waitUntil {
+            await client.connectionState == .disconnected
+        }
+        #expect(disconnected)
+        #expect(await session.pingCount >= 3)
+
+        await client.disconnect()
+    }
+
+    @Test func shutdownFinishesStreamsAndRejectsReconnect() async throws {
+        let session = FakeOBSSession(helloText: try FakeOBSSession.hello())
+        let client = makeClient(session: session)
+        try await connect(client, to: session)
+
+        let eventStream = client.events
+        let stateStream = client.connectionStates
+        let eventsTask = Task {
+            await collectEvents(eventStream, count: 1, timeout: .seconds(2))
+        }
+        let statesTask = Task {
+            await collectStates(stateStream, until: { _ in false }, timeout: .seconds(2))
+        }
+
+        await client.shutdown()
+
+        let events = await eventsTask.value
+        let states = await statesTask.value
+        #expect(events.isEmpty)
+        #expect(states.contains(.disconnected))
+
+        let error = await captureError { try await client.connect(host: "localhost") }
+        #expect(error as? OBSError == .clientShutdown)
+    }
+}
+
 // MARK: - Reconnection
 
 @Suite("OBS client reconnection")

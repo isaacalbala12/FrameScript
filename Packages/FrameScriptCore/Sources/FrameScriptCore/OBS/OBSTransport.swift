@@ -25,6 +25,7 @@ public struct OBSTransportFailure: Error, Sendable, Equatable, LocalizedError {
         case connect
         case send
         case receive
+        case ping
     }
 
     public let phase: Phase
@@ -81,6 +82,8 @@ public protocol OBSTransport: Sendable {
     func send(_ text: String) async throws
     /// Returns `.text` for a data frame and `.closed` when the peer closed the socket.
     func receive() async throws -> OBSTransportEvent
+    /// Sends a WebSocket ping and waits for the pong. Used as a keepalive.
+    func ping() async throws
     /// Closes the socket and releases its resources. Safe to call more than once.
     func close() async
 }
@@ -112,6 +115,27 @@ public final class OBSWebSocketTransport: OBSTransport, @unchecked Sendable {
             try await task.send(.string(text))
         } catch {
             throw OBSTransportFailure(error: error, phase: .send)
+        }
+    }
+
+    public func ping() async throws {
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                task.sendPing { error in
+                    if let error {
+                        continuation.resume(throwing: OBSTransportFailure(
+                            error: error,
+                            phase: .ping
+                        ))
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        } catch let failure as OBSTransportFailure {
+            throw failure
+        } catch {
+            throw OBSTransportFailure(error: error, phase: .ping)
         }
     }
 

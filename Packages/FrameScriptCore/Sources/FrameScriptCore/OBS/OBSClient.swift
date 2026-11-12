@@ -22,13 +22,16 @@ public actor OBSClient {
     )
 
     private var transport: (any OBSTransport)?
+    private var inFlightTransport: (any OBSTransport)?
     private var readTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var connectionID = UUID()
     private var connectionEpoch = UUID()
     private var reconnectGeneration = UUID()
     private var pending: [String: PendingRequest] = [:]
     private var isManuallyDisconnected = true
+    private var isShutDown = false
 
     public init(
         config: OBSConnectionConfig = OBSConnectionConfig(),
@@ -43,6 +46,7 @@ public actor OBSClient {
     // MARK: - Streams
 
     /// A new stream of decoded events. Each access creates an independent consumer.
+    /// All streams finish when `shutdown()` is called.
     public nonisolated var events: AsyncStream<OBSEvent> {
         eventHub.makeStream()
     }
@@ -51,6 +55,7 @@ public actor OBSClient {
     ///
     /// The stream reports changes made after it is created. Read
     /// `connectionState` once for the current value before subscribing.
+    /// All streams finish when `shutdown()` is called.
     public nonisolated var connectionStates: AsyncStream<OBSConnectionState> {
         stateHub.makeStream()
     }
@@ -80,14 +85,18 @@ public actor OBSClient {
 
     /// Replaces the current connection (if any) with a fresh one.
     public func connect(config newConfig: OBSConnectionConfig) async throws {
+        guard !isShutDown else { throw OBSError.clientShutdown }
         await disconnect()
         config = newConfig
         isManuallyDisconnected = false
-        connectionEpoch = UUID()
-        try await establishConnection()
+        let epoch = UUID()
+        connectionEpoch = epoch
+        try await establishConnection(epoch: epoch)
     }
 
     /// Closes the connection and disables automatic reconnection for this cycle.
+    ///
+    /// This also aborts a connect that is still in its handshake.
     public func disconnect() async {
         isManuallyDisconnected = true
         reconnectTask?.cancel()
@@ -95,15 +104,19 @@ public actor OBSClient {
         reconnectGeneration = UUID()
         connectionEpoch = UUID()
 
-        let previousTransport = transport
-        transport = nil
-        connectionID = UUID()
-        readTask?.cancel()
-        readTask = nil
-
+        await closeConnectionResources()
         setState(.disconnected)
         failAllPending(with: .disconnected)
-        await previousTransport?.close()
+    }
+
+    /// Permanently stops the client: disconnects and finishes the event and state
+    /// streams. Subsequent `connect` calls throw `OBSError.clientShutdown`.
+    public func shutdown() async {
+        guard !isShutDown else { return }
+        isShutDown = true
+        await disconnect()
+        eventHub.finish()
+        stateHub.finish()
     }
 
     // MARK: - Requests
@@ -235,9 +248,17 @@ public actor OBSClient {
 
     // MARK: - Handshake
 
-    private func establishConnection() async throws {
-        let epoch = connectionEpoch
+    private func establishConnection(epoch: UUID) async throws {
+        guard epoch == connectionEpoch, !isManuallyDisconnected, !isShutDown, !Task.isCancelled else {
+            throw OBSError.disconnected
+        }
         setState(.connecting)
+
+        // Never install a new socket on top of an old read loop or keepalive.
+        await closeConnectionResources()
+        guard epoch == connectionEpoch, !Task.isCancelled else {
+            throw OBSError.disconnected
+        }
 
         guard let url = config.url else {
             let error = OBSError.connectionFailed("The OBS host or port is not a valid URL.")
@@ -248,50 +269,95 @@ public actor OBSClient {
         let newTransport: any OBSTransport
         do {
             newTransport = try await transportFactory(url)
-            try await newTransport.connect()
         } catch {
-            guard epoch == connectionEpoch else { throw OBSError.disconnected }
+            if Task.isCancelled || epoch != connectionEpoch {
+                if epoch == connectionEpoch { setState(.disconnected) }
+                throw OBSError.disconnected
+            }
             let mapped = mapConnectionError(error)
             setState(.failed(reason: mapped.localizedDescription))
-            startReconnectLoopIfNeeded(after: mapped)
+            startReconnectLoopIfNeeded(after: mapped, epoch: epoch)
             throw mapped
         }
+
+        // The client owns the socket from this point, so `disconnect()` and task
+        // cancellation can close it while the handshake is suspended.
+        inFlightTransport = newTransport
 
         do {
-            let hello = try await receiveHello(using: newTransport)
-            let authentication = try authenticationString(for: hello)
-            let identify = try OBSMessageCodec.encodeIdentify(
-                authentication: authentication,
-                eventSubscriptions: config.eventSubscriptions.rawValue
-            )
-            try await newTransport.send(identify)
-            let identified = try await receiveIdentified(using: newTransport)
+            try await withTaskCancellationHandler {
+                try await newTransport.connect()
+                let hello = try await receiveHello(using: newTransport)
+                let authentication = try authenticationString(for: hello)
+                let identify = try OBSMessageCodec.encodeIdentify(
+                    authentication: authentication,
+                    eventSubscriptions: config.eventSubscriptions.rawValue
+                )
+                try await newTransport.send(identify)
+                let identified = try await receiveIdentified(using: newTransport)
 
-            // A newer connect/disconnect may have replaced this attempt while the
-            // handshake was suspended.
-            guard epoch == connectionEpoch else { throw OBSError.disconnected }
+                // A newer connect/disconnect may have replaced this attempt while
+                // the handshake was suspended.
+                guard epoch == connectionEpoch, !Task.isCancelled else {
+                    throw OBSError.disconnected
+                }
+                guard transport == nil else {
+                    throw OBSError.disconnected
+                }
 
-            let session = OBSSessionInfo(
-                obsStudioVersion: hello.obsStudioVersion,
-                obsWebSocketVersion: hello.obsWebSocketVersion,
-                rpcVersion: hello.rpcVersion,
-                negotiatedRpcVersion: identified.negotiatedRpcVersion
-            )
-            let connectionID = UUID()
-            self.connectionID = connectionID
-            self.transport = newTransport
-            self.readTask = Task { [weak self] in
-                await self?.readLoop(transport: newTransport, connectionID: connectionID)
+                let session = OBSSessionInfo(
+                    obsStudioVersion: hello.obsStudioVersion,
+                    obsWebSocketVersion: hello.obsWebSocketVersion,
+                    rpcVersion: hello.rpcVersion,
+                    negotiatedRpcVersion: identified.negotiatedRpcVersion
+                )
+                let connectionID = UUID()
+                self.connectionID = connectionID
+                self.transport = newTransport
+                self.inFlightTransport = nil
+                self.readTask = Task { [weak self] in
+                    await self?.readLoop(transport: newTransport, connectionID: connectionID)
+                }
+                setState(.connected(session))
+                startKeepalive(connectionID: connectionID)
+            } onCancel: {
+                Task { await newTransport.close() }
             }
-            setState(.connected(session))
         } catch {
             await newTransport.close()
-            guard epoch == connectionEpoch else { throw OBSError.disconnected }
+            if epoch == connectionEpoch {
+                inFlightTransport = nil
+            }
+            if Task.isCancelled || epoch != connectionEpoch {
+                if epoch == connectionEpoch { setState(.disconnected) }
+                throw OBSError.disconnected
+            }
             let mapped = mapConnectionError(error)
+            if mapped == .disconnected {
+                setState(.disconnected)
+                throw mapped
+            }
             setState(.failed(reason: mapped.localizedDescription))
-            startReconnectLoopIfNeeded(after: mapped)
+            startReconnectLoopIfNeeded(after: mapped, epoch: epoch)
             throw mapped
         }
+    }
+
+    /// Closes both the live and in-flight sockets and cancels their tasks.
+    private func closeConnectionResources() async {
+        readTask?.cancel()
+        readTask = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+        connectionID = UUID()
+
+        let installed = transport
+        transport = nil
+        let inFlight = inFlightTransport
+        inFlightTransport = nil
+
+        await installed?.close()
+        await inFlight?.close()
     }
 
     private func authenticationString(for hello: OBSHello) throws -> String? {
@@ -350,34 +416,77 @@ public actor OBSClient {
         }
     }
 
-    /// Waits for one frame, closing the transport if the handshake stalls.
+    /// Waits for one frame, closing the transport if the handshake stalls or the
+    /// caller is cancelled. `URLSessionWebSocketTask.receive()` does not observe
+    /// task cancellation on its own, so the close is what unblocks it.
     private func receiveWithTimeout(
         using transport: any OBSTransport
     ) async throws -> OBSTransportEvent {
         let timeout = config.connectTimeout
         let timeoutFlag = OBSTimeoutFlag()
-        let event = try await withThrowingTaskGroup(of: OBSTransportEvent.self) { group in
-            group.addTask {
-                try await transport.receive()
+        return try await withTaskCancellationHandler {
+            let event = try await withThrowingTaskGroup(of: OBSTransportEvent.self) { group in
+                group.addTask {
+                    try await transport.receive()
+                }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    timeoutFlag.markFired()
+                    await transport.close()
+                    throw OBSError.connectionTimeout(timeout)
+                }
+                defer { group.cancelAll() }
+                guard let event = try await group.next() else {
+                    throw OBSError.connectionTimeout(timeout)
+                }
+                return event
             }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                timeoutFlag.markFired()
-                await transport.close()
-                throw OBSError.connectionTimeout(timeout)
-            }
-            defer { group.cancelAll() }
-            guard let event = try await group.next() else {
+            // Closing the transport wakes the pending receive with `.closed`. When our
+            // own timer caused that close, report the timeout instead of a peer close.
+            if timeoutFlag.isFired {
                 throw OBSError.connectionTimeout(timeout)
             }
             return event
+        } onCancel: {
+            Task { await transport.close() }
         }
-        // Closing the transport wakes the pending receive with `.closed`. When our
-        // own timer caused that close, report the timeout instead of a peer close.
-        if timeoutFlag.isFired {
-            throw OBSError.connectionTimeout(timeout)
+    }
+
+    // MARK: - Keepalive
+
+    private func startKeepalive(connectionID: UUID) {
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+        guard let interval = config.keepaliveInterval, interval > .zero else { return }
+        keepaliveTask = Task { [weak self] in
+            await self?.runKeepalive(connectionID: connectionID, interval: interval)
         }
-        return event
+    }
+
+    /// Pings while this connection is the live one. A failed ping is treated as a
+    /// dead socket and goes through the normal disconnect/reconnect path.
+    private func runKeepalive(connectionID: UUID, interval: Duration) async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: interval)
+            } catch {
+                return
+            }
+            guard connectionID == self.connectionID, connectionState.isConnected else {
+                return
+            }
+            guard let transport else { return }
+            do {
+                try await transport.ping()
+            } catch {
+                guard connectionID == self.connectionID else { return }
+                await handleConnectionEnded(
+                    connectionID: connectionID,
+                    error: mapConnectionError(error)
+                )
+                return
+            }
+        }
     }
 
     // MARK: - Read loop
@@ -480,18 +589,35 @@ public actor OBSClient {
     }
 
     private func handleConnectionEnded(connectionID: UUID, error: OBSError) async {
-        guard connectionID == self.connectionID else { return }
+        let epoch = connectionEpoch
+        guard connectionID == self.connectionID, epoch == connectionEpoch else { return }
 
         let previousTransport = transport
         transport = nil
-        self.connectionID = UUID()
+        let tombstone = UUID()
+        self.connectionID = tombstone
         readTask?.cancel()
         readTask = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
 
-        setState(.disconnected)
+        if error.isRetryable {
+            setState(.disconnected)
+        } else {
+            setState(.failed(reason: error.localizedDescription))
+        }
         failAllPending(with: error)
         await previousTransport?.close()
-        startReconnectLoopIfNeeded(after: error)
+
+        // A manual connect may have completed while the old socket was closing.
+        // Never touch (or reconnect over) that newer connection.
+        guard epoch == connectionEpoch,
+              self.connectionID == tombstone,
+              transport == nil,
+              inFlightTransport == nil,
+              !connectionState.isConnected
+        else { return }
+        startReconnectLoopIfNeeded(after: error, epoch: epoch)
     }
 
     private func failAllPending(with error: OBSError) {
@@ -505,40 +631,57 @@ public actor OBSClient {
 
     // MARK: - Reconnection
 
-    private func startReconnectLoopIfNeeded(after error: OBSError) {
-        guard !isManuallyDisconnected,
+    private func startReconnectLoopIfNeeded(after error: OBSError, epoch: UUID) {
+        guard epoch == connectionEpoch,
+              !isManuallyDisconnected,
+              !isShutDown,
               config.reconnect.isEnabled,
               error.isRetryable,
-              reconnectTask == nil
+              reconnectTask == nil,
+              transport == nil,
+              inFlightTransport == nil,
+              !connectionState.isConnected
         else { return }
-        startReconnectLoop()
+        startReconnectLoop(epoch: epoch)
     }
 
-    private func startReconnectLoop() {
+    private func startReconnectLoop(epoch: UUID) {
         let generation = UUID()
         reconnectGeneration = generation
         reconnectTask = Task { [weak self] in
-            await self?.runReconnectLoop(generation: generation)
+            await self?.runReconnectLoop(generation: generation, epoch: epoch)
         }
     }
 
-    private func runReconnectLoop(generation: UUID) async {
+    private func runReconnectLoop(generation: UUID, epoch: UUID) async {
         var attempt = 1
-        while !Task.isCancelled, !isManuallyDisconnected {
+        while !Task.isCancelled,
+              !isManuallyDisconnected,
+              !isShutDown,
+              epoch == connectionEpoch {
             let policy = config.reconnect
             guard policy.isEnabled else { break }
             if let maxAttempts = policy.maxAttempts, attempt > maxAttempts { break }
+            guard transport == nil,
+                  inFlightTransport == nil,
+                  !connectionState.isConnected
+            else { break }
 
             do {
                 try await Task.sleep(for: policy.delay(forAttempt: attempt))
             } catch {
                 break
             }
-            if Task.isCancelled || isManuallyDisconnected { break }
+            if Task.isCancelled || isManuallyDisconnected || epoch != connectionEpoch {
+                break
+            }
 
             do {
-                try await establishConnection()
+                try await establishConnection(epoch: epoch)
                 break
+            } catch let error as OBSError {
+                if !error.isRetryable { break }
+                attempt += 1
             } catch {
                 attempt += 1
             }
@@ -584,6 +727,8 @@ public actor OBSClient {
             return .authenticationFailed
         case OBSWebSocketCloseCode.unsupportedRPCVersion:
             return .unsupportedRPCVersion(serverVersion: nil)
+        case OBSWebSocketCloseCode.sessionInvalidated:
+            return .sessionInvalidated
         default:
             return .transportClosed(code: close.code, reason: close.reason)
         }
