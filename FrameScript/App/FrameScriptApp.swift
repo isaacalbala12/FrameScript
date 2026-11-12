@@ -6,6 +6,13 @@ struct FrameScriptApp: App {
     @State private var appState = AppState()
     @Environment(\.openSettings) private var openSettings
 
+    init() {
+        // This is a process-wide AppKit setting, so enable automatic spelling
+        // language detection once at launch instead of mutating it from the
+        // script editor's updateNSView (which also owns notes text views).
+        NSSpellChecker.shared.automaticallyIdentifiesLanguages = true
+    }
+
     var body: some SwiftUI.Scene {
         WindowGroup {
             ThemedSceneRoot {

@@ -150,7 +150,7 @@ private struct GeneralSettings: View {
             SettingsRow(appState.localized("settings.language")) {
                 Picker("", selection: $settings.generalPreferences.language) {
                     ForEach(AppLanguage.allCases) { language in
-                        Text(language.displayName).tag(language)
+                        Text(language.displayName(in: appState.currentLanguage)).tag(language)
                     }
                 }
                 .labelsHidden()

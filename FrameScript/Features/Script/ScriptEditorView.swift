@@ -403,9 +403,6 @@ struct LinkedScriptTextView: NSViewRepresentable {
         view.textView.backgroundColor = backgroundColor
         view.scrollView.backgroundColor = backgroundColor
         view.textView.isContinuousSpellCheckingEnabled = spellcheck
-        // Let the system pick Spanish, English, etc. from the text being typed
-        // so a Spanish script is not flagged with an English dictionary.
-        NSSpellChecker.shared.automaticallyIdentifiesLanguages = spellcheck
         view.textView.isAutomaticQuoteSubstitutionEnabled = smartQuotes
         let paragraph = ScriptEditorLayout.paragraphStyle()
         view.textView.defaultParagraphStyle = paragraph

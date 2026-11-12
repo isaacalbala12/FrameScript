@@ -11,6 +11,13 @@ final class SpanishLocalizationTests: XCTestCase {
         XCTAssertTrue(AppLanguage.allCases.contains(.spanish))
     }
 
+    func testSystemLanguageLabelFollowsTheInterfaceLanguage() {
+        XCTAssertEqual(AppLanguage.system.displayName(in: .english), "System")
+        XCTAssertEqual(AppLanguage.system.displayName(in: .spanish), "Sistema")
+        XCTAssertEqual(AppLanguage.system.displayName(in: .russian), "Системный")
+        XCTAssertEqual(AppLanguage.spanish.displayName(in: .english), "Español")
+    }
+
     func testSpanishTableCoversEveryEnglishBaseKey() throws {
         let english = L10n.baseTable(for: .english)
         let spanish = L10n.baseTable(for: .spanish)
@@ -50,13 +57,20 @@ final class SpanishLocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.tr("mode.editing", language: .spanish), "Edición")
         XCTAssertEqual(L10n.tr("scene.kind", language: .spanish), "Escena")
         XCTAssertEqual(L10n.tr("shortcuts.title", language: .spanish), "Atajos")
-        XCTAssertEqual(L10n.tr("settings.autosave", language: .spanish), "Autoguardado al cambiar")
+        XCTAssertEqual(L10n.tr("settings.autosave", language: .spanish), "Guardado automático al cambiar")
         XCTAssertEqual(L10n.tr("settings.language", language: .spanish), "Idioma")
+        XCTAssertEqual(L10n.tr("settings.export", language: .spanish), "Exportación")
+        XCTAssertEqual(L10n.tr("brollSource.Talking head", language: .spanish), "Plano a cámara")
     }
 
-    func testResolvePrefersSpanishSystemLanguage() {
+    func testResolvePrefersTheFirstSupportedSystemLanguage() {
         XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["es-ES"]), .spanish)
+        // Latin American Spanish is served by the only Spanish table (Spain).
         XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["es-419", "en-US"]), .spanish)
+        XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["ca-ES", "es-ES"]), .spanish)
+        XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["en-US", "es-ES"]), .english)
+        XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["fr-FR", "ru-RU"]), .russian)
+        XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["fr-FR", "ca-ES"]), .english)
         XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["ru-RU"]), .russian)
         XCTAssertEqual(L10n.resolve(.system, preferredLanguages: ["en-GB"]), .english)
         XCTAssertEqual(L10n.resolve(.english, preferredLanguages: ["es-ES"]), .english)
@@ -75,6 +89,13 @@ final class SpanishLocalizationTests: XCTestCase {
         )
         XCTAssertEqual(
             prompts.responseLanguage(
+                for: "El nuevo Porsche 911 GT3 R en Spa-Francorchamps",
+                fallback: .english
+            ),
+            .spanish
+        )
+        XCTAssertEqual(
+            prompts.responseLanguage(
                 for: "Today we are going to review the new simulator update and how it changes the car's behavior in fast corners.",
                 fallback: .spanish
             ),
@@ -84,6 +105,32 @@ final class SpanishLocalizationTests: XCTestCase {
             prompts.responseLanguage(
                 for: "Это достаточно длинный русский текст для определения языка.",
                 fallback: .english
+            ),
+            .russian
+        )
+    }
+
+    func testUnsupportedScriptLanguagesFallBackToTheInterfaceLanguage() {
+        let prompts = PromptBuilder()
+
+        XCTAssertEqual(
+            prompts.responseLanguage(
+                for: "Nous allons analyser la nouvelle mise à jour du simulateur et son comportement dans les virages rapides.",
+                fallback: .spanish
+            ),
+            .spanish
+        )
+        XCTAssertEqual(
+            prompts.responseLanguage(
+                for: "Avui analitzarem l'actualització del simulador i com canvia el comportament del cotxe als revolts ràpids.",
+                fallback: .english
+            ),
+            .english
+        )
+        XCTAssertEqual(
+            prompts.responseLanguage(
+                for: "Hoje vamos analisar a nova atualização do simulador e como muda o comportamento do carro nas curvas rápidas.",
+                fallback: .russian
             ),
             .russian
         )

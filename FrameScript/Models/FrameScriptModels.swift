@@ -491,6 +491,8 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Native name of the language. `.system` has no native name and is
+    /// localized through `displayName(in:)` in the language picker.
     var displayName: String {
         switch self {
         case .system: "System"
@@ -498,6 +500,11 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
         case .spanish: "Español"
         case .russian: "Русский"
         }
+    }
+
+    func displayName(in interfaceLanguage: AppLanguage) -> String {
+        guard self == .system else { return displayName }
+        return L10n.tr("language.system", language: interfaceLanguage)
     }
 }
 

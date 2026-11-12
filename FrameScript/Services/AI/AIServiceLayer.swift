@@ -748,22 +748,33 @@ struct PromptBuilder {
     }
 
     /// Detects the script's language among the supported languages with Apple's
-    /// Natural Language recognizer. Very short samples are ambiguous, so they
-    /// fall back to the interface or system language instead of guessing.
+    /// Natural Language recognizer. Only confident Spanish, English, or Russian
+    /// hypotheses are accepted; anything else (French, Catalan, mixed short
+    /// text) falls back to the interface or system language instead of being
+    /// forced into one of the three supported languages.
     func responseLanguage(for text: String, fallback: AppLanguage, preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
         let letterCount = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
         guard letterCount >= 12 else { return resolvedLanguage(fallback, preferredLanguages: preferredLanguages) }
 
         let recognizer = NLLanguageRecognizer()
-        recognizer.languageConstraints = [.spanish, .english, .russian]
         recognizer.processString(text)
-        switch recognizer.dominantLanguage {
-        case .spanish: return .spanish
-        case .english: return .english
-        case .russian: return .russian
-        default: return resolvedLanguage(fallback, preferredLanguages: preferredLanguages)
+
+        let supported: [NLLanguage: AppLanguage] = [
+            .spanish: .spanish,
+            .english: .english,
+            .russian: .russian
+        ]
+        var bestLanguage: AppLanguage?
+        var bestConfidence = 0.0
+        for (detected, confidence) in recognizer.languageHypotheses(withMaximum: 5) where confidence >= Self.minimumLanguageConfidence {
+            guard let appLanguage = supported[detected], confidence > bestConfidence else { continue }
+            bestLanguage = appLanguage
+            bestConfidence = confidence
         }
+        return bestLanguage ?? resolvedLanguage(fallback, preferredLanguages: preferredLanguages)
     }
+
+    private static let minimumLanguageConfidence = 0.6
 
     func resolvedLanguage(_ language: AppLanguage, preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
         L10n.resolve(language, preferredLanguages: preferredLanguages)
