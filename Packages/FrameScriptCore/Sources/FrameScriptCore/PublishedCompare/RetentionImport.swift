@@ -200,16 +200,42 @@ private extension RetentionCSVParser {
         var rawPositions: [RawPosition] = []
         var rawRetentions: [RawRetention] = []
         var skipped = 0
+        var repairedRows = 0
+        let headerColumnCount = choice.header.map {
+            trimmingTrailingEmptyCells(choice.rows[$0.rowIndex]).count
+        }
+        let positionUnitHint = positionUnitHint(for: choice.header?.positionCell)
 
         for row in dataRows {
-            guard row.count > max(choice.positionIndex, choice.retentionIndex) else {
-                if !row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { skipped += 1 }
+            let normalizedRow: [String]
+            if let headerColumnCount {
+                guard let repaired = repairOverflowRow(
+                    row,
+                    headerColumnCount: headerColumnCount,
+                    positionIndex: choice.positionIndex,
+                    retentionIndex: choice.retentionIndex
+                ) else {
+                    if !row.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { skipped += 1 }
+                    continue
+                }
+                if repaired.count != row.count { repairedRows += 1 }
+                normalizedRow = repaired
+            } else {
+                normalizedRow = row
+            }
+
+            guard normalizedRow.count > max(choice.positionIndex, choice.retentionIndex) else {
+                if !normalizedRow.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { skipped += 1 }
                 continue
             }
-            let positionCell = row[choice.positionIndex]
-            let retentionCell = row[choice.retentionIndex]
-            guard let position = parseRawPosition(positionCell, delimiter: choice.delimiter),
-                  let retention = parseRawRetention(retentionCell, delimiter: choice.delimiter) else {
+            let positionCell = normalizedRow[choice.positionIndex]
+            let retentionCell = normalizedRow[choice.retentionIndex]
+            guard let position = parseRawPosition(
+                positionCell,
+                delimiter: choice.delimiter,
+                unitHint: positionUnitHint
+            ),
+            let retention = parseRawRetention(retentionCell, delimiter: choice.delimiter) else {
                 if !positionCell.isEmpty || !retentionCell.isEmpty { skipped += 1 }
                 continue
             }
@@ -220,6 +246,9 @@ private extension RetentionCSVParser {
         guard !rawPositions.isEmpty else { throw RetentionImportError.noRetentionData }
         if skipped > 0 {
             warnings.append("Skipped \(skipped) row\(skipped == 1 ? "" : "s") that did not contain a position and a retention value.")
+        }
+        if repairedRows > 0 {
+            warnings.append("Repaired \(repairedRows) row\(repairedRows == 1 ? "" : "s") with unquoted decimal separators.")
         }
 
         let positionUnit = inferPositionUnit(
@@ -312,19 +341,20 @@ private extension RetentionCSVParser {
             let rows = lines.map { splitLine($0, delimiter: delimiter) }
             if let header = findHeader(in: rows, delimiter: delimiter) {
                 let validDataRows = countValidDataRows(rows: rows, header: header, delimiter: delimiter)
-                guard validDataRows >= 2 else { continue }
-                let score = 10_000 + header.positionScore + header.retentionScore + min(validDataRows, 500) * 20
-                candidates.append(
-                    ColumnChoice(
-                        delimiter: delimiter,
-                        rows: rows,
-                        header: header,
-                        positionIndex: header.positionIndex,
-                        retentionIndex: header.retentionIndex,
-                        score: score
+                if validDataRows >= 2 {
+                    let score = 10_000 + header.positionScore + header.retentionScore + min(validDataRows, 500) * 20
+                    candidates.append(
+                        ColumnChoice(
+                            delimiter: delimiter,
+                            rows: rows,
+                            header: header,
+                            positionIndex: header.positionIndex,
+                            retentionIndex: header.retentionIndex,
+                            score: score
+                        )
                     )
-                )
-                continue
+                    continue
+                }
             }
 
             if let pair = bestHeaderlessColumns(rows: rows, delimiter: delimiter) {
@@ -368,6 +398,40 @@ private extension RetentionCSVParser {
             }
         }
         return best
+    }
+
+    static func trimmingTrailingEmptyCells(_ row: [String]) -> [String] {
+        var cells = row
+        while let last = cells.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+            cells.removeLast()
+        }
+        return cells
+    }
+
+    /// Rejoins overflow fields caused by an unquoted decimal comma in a
+    /// comma-delimited file (`15,84,2` → `15` + `84.2`). When the overflow
+    /// cannot be attributed to the position or retention column, the row is
+    /// rejected instead of silently using a truncated value.
+    static func repairOverflowRow(
+        _ row: [String],
+        headerColumnCount: Int,
+        positionIndex: Int,
+        retentionIndex: Int
+    ) -> [String]? {
+        let cells = trimmingTrailingEmptyCells(row)
+        guard cells.count > headerColumnCount else { return cells }
+
+        if retentionIndex == headerColumnCount - 1 {
+            var result = Array(cells[..<retentionIndex])
+            result.append(cells[retentionIndex...].joined(separator: "."))
+            return result
+        }
+        if positionIndex == headerColumnCount - 1 {
+            var result = Array(cells[..<positionIndex])
+            result.append(cells[positionIndex...].joined(separator: "."))
+            return result
+        }
+        return nil
     }
 
     static func findHeader(in rows: [[String]], delimiter: RetentionDelimiter) -> HeaderMatch? {
@@ -425,10 +489,11 @@ private extension RetentionCSVParser {
         delimiter: RetentionDelimiter
     ) -> Int {
         let requiredIndex = max(header.positionIndex, header.retentionIndex)
+        let unitHint = positionUnitHint(for: header.positionCell)
         var valid = 0
         for row in rows.dropFirst(header.rowIndex + 1) {
             guard row.count > requiredIndex else { continue }
-            guard parseRawPosition(row[header.positionIndex], delimiter: delimiter) != nil,
+            guard parseRawPosition(row[header.positionIndex], delimiter: delimiter, unitHint: unitHint) != nil,
                   parseRawRetention(row[header.retentionIndex], delimiter: delimiter) != nil else { continue }
             valid += 1
         }
@@ -446,7 +511,9 @@ private extension RetentionCSVParser {
             for retentionIndex in (positionIndex + 1)..<min(columnCount, 5) {
                 var valid = 0
                 var inversions = 0
+                var retentionIncreases = 0
                 var lastPosition: Double?
+                var lastRetention: Double?
                 var plausibleRetention = 0
 
                 for row in rows where row.count > retentionIndex {
@@ -456,11 +523,19 @@ private extension RetentionCSVParser {
                     let value = position.value
                     if let lastPosition, value + 0.0001 < lastPosition { inversions += 1 }
                     lastPosition = value
+                    if let lastRetention, retention.value > lastRetention + 0.0001 { retentionIncreases += 1 }
+                    lastRetention = retention.value
                     if retention.value >= 0 { plausibleRetention += 1 }
                 }
 
                 guard valid >= 2, valid >= (rows.count / 2) else { continue }
-                let score = valid * 10 + plausibleRetention + (inversions == 0 ? 40 : 0) - inversions * 15
+                let score = valid * 10
+                    + plausibleRetention
+                    + (inversions == 0 ? 40 : 0)
+                    - inversions * 15
+                    - retentionIncreases * 12
+                    + (retentionIncreases == 0 ? 20 : 0)
+                    - max(0, retentionIndex - positionIndex - 1) * 5
                 guard score > 0 else { continue }
                 if best == nil || score > (best?.score ?? Int.min) {
                     best = (positionIndex, retentionIndex, score)
@@ -507,6 +582,8 @@ private extension RetentionCSVParser {
 
     static func splitLine(_ line: String, delimiter: RetentionDelimiter) -> [String] {
         guard let character = delimiter.character else {
+            let wide = splitWhitespaceRuns(line)
+            if wide.count >= 2 { return wide }
             return line.split(whereSeparator: \.isWhitespace).map(String.init)
         }
         var cells: [String] = []
@@ -539,9 +616,41 @@ private extension RetentionCSVParser {
         return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    /// Splits on runs of two or more whitespace characters, preserving single
+    /// spaces inside multi-word headers ("Video position  Audience retention").
+    static func splitWhitespaceRuns(_ line: String) -> [String] {
+        var cells: [String] = []
+        var current = ""
+        var pendingWhitespace = ""
+
+        for character in line {
+            if character.isWhitespace {
+                pendingWhitespace.append(character)
+                continue
+            }
+            if !pendingWhitespace.isEmpty {
+                if pendingWhitespace.count >= 2 && !current.isEmpty {
+                    cells.append(current)
+                    current = ""
+                } else if !current.isEmpty {
+                    current.append(contentsOf: pendingWhitespace)
+                }
+                pendingWhitespace = ""
+            }
+            current.append(character)
+        }
+
+        if !current.isEmpty { cells.append(current) }
+        return cells.map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
     // MARK: Value parsing
 
-    static func parseRawPosition(_ raw: String, delimiter: RetentionDelimiter) -> RawPosition? {
+    static func parseRawPosition(
+        _ raw: String,
+        delimiter: RetentionDelimiter,
+        unitHint: RetentionPositionUnit? = nil
+    ) -> RawPosition? {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
         value = value.replacingOccurrences(of: "\"", with: "")
@@ -550,7 +659,12 @@ private extension RetentionCSVParser {
             return .timecode(seconds)
         }
         let explicitPercent = value.contains("%")
-        guard let number = parseNumber(value, delimiter: delimiter, isPosition: true) else { return nil }
+        guard let number = parseNumber(
+            value,
+            delimiter: delimiter,
+            isPosition: true,
+            allowsGrouping: unitHint == .seconds
+        ) else { return nil }
         return explicitPercent ? .percent(number) : .number(number)
     }
 
@@ -566,7 +680,8 @@ private extension RetentionCSVParser {
     static func parseNumber(
         _ raw: String,
         delimiter: RetentionDelimiter,
-        isPosition: Bool
+        isPosition: Bool,
+        allowsGrouping: Bool = false
     ) -> Double? {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
@@ -597,14 +712,16 @@ private extension RetentionCSVParser {
                 value,
                 separator: ",",
                 isPosition: isPosition,
-                delimiter: delimiter
+                delimiter: delimiter,
+                allowsGrouping: allowsGrouping
             )
         } else if dotCount > 0 {
             value = normalizeSeparator(
                 value,
                 separator: ".",
                 isPosition: isPosition,
-                delimiter: delimiter
+                delimiter: delimiter,
+                allowsGrouping: allowsGrouping
             )
         }
 
@@ -616,7 +733,8 @@ private extension RetentionCSVParser {
         _ value: String,
         separator: Character,
         isPosition: Bool,
-        delimiter: RetentionDelimiter
+        delimiter: RetentionDelimiter,
+        allowsGrouping: Bool
     ) -> String {
         let parts = value.split(separator: separator, omittingEmptySubsequences: false)
         guard parts.count >= 2 else { return value }
@@ -630,6 +748,7 @@ private extension RetentionCSVParser {
         let integerPartCount = parts.first?.count ?? 0
         let digitsAfter = parts.last?.count ?? 0
         let looksGrouped = isPosition
+            && allowsGrouping
             && digitsAfter == 3
             && integerPartCount <= 3
             && ((separator == "." && delimiter == .semicolon)
@@ -664,18 +783,8 @@ private extension RetentionCSVParser {
         if positions.contains(where: { if case .timecode = $0 { return true } else { return false } }) {
             return .timecode
         }
-        if let headerCell {
-            let canonical = canonicalHeader(headerCell)
-            let raw = headerCell.lowercased()
-            if canonical.contains("ratio") || raw.contains("ratio") {
-                return .ratio
-            }
-            if raw.contains("%") || canonical.contains("percent") || canonical.contains("porcentaje") {
-                return .percent
-            }
-            if canonical.contains("seconds") || canonical.contains("segundos") || raw.contains("(s)") {
-                return .seconds
-            }
+        if let hint = positionUnitHint(for: headerCell) {
+            return hint
         }
         if positions.contains(where: { if case .percent = $0 { return true } else { return false } }) {
             return .percent
@@ -701,6 +810,22 @@ private extension RetentionCSVParser {
         return .seconds
     }
 
+    static func positionUnitHint(for headerCell: String?) -> RetentionPositionUnit? {
+        guard let headerCell else { return nil }
+        let canonical = canonicalHeader(headerCell)
+        let raw = headerCell.lowercased()
+        if canonical.contains("ratio") || raw.contains("ratio") {
+            return .ratio
+        }
+        if raw.contains("%") || canonical.contains("percent") || canonical.contains("porcentaje") {
+            return .percent
+        }
+        if canonical.contains("seconds") || canonical.contains("segundos") || raw.contains("(s)") {
+            return .seconds
+        }
+        return nil
+    }
+
     static func inferRetentionUnit(
         _ retentions: [RawRetention],
         headerCell: String?
@@ -719,8 +844,11 @@ private extension RetentionCSVParser {
             }
         }
         let values = retentions.map(\.value)
-        let maximum = values.max() ?? 0
-        if maximum <= 1.5 {
+        let first = values.first ?? 0
+        let allSmall = values.allSatisfy { $0 <= 2.0 }
+        if allSmall || first <= 1.5 {
+            // Absolute audience ratios can exceed 1.0 (rewatches); use the
+            // percent interpretation only when the curve is clearly 0…100.
             return .ratio
         }
         return .percent

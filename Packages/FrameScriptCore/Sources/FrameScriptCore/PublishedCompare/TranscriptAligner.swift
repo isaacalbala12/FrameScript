@@ -144,7 +144,7 @@ public struct TranscriptAligner: Sendable {
     ) -> TranscriptAlignment {
         let scriptTokens = Self.makeScriptTokens(from: scenes)
         let transcriptTokens = Self.makeTranscriptTokens(from: transcript)
-        let pairs = Self.computePairs(
+        var pairs = Self.computePairs(
             script: scriptTokens,
             transcript: transcriptTokens,
             maximumCells: maximumDynamicProgrammingCells
@@ -164,11 +164,27 @@ public struct TranscriptAligner: Sendable {
             )
         }
 
+        let sceneScriptIndices = Self.groupScriptIndices(scriptTokens, sceneCount: scenes.count)
+        let sceneKeySets = sceneScriptIndices.map { indices in
+            Set(indices.map { scriptTokens[$0].key })
+        }
+        let contentKeys = Set(scriptTokens.map(\.key)).subtracting(Self.anchorStopwords)
+
         let assignment = Self.assignScenes(
             scenes: scenes.count,
             scriptTokens: scriptTokens,
             transcriptTokens: transcriptTokens,
-            pairs: pairs
+            pairs: pairs,
+            sceneKeySets: sceneKeySets,
+            contentKeys: contentKeys
+        )
+        pairs = Self.addLocalPairsForUnmatchedScenes(
+            scriptTokens: scriptTokens,
+            transcriptTokens: transcriptTokens,
+            assignment: assignment,
+            sceneScriptIndices: sceneScriptIndices,
+            pairs: pairs,
+            maximumCells: maximumDynamicProgrammingCells
         )
         let pairedScript = Set(pairs.map(\.scriptIndex))
         let pairedTranscript = Set(pairs.map(\.transcriptIndex))
@@ -231,7 +247,8 @@ public struct TranscriptAligner: Sendable {
             if let value = end { end = min(max(0, value), transcriptDuration) }
             if let s = start, let e = end, e < s { end = s }
 
-            let scriptCount = scriptTokens.filter { $0.sceneIndex == sceneIndex }.count
+            let scriptIndices = sceneScriptIndices[sceneIndex]
+            let scriptCount = scriptIndices.count
             let matched = matchedCounts[sceneIndex]
             let removed = max(0, scriptCount - matched)
             let added = assignedIndices[sceneIndex].reduce(into: 0) { count, index in
@@ -239,7 +256,7 @@ public struct TranscriptAligner: Sendable {
             }
             let coverage = scriptCount == 0 ? 1 : Double(matched) / Double(scriptCount)
             let deviations = makeDeviations(
-                sceneIndex: sceneIndex,
+                scriptIndices: scriptIndices,
                 scriptTokens: scriptTokens,
                 transcriptTokens: transcriptTokens,
                 assignedIndices: assignedIndices[sceneIndex],
@@ -309,6 +326,14 @@ private extension TranscriptAligner {
         return result
     }
 
+    static func groupScriptIndices(_ tokens: [ScriptToken], sceneCount: Int) -> [[Int]] {
+        var groups = [[Int]](repeating: [], count: max(0, sceneCount))
+        for (index, token) in tokens.enumerated() where groups.indices.contains(token.sceneIndex) {
+            groups[token.sceneIndex].append(index)
+        }
+        return groups
+    }
+
     static func makeTranscriptTokens(from segments: [SubtitleSegment]) -> [TranscriptToken] {
         var result: [TranscriptToken] = []
         for segment in segments {
@@ -342,20 +367,30 @@ private extension TranscriptAligner {
 
 private extension TranscriptAligner {
     /// Assigns every transcript token to one scene. Matched tokens use their
-    /// script scene. Unmatched runs between two different scenes are split in
-    /// half, so a long ad-lib does not inflate a neighbouring scene's duration.
+    /// script scene. Unmatched runs are matched to the scene whose vocabulary
+    /// they share; if that is ambiguous, leading/trailing runs go to the
+    /// adjacent matched scene and boundary runs are split in half.
     static func assignScenes(
         scenes: Int,
         scriptTokens: [ScriptToken],
         transcriptTokens: [TranscriptToken],
-        pairs: [Pair]
+        pairs: [Pair],
+        sceneKeySets: [Set<String>],
+        contentKeys: Set<String>
     ) -> [Int?] {
         var assignment = [Int?](repeating: nil, count: transcriptTokens.count)
         guard scenes > 0, !transcriptTokens.isEmpty else { return assignment }
 
         let orderedPairs = pairs.sorted { $0.transcriptIndex < $1.transcriptIndex }
         if orderedPairs.isEmpty {
-            for index in assignment.indices { assignment[index] = 0 }
+            let whole = 0..<transcriptTokens.count
+            let scene = bestMatchingScene(
+                for: whole,
+                transcriptTokens: transcriptTokens,
+                sceneKeySets: sceneKeySets,
+                contentKeys: contentKeys
+            ) ?? 0
+            for index in assignment.indices { assignment[index] = scene }
             return assignment
         }
 
@@ -367,10 +402,15 @@ private extension TranscriptAligner {
 
         // Before the first matched word.
         if let first = orderedPairs.first {
-            let scene = scriptTokens[first.scriptIndex].sceneIndex
-            for index in 0..<first.transcriptIndex where assignment[index] == nil {
-                assignment[index] = scene
-            }
+            let range = 0..<first.transcriptIndex
+            let fallback = scriptTokens[first.scriptIndex].sceneIndex
+            let scene = bestMatchingScene(
+                for: range,
+                transcriptTokens: transcriptTokens,
+                sceneKeySets: sceneKeySets,
+                contentKeys: contentKeys
+            ) ?? fallback
+            for index in range { assignment[index] = scene }
         }
 
         // Between matched words.
@@ -380,9 +420,29 @@ private extension TranscriptAligner {
             let start = left.transcriptIndex + 1
             let end = right.transcriptIndex
             guard start < end else { continue }
+            let range = start..<end
 
             if leftScene == rightScene {
-                for index in start..<end { assignment[index] = leftScene }
+                for index in range { assignment[index] = leftScene }
+                continue
+            }
+
+            let leftScore = matchCoverage(
+                range,
+                sceneKeys: sceneKeySets.indices.contains(leftScene) ? sceneKeySets[leftScene] : [],
+                contentKeys: contentKeys,
+                transcriptTokens: transcriptTokens
+            )
+            let rightScore = matchCoverage(
+                range,
+                sceneKeys: sceneKeySets.indices.contains(rightScene) ? sceneKeySets[rightScene] : [],
+                contentKeys: contentKeys,
+                transcriptTokens: transcriptTokens
+            )
+            if leftScore >= 0.6, leftScore >= rightScore + 0.2 {
+                for index in range { assignment[index] = leftScene }
+            } else if rightScore >= 0.6, rightScore >= leftScore + 0.2 {
+                for index in range { assignment[index] = rightScene }
             } else {
                 let split = start + (end - start) / 2
                 for index in start..<split { assignment[index] = leftScene }
@@ -392,12 +452,15 @@ private extension TranscriptAligner {
 
         // After the last matched word.
         if let last = orderedPairs.last {
-            let scene = scriptTokens[last.scriptIndex].sceneIndex
-            if assignment.indices.contains(last.transcriptIndex + 1) {
-                for index in (last.transcriptIndex + 1)..<assignment.count where assignment[index] == nil {
-                    assignment[index] = scene
-                }
-            }
+            let range = (last.transcriptIndex + 1)..<assignment.count
+            let fallback = scriptTokens[last.scriptIndex].sceneIndex
+            let scene = bestMatchingScene(
+                for: range,
+                transcriptTokens: transcriptTokens,
+                sceneKeySets: sceneKeySets,
+                contentKeys: contentKeys
+            ) ?? fallback
+            for index in range { assignment[index] = scene }
         }
 
         // Any remaining tokens (possible with empty/odd pairs) belong to the
@@ -408,8 +471,42 @@ private extension TranscriptAligner {
         return assignment
     }
 
+    static func bestMatchingScene(
+        for range: Range<Int>,
+        transcriptTokens: [TranscriptToken],
+        sceneKeySets: [Set<String>],
+        contentKeys: Set<String>
+    ) -> Int? {
+        guard !range.isEmpty else { return nil }
+        var best: (scene: Int, score: Double)?
+        for scene in sceneKeySets.indices {
+            let score = matchCoverage(
+                range,
+                sceneKeys: sceneKeySets[scene],
+                contentKeys: contentKeys,
+                transcriptTokens: transcriptTokens
+            )
+            if score >= 0.6, score > (best?.score ?? 0) {
+                best = (scene, score)
+            }
+        }
+        return best?.scene
+    }
+
+    static func matchCoverage(
+        _ range: Range<Int>,
+        sceneKeys: Set<String>,
+        contentKeys: Set<String>,
+        transcriptTokens: [TranscriptToken]
+    ) -> Double {
+        let runKeys = Set(range.map { transcriptTokens[$0].key })
+        let content = runKeys.intersection(contentKeys)
+        guard content.count >= 2 else { return 0 }
+        return Double(content.intersection(sceneKeys).count) / Double(content.count)
+    }
+
     func makeDeviations(
-        sceneIndex: Int,
+        scriptIndices: [Int],
         scriptTokens: [ScriptToken],
         transcriptTokens: [TranscriptToken],
         assignedIndices: [Int],
@@ -434,7 +531,8 @@ private extension TranscriptAligner {
             removedRun.removeAll(keepingCapacity: true)
         }
 
-        for index in scriptTokens.indices where scriptTokens[index].sceneIndex == sceneIndex {
+        for index in scriptIndices {
+            guard scriptTokens.indices.contains(index) else { continue }
             if pairedScript.contains(index) {
                 flushRemoved()
             } else {
@@ -501,6 +599,76 @@ private extension TranscriptAligner {
             return $0.transcriptIndex < $1.transcriptIndex
         }
         return pairs
+    }
+
+    static func addLocalPairsForUnmatchedScenes(
+        scriptTokens: [ScriptToken],
+        transcriptTokens: [TranscriptToken],
+        assignment: [Int?],
+        sceneScriptIndices: [[Int]],
+        pairs: [Pair],
+        maximumCells: Int
+    ) -> [Pair] {
+        guard !sceneScriptIndices.isEmpty else { return pairs }
+        var result = pairs
+        var pairedScript = Set(result.map(\.scriptIndex))
+        var pairedTranscript = Set(result.map(\.transcriptIndex))
+        var matchedCounts = [Int](repeating: 0, count: sceneScriptIndices.count)
+        for pair in result {
+            let scene = scriptTokens[pair.scriptIndex].sceneIndex
+            if matchedCounts.indices.contains(scene) { matchedCounts[scene] += 1 }
+        }
+
+        var transcriptGroups = [[Int]](repeating: [], count: sceneScriptIndices.count)
+        for (transcriptIndex, sceneIndex) in assignment.enumerated() {
+            guard let sceneIndex, transcriptGroups.indices.contains(sceneIndex) else { continue }
+            transcriptGroups[sceneIndex].append(transcriptIndex)
+        }
+
+        for scene in sceneScriptIndices.indices where matchedCounts[scene] == 0 {
+            let scriptIndices = sceneScriptIndices[scene]
+            let transcriptIndices = transcriptGroups[scene]
+            guard !scriptIndices.isEmpty, !transcriptIndices.isEmpty else { continue }
+
+            let local = localPairs(
+                scriptIndices: scriptIndices,
+                transcriptIndices: transcriptIndices,
+                scriptTokens: scriptTokens,
+                transcriptTokens: transcriptTokens,
+                maximumCells: maximumCells
+            )
+            for pair in local {
+                guard !pairedScript.contains(pair.scriptIndex),
+                      !pairedTranscript.contains(pair.transcriptIndex) else { continue }
+                result.append(pair)
+                pairedScript.insert(pair.scriptIndex)
+                pairedTranscript.insert(pair.transcriptIndex)
+                matchedCounts[scene] += 1
+            }
+        }
+        return result
+    }
+
+    static func localPairs(
+        scriptIndices: [Int],
+        transcriptIndices: [Int],
+        scriptTokens: [ScriptToken],
+        transcriptTokens: [TranscriptToken],
+        maximumCells: Int
+    ) -> [Pair] {
+        guard !scriptIndices.isEmpty, !transcriptIndices.isEmpty else { return [] }
+        let scriptKeys = scriptIndices.map { scriptTokens[$0].key }
+        let transcriptKeys = transcriptIndices.map { transcriptTokens[$0].key }
+        let cells = scriptKeys.count * transcriptKeys.count
+        let local: [(Int, Int)]
+        if cells <= max(10_000, maximumCells) {
+            local = needlemanWunschKeys(scriptKeys, transcriptKeys)
+        } else {
+            local = greedyKeyPairs(scriptKeys, transcriptKeys)
+        }
+        return local.map {
+            Pair(scriptIndex: scriptIndices[$0.0], transcriptIndex: transcriptIndices[$0.1])
+        }
     }
 
     static func alignRegion(
@@ -639,8 +807,22 @@ private extension TranscriptAligner {
         script: [ScriptToken],
         transcript: [TranscriptToken]
     ) -> [Pair] {
-        let rows = scriptRange.count
-        let columns = transcriptRange.count
+        let scriptKeys = scriptRange.map { script[$0].key }
+        let transcriptKeys = transcriptRange.map { transcript[$0].key }
+        return needlemanWunschKeys(scriptKeys, transcriptKeys).map {
+            Pair(
+                scriptIndex: scriptRange.lowerBound + $0.0,
+                transcriptIndex: transcriptRange.lowerBound + $0.1
+            )
+        }
+    }
+
+    static func needlemanWunschKeys(
+        _ scriptKeys: [String],
+        _ transcriptKeys: [String]
+    ) -> [(Int, Int)] {
+        let rows = scriptKeys.count
+        let columns = transcriptKeys.count
         guard rows > 0, columns > 0 else { return [] }
 
         let width = columns + 1
@@ -656,9 +838,7 @@ private extension TranscriptAligner {
             current[0] = Int32(-row)
             directions[row * width] = 1 // up: script-only step
             for column in 1...columns {
-                let scriptKey = script[scriptRange.lowerBound + row - 1].key
-                let transcriptKey = transcript[transcriptRange.lowerBound + column - 1].key
-                let diagonal = previous[column - 1] + (scriptKey == transcriptKey ? 2 : -1)
+                let diagonal = previous[column - 1] + (scriptKeys[row - 1] == transcriptKeys[column - 1] ? 2 : -1)
                 let up = previous[column] - 1
                 let left = current[column - 1] - 1
                 let best = max(diagonal, max(up, left))
@@ -674,16 +854,14 @@ private extension TranscriptAligner {
             swap(&previous, &current)
         }
 
-        var pairs: [Pair] = []
+        var pairs: [(Int, Int)] = []
         var row = rows
         var column = columns
         while row > 0 || column > 0 {
             let direction = directions[row * width + column]
             if row > 0 && column > 0 && direction == 0 {
-                let scriptIndex = scriptRange.lowerBound + row - 1
-                let transcriptIndex = transcriptRange.lowerBound + column - 1
-                if script[scriptIndex].key == transcript[transcriptIndex].key {
-                    pairs.append(Pair(scriptIndex: scriptIndex, transcriptIndex: transcriptIndex))
+                if scriptKeys[row - 1] == transcriptKeys[column - 1] {
+                    pairs.append((row - 1, column - 1))
                 }
                 row -= 1
                 column -= 1
@@ -694,6 +872,42 @@ private extension TranscriptAligner {
             }
         }
         return pairs.reversed()
+    }
+
+    static func greedyKeyPairs(_ scriptKeys: [String], _ transcriptKeys: [String]) -> [(Int, Int)] {
+        var pairs: [(Int, Int)] = []
+        var scriptIndex = 0
+        var transcriptIndex = 0
+
+        while scriptIndex < scriptKeys.count && transcriptIndex < transcriptKeys.count {
+            if scriptKeys[scriptIndex] == transcriptKeys[transcriptIndex] {
+                pairs.append((scriptIndex, transcriptIndex))
+                scriptIndex += 1
+                transcriptIndex += 1
+                continue
+            }
+
+            var advanced = false
+            for lookahead in 1...4 {
+                if scriptIndex + lookahead < scriptKeys.count,
+                   scriptKeys[scriptIndex + lookahead] == transcriptKeys[transcriptIndex] {
+                    scriptIndex += lookahead
+                    advanced = true
+                    break
+                }
+                if transcriptIndex + lookahead < transcriptKeys.count,
+                   scriptKeys[scriptIndex] == transcriptKeys[transcriptIndex + lookahead] {
+                    transcriptIndex += lookahead
+                    advanced = true
+                    break
+                }
+            }
+            if !advanced {
+                scriptIndex += 1
+                transcriptIndex += 1
+            }
+        }
+        return pairs
     }
 
     static func greedyPairs(

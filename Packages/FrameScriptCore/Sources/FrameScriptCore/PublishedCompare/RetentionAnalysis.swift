@@ -186,7 +186,6 @@ public enum RetentionAnalysis {
         var spikeInsights: [RetentionInsight] = []
 
         for scene in scenes {
-            guard scene.end > scene.start else { continue }
             let result = analyzeScene(scene: scene, curve: curve, hookEnd: hookEnd, configuration: configuration)
             sceneResults.append(result.scene)
             if let insight = result.dropInsight { dropInsights.append(insight) }
@@ -198,7 +197,7 @@ public enum RetentionAnalysis {
             let startValue = first.retention
             let endValue = interpolate(curve, at: hookEnd) ?? last.retention
             let magnitude = startValue - endValue
-            if magnitude > 0.0001 {
+            if magnitude >= configuration.dropThreshold, magnitude > 0 {
                 let scene = scenes.first(where: { $0.start <= hookEnd && hookEnd <= $0.end })
                     ?? scenes.min(by: { abs($0.start - hookEnd) < abs($1.start - hookEnd) })
                     ?? scenes[0]
@@ -247,6 +246,26 @@ public enum RetentionAnalysis {
         hookEnd: TimeInterval?,
         configuration: RetentionAnalysisConfiguration
     ) -> SceneAnalysis {
+        if scene.end <= scene.start {
+            let value = interpolate(curve, at: scene.start) ?? curve.first?.retention
+            return SceneAnalysis(
+                scene: SceneRetention(
+                    sceneID: scene.id,
+                    start: scene.start,
+                    end: scene.end,
+                    averageRetention: value,
+                    startRetention: value,
+                    endRetention: value,
+                    delta: value == nil ? nil : 0,
+                    minimumRetention: value,
+                    maximumRetention: value,
+                    sampleCount: 0
+                ),
+                dropInsight: nil,
+                spikeInsight: nil
+            )
+        }
+
         let startValue = interpolate(curve, at: scene.start) ?? curve.first?.retention
         let endValue = interpolate(curve, at: scene.end) ?? curve.last?.retention
         let points = pointsInScene(scene: scene, curve: curve, startValue: startValue, endValue: endValue)

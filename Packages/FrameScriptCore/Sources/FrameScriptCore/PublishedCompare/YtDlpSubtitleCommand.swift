@@ -17,8 +17,8 @@ public enum PublishedVideoLanguage: String, Sendable, Equatable, CaseIterable, C
 }
 
 /// Builds (but never runs) the yt-dlp invocation used to download the
-/// published video's subtitles. The app can pass `arguments` directly to
-/// `Process` or show `commandLine` to the user.
+/// published video's subtitles. Run it with `Process` using `executablePath`
+/// and `arguments`; never assemble a shell command from these values.
 public struct YtDlpSubtitleCommand: Sendable, Equatable, Codable {
     public var executablePath: String
     public var url: String
@@ -39,7 +39,7 @@ public struct YtDlpSubtitleCommand: Sendable, Equatable, Codable {
         overwriteExistingFiles: Bool = false
     ) {
         self.executablePath = executablePath
-        self.url = url
+        self.url = url.trimmingCharacters(in: .whitespacesAndNewlines)
         self.language = language
         self.outputDirectory = outputDirectory
         self.includeManualSubtitles = includeManualSubtitles
@@ -75,13 +75,8 @@ public struct YtDlpSubtitleCommand: Sendable, Equatable, Codable {
             args.append("--force-overwrites")
         }
         args.append("--")
-        args.append(url)
+        args.append(url.trimmingCharacters(in: .whitespacesAndNewlines))
         return args
-    }
-
-    /// Human-readable command with POSIX shell quoting.
-    public var commandLine: String {
-        ([executablePath] + arguments).map(Self.shellQuote).joined(separator: " ")
     }
 
     /// A URL suitable for yt-dlp: http(s), or a bare YouTube video id.
@@ -89,21 +84,18 @@ public struct YtDlpSubtitleCommand: Sendable, Equatable, Codable {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "The video URL is empty." }
         if trimmed.hasPrefix("-") { return "The video URL must not start with a dash." }
-        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
-            return ["http", "https"].contains(scheme) ? nil : "Only http and https URLs are supported."
+        if let components = URLComponents(string: trimmed), let scheme = components.scheme?.lowercased() {
+            guard ["http", "https"].contains(scheme) else {
+                return "Only http and https URLs are supported."
+            }
+            guard let host = components.host, !host.isEmpty else {
+                return "Enter a full video URL (https://…) or a YouTube video id."
+            }
+            return nil
         }
         // Accept a bare 11-character YouTube id; yt-dlp resolves it.
         let youtubeIDPattern = /^[A-Za-z0-9_-]{11}$/
         if trimmed.wholeMatch(of: youtubeIDPattern) != nil { return nil }
         return "Enter a full video URL (https://…) or a YouTube video id."
-    }
-
-    static func shellQuote(_ value: String) -> String {
-        guard !value.isEmpty else { return "''" }
-        let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_./:-"))
-        if value.unicodeScalars.allSatisfy({ safe.contains($0) }) {
-            return value
-        }
-        return "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

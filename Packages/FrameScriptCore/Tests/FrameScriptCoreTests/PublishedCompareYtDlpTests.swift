@@ -17,7 +17,7 @@ struct PublishedCompareYtDlpTests {
         #expect(command.arguments.contains("vtt"))
         #expect(command.arguments.contains("--skip-download"))
         #expect(command.arguments.last == "https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        #expect(command.commandLine.hasPrefix("/opt/homebrew/bin/yt-dlp "))
+        #expect(command.executablePath == "/opt/homebrew/bin/yt-dlp")
     }
 
     @Test func buildsEnglishManualAndAutoSubtitleCommand() {
@@ -36,7 +36,7 @@ struct PublishedCompareYtDlpTests {
         #expect(command.arguments.contains("--"))
     }
 
-    @Test func usesVideoIDOutputTemplateAndQuotesSpaces() {
+    @Test func usesVideoIDOutputTemplateWithoutAShellString() {
         let command = YtDlpSubtitleCommand(
             url: "https://youtu.be/dQw4w9WgXcQ",
             language: .spanish,
@@ -44,7 +44,6 @@ struct PublishedCompareYtDlpTests {
         )
 
         #expect(command.outputTemplate.hasSuffix("/tmp/Published Videos/%(id)s.%(ext)s"))
-        #expect(command.commandLine.contains("--output '/tmp/Published Videos/%(id)s.%(ext)s'"))
         #expect(command.arguments.contains("--output"))
         #expect(command.arguments.contains("/tmp/Published Videos/%(id)s.%(ext)s"))
     }
@@ -57,14 +56,15 @@ struct PublishedCompareYtDlpTests {
         #expect(YtDlpSubtitleCommand(url: "--help", language: .english).validationMessage != nil)
     }
 
-    @Test func shellQuotesSingleQuotesAndAmpersands() {
+    @Test func executableAndURLArePlainArgvValues() {
         let command = YtDlpSubtitleCommand(
             executablePath: "/Applications/My Tools/yt-dlp",
             url: "https://example.com/watch?a=1&b=2",
             language: .english
         )
 
-        #expect(command.commandLine.contains("'/Applications/My Tools/yt-dlp'"))
-        #expect(command.commandLine.contains("'https://example.com/watch?a=1&b=2'"))
+        #expect(command.executablePath == "/Applications/My Tools/yt-dlp")
+        #expect(command.arguments.last == "https://example.com/watch?a=1&b=2")
+        #expect(command.arguments.contains("--"))
     }
 }
