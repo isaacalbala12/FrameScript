@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `FrameScriptCore`, a UI-free Swift package linked into the app, with the `.fscr` document value types and codec.
+- Added the v4 project schema for takes, learned speech rate, assets, per-language publishing packs, checklist tasks, sources and claims, comparison tables, language variants, short clips, version snapshots, T3 thread reuse, Markdown import leftovers, and published-video comparison.
+
+### Changed
+
+- `.fscr` format v4 persists every Visuals and Editing field; readers migrate v1–v3 in memory and writers always emit v4. Files from a newer version fail with a clear error.
+- Settings decoding falls back per field and per section instead of resetting every preference when a key is missing.
+- Removed the App Sandbox entitlement; security-scoped bookmarks remain supported.
+
 ## [0.4.0] - 2026-07-13
 
 ### Added
