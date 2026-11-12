@@ -10,8 +10,10 @@ public enum SceneRole: String, Sendable, Codable, CaseIterable {
 public struct RhythmSceneInput: Sendable, Equatable, Codable {
     public var id: String
     public var text: String
-    /// Speaking rate used to estimate seconds. Values `<= 0` disable every
-    /// time-based warning (word-count warnings still apply).
+    /// Speaking rate used to estimate seconds. Values below `1`, non-finite or
+    /// negative are treated as invalid: word-reading time contributes zero,
+    /// while pause time is still counted (matching
+    /// `ScriptMarkup.estimateDuration`).
     public var wordsPerMinute: Double
     /// UTF-16 offsets where an anchored B-roll item or cut begins.
     public var visualChangeOffsets: [Int]
@@ -140,7 +142,8 @@ public struct RhythmProjectAnalysis: Sendable, Equatable {
 ///
 /// Everything is pure and deterministic: text in, warnings out. Durations are
 /// estimated as `words / wpm * 60` plus whatever the pause provider returns for
-/// a range.
+/// a range. A non-finite or sub-1 WPM disables reading time but pause time is
+/// still counted; note the app normally supplies a valid rate.
 public enum RhythmAnalyzer {
     /// Pause provider that reports no pauses.
     public static let noPauses: PauseDurationProvider = { _ in 0 }
@@ -153,16 +156,32 @@ public enum RhythmAnalyzer {
         let text = scene.text
         let ns = text as NSString
         let utf16Length = ns.length
-        let wordSpans = RhythmWordCounter.wordSpans(in: text)
-        let sentences = RhythmSentenceSplitter.makeSentences(in: text, wordSpans: wordSpans)
+        let units = RhythmCharacterUnit.make(text)
+        let cueMask = RhythmMarkupScan.cueMask(for: units)
+        let urlMask = RhythmMarkupScan.urlMask(for: units)
+        let wordSpans = RhythmWordCounter.wordSpans(
+            in: units,
+            cueMask: cueMask,
+            urlMask: urlMask
+        )
+        let sentences = RhythmSentenceSplitter.makeSentences(
+            in: text,
+            units: units,
+            cueMask: cueMask,
+            urlMask: urlMask,
+            wordSpans: wordSpans
+        )
         let wordCount = wordSpans.count
-        let hasValidRate = scene.wordsPerMinute.isFinite && scene.wordsPerMinute > 0
+        let rate = scene.wordsPerMinute
+        let hasValidRate = rate.isFinite && rate >= 1
 
         func seconds(in range: UTF16Span) -> Double {
             let words = Double(RhythmWordCounter.count(in: range, spans: wordSpans))
-            let narration = hasValidRate ? words / scene.wordsPerMinute * 60.0 : 0
-            let pause = max(0, pauseDuration(range))
-            return narration + pause
+            let narration = hasValidRate ? words / rate * 60.0 : 0
+            let pause = pauseDuration(range)
+            let safePause = pause.isFinite ? max(0, pause) : 0
+            let total = narration + safePause
+            return total.isFinite ? total : Double.greatestFiniteMagnitude
         }
 
         let wholeScene = UTF16Span(location: 0, length: utf16Length)
@@ -201,7 +220,7 @@ public enum RhythmAnalyzer {
             ))
         }
 
-        let anchors = normalizedAnchors(scene.visualChangeOffsets, length: utf16Length)
+        let anchors = normalizedAnchors(scene.visualChangeOffsets, units: units)
         var previousBoundary = 0
         for boundary in anchors + [utf16Length] {
             guard boundary > previousBoundary else { continue }
@@ -278,12 +297,40 @@ public enum RhythmAnalyzer {
         return RhythmProjectAnalysis(scenes: analyses, projectWarnings: projectWarnings)
     }
 
-    private static func normalizedAnchors(_ offsets: [Int], length: Int) -> [Int] {
-        guard length > 0, !offsets.isEmpty else { return [] }
+    private static func normalizedAnchors(
+        _ offsets: [Int],
+        units: [RhythmCharacterUnit]
+    ) -> [Int] {
+        guard let lastUnit = units.last, !offsets.isEmpty else { return [] }
+        let length = lastUnit.end
+        guard length > 0 else { return [] }
+
+        // Every grapheme boundary, ascending. Anchors that land inside a
+        // surrogate pair or a ZWJ sequence snap down to the character start so
+        // warning ranges never slice a composed character.
+        var boundaries: [Int] = []
+        boundaries.reserveCapacity(units.count + 1)
+        boundaries.append(0)
+        for unit in units {
+            boundaries.append(unit.end)
+        }
+
         var seen = Set<Int>()
         var result: [Int] = []
         for offset in offsets where offset > 0 && offset < length {
-            if seen.insert(offset).inserted { result.append(offset) }
+            var low = 0
+            var high = boundaries.count - 1
+            while low < high {
+                let middle = (low + high + 1) / 2
+                if boundaries[middle] <= offset {
+                    low = middle
+                } else {
+                    high = middle - 1
+                }
+            }
+            let snapped = boundaries[low]
+            guard snapped > 0, snapped < length else { continue }
+            if seen.insert(snapped).inserted { result.append(snapped) }
         }
         return result.sorted()
     }

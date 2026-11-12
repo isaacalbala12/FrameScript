@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 /// Errors thrown while encoding or decoding a compressed snapshot.
@@ -11,6 +12,7 @@ public enum SnapshotCodecError: Error, Equatable, Sendable {
     case truncated(expected: Int, actual: Int)
     case lengthMismatch(expected: Int, actual: Int)
     case checksumMismatch(expected: UInt32, actual: UInt32)
+    case sizeLimitExceeded(limit: Int)
     case invalidBase64
 }
 
@@ -30,10 +32,18 @@ public enum SnapshotCodecError: Error, Equatable, Sendable {
 /// The header makes a corrupted or truncated payload detectable before the app
 /// tries to decode JSON, and the CRC-32 catches zlib streams that happen to
 /// inflate successfully after bit rot.
+///
+/// Decompression enforces an output-size limit (64 MiB by default) both before
+/// allocating and while inflating, so a malicious compressed snapshot cannot
+/// expand into an arbitrarily large buffer.
 public enum SnapshotCodec {
     public static let magic: [UInt8] = [0x46, 0x53, 0x53, 0x43] // "FSSC"
     public static let currentVersion: UInt8 = 1
     public static let headerSize = 28
+
+    /// Default guard against decompression bombs. A snapshot of a script is far
+    /// smaller than this; callers can pass a different limit to `decompress`.
+    public static let defaultMaximumUncompressedSize = 64 * 1024 * 1024
 
     // MARK: - Data API
 
@@ -59,7 +69,10 @@ public enum SnapshotCodec {
         return output
     }
 
-    public static func decompress(_ data: Data) throws -> Data {
+    public static func decompress(
+        _ data: Data,
+        maximumUncompressedSize: Int = SnapshotCodec.defaultMaximumUncompressedSize
+    ) throws -> Data {
         let bytes = [UInt8](data)
         guard bytes.count >= headerSize else {
             throw SnapshotCodecError.truncated(expected: headerSize, actual: bytes.count)
@@ -89,6 +102,10 @@ public enum SnapshotCodec {
         }
         let rawLength = Int(rawLengthValue)
         let zipLength = Int(zipLengthValue)
+        let limit = max(0, maximumUncompressedSize)
+        guard rawLength <= limit else {
+            throw SnapshotCodecError.sizeLimitExceeded(limit: limit)
+        }
         let payloadCount = bytes.count - headerSize
         guard payloadCount == zipLength else {
             throw SnapshotCodecError.truncated(
@@ -98,16 +115,8 @@ public enum SnapshotCodec {
         }
 
         let payload = data.subdata(in: (data.startIndex + headerSize)..<data.endIndex)
-        let inflated: Data
-        do {
-            inflated = try (payload as NSData).decompressed(using: .zlib) as Data
-        } catch {
-            throw SnapshotCodecError.decompressionFailed
-        }
+        let inflated = try inflate(payload, expectedLength: rawLength)
 
-        guard inflated.count == rawLength else {
-            throw SnapshotCodecError.lengthMismatch(expected: rawLength, actual: inflated.count)
-        }
         let computed = CRC32.checksum(inflated)
         guard computed == checksum else {
             throw SnapshotCodecError.checksumMismatch(expected: checksum, actual: computed)
@@ -121,11 +130,103 @@ public enum SnapshotCodec {
         try compress(data).base64EncodedString()
     }
 
-    public static func decompress(base64 string: String) throws -> Data {
+    public static func decompress(
+        base64 string: String,
+        maximumUncompressedSize: Int = SnapshotCodec.defaultMaximumUncompressedSize
+    ) throws -> Data {
         guard let encoded = Data(base64Encoded: string) else {
             throw SnapshotCodecError.invalidBase64
         }
-        return try decompress(encoded)
+        return try decompress(encoded, maximumUncompressedSize: maximumUncompressedSize)
+    }
+
+    // MARK: - Streaming inflate with a hard output cap
+
+    /// Inflates a zlib payload, refusing to allocate more than the declared
+    /// uncompressed length. A lying header therefore stops after roughly
+    /// `expectedLength + 64 KiB` instead of expanding a decompression bomb.
+    private static func inflate(_ payload: Data, expectedLength: Int) throws -> Data {
+        guard !payload.isEmpty else {
+            if expectedLength == 0 { return Data() }
+            throw SnapshotCodecError.decompressionFailed
+        }
+
+        let placeholder = UnsafeMutablePointer<UInt8>.allocate(capacity: 1)
+        defer { placeholder.deallocate() }
+        var stream = compression_stream(
+            dst_ptr: placeholder,
+            dst_size: 0,
+            src_ptr: UnsafePointer(placeholder),
+            src_size: 0,
+            state: nil
+        )
+        guard compression_stream_init(
+            &stream,
+            COMPRESSION_STREAM_DECODE,
+            COMPRESSION_ZLIB
+        ) == COMPRESSION_STATUS_OK else {
+            throw SnapshotCodecError.decompressionFailed
+        }
+        defer { compression_stream_destroy(&stream) }
+
+        return try payload.withUnsafeBytes { rawBuffer -> Data in
+            guard let source = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                throw SnapshotCodecError.decompressionFailed
+            }
+            stream.src_ptr = source
+            stream.src_size = rawBuffer.count
+
+            var output = Data()
+            output.reserveCapacity(min(expectedLength, 1 << 20))
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            var previousSourceSize = -1
+
+            while true {
+                let (status, produced) = buffer.withUnsafeMutableBufferPointer {
+                    destination -> (compression_status, Int) in
+                    guard let base = destination.baseAddress else {
+                        return (COMPRESSION_STATUS_ERROR, 0)
+                    }
+                    stream.dst_ptr = base
+                    stream.dst_size = destination.count
+                    let status = compression_stream_process(
+                        &stream,
+                        Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
+                    )
+                    let produced = destination.count - stream.dst_size
+                    if produced > 0 {
+                        output.append(base, count: produced)
+                    }
+                    return (status, produced)
+                }
+
+                if output.count > expectedLength {
+                    throw SnapshotCodecError.lengthMismatch(
+                        expected: expectedLength,
+                        actual: output.count
+                    )
+                }
+
+                switch status {
+                case COMPRESSION_STATUS_END:
+                    guard output.count == expectedLength else {
+                        throw SnapshotCodecError.lengthMismatch(
+                            expected: expectedLength,
+                            actual: output.count
+                        )
+                    }
+                    return output
+                case COMPRESSION_STATUS_OK:
+                    if produced == 0, stream.src_size == previousSourceSize {
+                        throw SnapshotCodecError.decompressionFailed
+                    }
+                    previousSourceSize = stream.src_size
+                    continue
+                default:
+                    throw SnapshotCodecError.decompressionFailed
+                }
+            }
+        }
     }
 
     // MARK: - Byte helpers

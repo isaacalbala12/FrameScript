@@ -156,6 +156,49 @@ struct SnapshotCodecTests {
         }
     }
 
+    @Test func rejectsDeclaredSizeAboveDefaultLimit() throws {
+        var data = try SnapshotCodec.compress(Data("hola".utf8))
+        setUInt64(
+            UInt64(SnapshotCodec.defaultMaximumUncompressedSize) + 1,
+            in: &data,
+            at: 8
+        )
+        #expect(throws: SnapshotCodecError.sizeLimitExceeded(
+            limit: SnapshotCodec.defaultMaximumUncompressedSize
+        )) {
+            try SnapshotCodec.decompress(data)
+        }
+    }
+
+    @Test func respectsCustomSizeLimit() throws {
+        let data = try SnapshotCodec.compress(Data("0123456789".utf8))
+        #expect(throws: SnapshotCodecError.sizeLimitExceeded(limit: 4)) {
+            try SnapshotCodec.decompress(data, maximumUncompressedSize: 4)
+        }
+    }
+
+    @Test func lyingSmallLengthStopsBeforeFullInflate() throws {
+        let payload = Data(repeating: 0, count: 1_000_000)
+        var data = try SnapshotCodec.compress(payload)
+        setUInt64(10, in: &data, at: 8)
+        do {
+            _ = try SnapshotCodec.decompress(data)
+            Issue.record("A lying small raw length should throw")
+        } catch let error as SnapshotCodecError {
+            if case .lengthMismatch = error {
+                // Expected: the hard cap stops at rawLength + one 64 KiB chunk.
+            } else {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    private func setUInt64(_ value: UInt64, in data: inout Data, at offset: Int) {
+        for index in 0..<8 {
+            data[offset + index] = UInt8(truncatingIfNeeded: value >> UInt64(index * 8))
+        }
+    }
+
     @Test func acceptsSlicedData() throws {
         let compressed = try SnapshotCodec.compress(Data("datos".utf8))
         var padded = Data([0x00, 0x01])
@@ -329,6 +372,31 @@ struct SnapshotPolicyTests {
         )
         #expect(decision.shouldTake)
         #expect(decision.evictedIDs == [auto.id])
+    }
+
+    @Test func clockGoingBackwardsDoesNotThrottleForever() {
+        let future = makeRecord(.automatic, at: 86_400, hash: 1)
+        let decision = SnapshotPolicy().decide(
+            kind: .automatic,
+            contentHash: 2,
+            existing: [future],
+            now: base
+        )
+        #expect(decision.shouldTake)
+    }
+
+    @Test func zeroOrNegativeCapDisablesAutomaticSnapshots() {
+        for cap in [0, -5] {
+            let policy = SnapshotPolicy(automaticInterval: 0, maximumAutomaticSnapshots: cap)
+            let decision = policy.decide(
+                kind: .automatic,
+                contentHash: 1,
+                existing: [],
+                now: base
+            )
+            #expect(decision.action == .skip(.disabled))
+            #expect(decision.evictedIDs.isEmpty)
+        }
     }
 
     @Test func contentHashIsStable() {

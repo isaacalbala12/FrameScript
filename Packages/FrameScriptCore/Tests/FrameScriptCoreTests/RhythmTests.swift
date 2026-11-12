@@ -42,6 +42,9 @@ struct RhythmSentenceSplitterTests {
         #expect(sentenceTexts("Fue idea de J. García. Después se supo.") == [
             "Fue idea de J. García.", "Después se supo."
         ])
+        #expect(sentenceTexts("Vivió en EE. UU. durante años.") == [
+            "Vivió en EE. UU. durante años."
+        ])
     }
 
     @Test func ellipsisOnlySplitsBeforeANewSentence() {
@@ -58,6 +61,81 @@ struct RhythmSentenceSplitterTests {
             "Hola.", "Adiós."
         ])
         #expect(sentenceTexts("[corte. 3 s] Hola mundo.") == ["Hola mundo."])
+    }
+
+    @Test func unmatchedBracketIsLiteral() {
+        #expect(sentenceTexts("Hola [risas mundo. Otra frase.") == [
+            "Hola [risas mundo.", "Otra frase."
+        ])
+        #expect(sentenceTexts("[pausa 2 s Hola mundo.") == ["[pausa 2 s Hola mundo."])
+        // The outer nested bracket is invalid and stays literal; the inner one
+        // is a valid cue and is skipped for word counting.
+        let nested = RhythmSentenceSplitter.sentences(in: "[foo [bar] baz] fin.")
+        #expect(nested.map(\.text) == ["[foo [bar] baz] fin."])
+        #expect(nested.first?.wordCount == 3)
+    }
+
+    @Test func crlfParagraphsBreak() {
+        #expect(sentenceTexts("Uno\r\n\r\nDos sin punto") == ["Uno", "Dos sin punto"])
+        // A single CR is a line wrap; two CRs are a blank-line paragraph break.
+        #expect(sentenceTexts("Uno\rDos\r\rTres.") == ["Uno\rDos", "Tres."])
+    }
+
+    @Test func crlfAfterEllipsisTerminates() {
+        #expect(sentenceTexts("Dudó…\r\nluego siguió.") == ["Dudó…", "luego siguió."])
+    }
+
+    @Test func urlQueryDoesNotSplitSentence() {
+        #expect(sentenceTexts("Mira https://example.com?q=1 y dime. Luego.") == [
+            "Mira https://example.com?q=1 y dime.", "Luego."
+        ])
+        #expect(sentenceTexts("Entra en www.example.com?x=1 ahora. luego.") == [
+            "Entra en www.example.com?x=1 ahora.", "luego."
+        ])
+    }
+
+    @Test func markupSyntaxMatchesScriptMarkup() {
+        let markup = "Uno / dos // tres [pausa 1,5s] cuatro [2s] cinco [B-ROLL: coche] seis."
+        let sentences = RhythmSentenceSplitter.sentences(in: markup)
+        #expect(sentences.count == 1)
+        #expect(sentences.first?.wordCount == 6)
+
+        let slashes = RhythmSentenceSplitter.sentences(
+            in: "Velocidad 120 km/h, and/or 1/4 y 12/11."
+        )
+        #expect(slashes.first?.wordCount == 7)
+    }
+
+    @Test func emphasisDelimitersDoNotCreateStraySentences() {
+        let sentences = RhythmSentenceSplitter.sentences(in: "*Hola* mundo. **Adiós**.")
+        #expect(sentences.map(\.text) == ["*Hola* mundo.", "**Adiós**."])
+        #expect(sentences.map(\.wordCount) == [2, 1])
+    }
+
+    @Test func sentenceFinalAbbreviationsSplitBeforeUppercase() {
+        #expect(sentenceTexts("Compra pan, leche, etc. Mañana volvemos.") == [
+            "Compra pan, leche, etc.", "Mañana volvemos."
+        ])
+        #expect(sentenceTexts("Quedamos a las 5 p.m. Luego fuimos.") == [
+            "Quedamos a las 5 p.m.", "Luego fuimos."
+        ])
+        // Followed by lowercase, they continue the sentence.
+        #expect(sentenceTexts("Terminó etc. y siguió. Vale.") == [
+            "Terminó etc. y siguió.", "Vale."
+        ])
+    }
+
+    @Test func longDotRunIsLinear() {
+        let text = String(repeating: ".", count: 20_000) + " fin."
+        let clock = ContinuousClock()
+        var sentences: [RhythmSentence] = []
+        let elapsed = clock.measure {
+            sentences = RhythmSentenceSplitter.sentences(in: text)
+        }
+        print("Rhythm 20k dot run: \(elapsed)")
+        #expect(sentences.count == 1)
+        #expect(sentences.first?.wordCount == 1)
+        #expect(elapsed < .seconds(1))
     }
 
     @Test func wordCountExcludesMarkup() {
@@ -314,6 +392,56 @@ struct RhythmAnalyzerTests {
         let data = try JSONEncoder().encode(input)
         let decoded = try JSONDecoder().decode(RhythmSceneInput.self, from: data)
         #expect(decoded == input)
+    }
+
+    @Test func visualAnchorsSnapToGraphemeBoundaries() {
+        let text = "Uno dos tres 👋 cuatro cinco seis."
+        let ns = text as NSString
+        let emoji = ns.range(of: "👋")
+        #expect(emoji.location == 13)
+        let analysis = RhythmAnalyzer.analyze(
+            scene: RhythmSceneInput(
+                id: "s1",
+                text: text,
+                wordsPerMinute: 30,
+                visualChangeOffsets: [emoji.location + 1]
+            )
+        )
+        let warnings = analysis.warnings.filter { $0.kind == .noVisualChange }
+        #expect(warnings.count == 2)
+
+        let boundaries = graphemeBoundaries(in: text)
+        for warning in warnings {
+            #expect(boundaries.contains(warning.range.location))
+            #expect(boundaries.contains(warning.range.end))
+        }
+        #expect(warnings[0].range.end == emoji.location)
+    }
+
+    @Test func invalidRateCountsPausesButKeepsArgumentsFinite() throws {
+        let text = "Uno dos tres."
+        for rate in [0.0, Double.leastNonzeroMagnitude] {
+            let analysis = RhythmAnalyzer.analyze(
+                scene: RhythmSceneInput(id: "s1", text: text, wordsPerMinute: rate),
+                pauseDuration: { range in range.length > 0 ? 20 : 0 }
+            )
+            #expect(!analysis.warnings.isEmpty)
+            for warning in analysis.warnings {
+                #expect(warning.arguments.allSatisfy { $0.value.isFinite })
+            }
+            let encoded = try JSONEncoder().encode(analysis.warnings)
+            #expect(!encoded.isEmpty)
+        }
+    }
+
+    private func graphemeBoundaries(in text: String) -> Set<Int> {
+        var boundaries: Set<Int> = [0]
+        var offset = 0
+        for character in text {
+            offset += String(character).utf16.count
+            boundaries.insert(offset)
+        }
+        return boundaries
     }
 
     private func argument(_ name: String, in warning: RhythmWarning) -> Double? {

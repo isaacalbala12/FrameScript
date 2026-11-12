@@ -171,6 +171,20 @@ struct WordDiffTests {
         #expect(ops.contains { $0.kind == .insert })
     }
 
+    @Test func repetitiveVocabularyWithEdgeEditsStaysTight() {
+        let words = (0..<12_000).map { ["uno", "dos", "tres"][$0 % 3] }
+        var changed = words
+        changed[0] = "cero"
+        changed[changed.count - 1] = "cuatro"
+        let old = words.joined(separator: " ")
+        let new = changed.joined(separator: " ")
+
+        let ops = WordDiff.diff(old: old, new: new)
+        verify(ops, old: old, new: new)
+        #expect(ops.count < 10)
+        #expect(ops.contains { $0.kind == .equal && $0.oldRange.length > 1_000 })
+    }
+
     // MARK: - Performance
 
     @Test func performance20kWordsAcrossParagraphs() {

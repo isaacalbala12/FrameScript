@@ -47,6 +47,8 @@ public struct DiffOp: Sendable, Hashable, Codable {
 /// hunks. Within a hunk the implementation uses Myers' O(ND) algorithm with a
 /// bounded edit distance, and falls back to patience-style unique-token anchors
 /// plus a coarse replace when the inputs are too different for Myers' budget.
+/// Large hunks still get a small Myers probe so a couple of edits in repetitive
+/// 20k-word text stay tight instead of becoming a whole-hunk replace.
 public enum WordDiff {
     /// Maximum number of tokens on each side for which Myers is attempted.
     public static let myersTokenLimit = 4_096
@@ -622,6 +624,9 @@ private enum MyersDiff {
 // MARK: - Anchored sequence diff
 
 private enum SequenceDiff {
+    /// Edit-distance budget used to probe hunks larger than `tokenLimit`.
+    private static let largeInputProbeDistance = 64
+
     static func diff(
         _ a: [Int],
         _ b: [Int],
@@ -722,8 +727,14 @@ private enum SequenceDiff {
         let aSlice = Array(a[aStart..<aMiddleEnd])
         let bSlice = Array(b[bStart..<bMiddleEnd])
 
-        if aSlice.count + bSlice.count <= tokenLimit,
-           let ops = MyersDiff.diff(aSlice, bSlice, maxDistance: maxEditDistance) {
+        // Large hunks get a cheap small-distance Myers probe: O((N+M)·D) is
+        // still linear when D is tiny, which is common in repetitive scripts
+        // with edits only at the edges.
+        let totalCount = aSlice.count + bSlice.count
+        let distanceBudget = totalCount <= tokenLimit
+            ? maxEditDistance
+            : min(maxEditDistance, largeInputProbeDistance)
+        if let ops = MyersDiff.diff(aSlice, bSlice, maxDistance: distanceBudget) {
             for op in ops {
                 output.append(WordDiff.SeqOp(
                     kind: op.kind,

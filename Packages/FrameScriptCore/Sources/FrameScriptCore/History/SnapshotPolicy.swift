@@ -55,9 +55,11 @@ public enum SnapshotHash {
 /// Rules (F21 + D4):
 /// - Automatic snapshots are taken at most once every `automaticInterval`
 ///   (5 minutes by default) and only when the content hash differs from the
-///   most recent snapshot.
+///   most recent snapshot. A snapshot timestamp in the future (clock skew) does
+///   not suppress snapshots forever.
 /// - At most `maximumAutomaticSnapshots` (50 by default) automatic snapshots are
-///   kept; the oldest are evicted first. Named snapshots are never evicted.
+///   kept; the oldest are evicted first. A cap of `0` disables automatic
+///   snapshots. Named snapshots are never evicted.
 /// - Named snapshots are always taken when requested.
 /// - External-change snapshots are always taken, regardless of time or hash.
 /// - External-change snapshots are not counted against the automatic budget:
@@ -83,6 +85,8 @@ public struct SnapshotPolicy: Sendable, Equatable {
         /// Less than `automaticInterval` has passed since the last automatic
         /// snapshot.
         case throttled
+        /// `maximumAutomaticSnapshots` is zero or negative.
+        case disabled
     }
 
     public enum Action: Sendable, Equatable {
@@ -120,6 +124,9 @@ public struct SnapshotPolicy: Sendable, Equatable {
         case .named, .externalChange:
             return Decision(action: .take)
         case .automatic:
+            guard maximumAutomaticSnapshots > 0 else {
+                return Decision(action: .skip(.disabled))
+            }
             let latest = existing.max { lhs, rhs in
                 isOlder(lhs, than: rhs)
             }
@@ -131,9 +138,14 @@ public struct SnapshotPolicy: Sendable, Equatable {
                 .filter { $0.kind == .automatic }
                 .sorted { isOlder($0, than: $1) }
 
-            if let last = automatics.last,
-               now.timeIntervalSince(last.createdAt) < automaticInterval {
-                return Decision(action: .skip(.throttled))
+            if let last = automatics.last {
+                let elapsed = now.timeIntervalSince(last.createdAt)
+                // A negative elapsed time means the clock moved backwards or
+                // the record came from the future; do not throttle for the
+                // whole skew.
+                if elapsed >= 0, elapsed < automaticInterval {
+                    return Decision(action: .skip(.throttled))
+                }
             }
 
             let projectedCount = automatics.count + 1
