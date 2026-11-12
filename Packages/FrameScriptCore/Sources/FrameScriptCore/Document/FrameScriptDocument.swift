@@ -205,8 +205,10 @@ extension FrameScriptDocument {
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            startUTF16 = max(0, try container.decodeIfPresent(Int.self, forKey: .startUTF16) ?? 0)
-            lengthUTF16 = max(0, try container.decodeIfPresent(Int.self, forKey: .lengthUTF16) ?? 0)
+            // Keep raw values here. Migration and validation reject unsafe
+            // ranges; clamping would hide corrupt input.
+            startUTF16 = try container.decodeIfPresent(Int.self, forKey: .startUTF16) ?? 0
+            lengthUTF16 = try container.decodeIfPresent(Int.self, forKey: .lengthUTF16) ?? 0
             selectedText = try container.decodeIfPresent(String.self, forKey: .selectedText) ?? ""
             prefixContext = try container.decodeIfPresent(String.self, forKey: .prefixContext) ?? ""
             suffixContext = try container.decodeIfPresent(String.self, forKey: .suffixContext) ?? ""
@@ -216,22 +218,40 @@ extension FrameScriptDocument {
     public struct ProjectSettingsOverride: Codable, Sendable, Equatable {
         public var wordsPerMinute: Int?
         public var defaultSplitMode: SegmentType?
-        /// F26 rhythm-review thresholds. `nil` means "use the app default".
+
+        public init(
+            wordsPerMinute: Int? = nil,
+            defaultSplitMode: SegmentType? = nil
+        ) {
+            self.wordsPerMinute = wordsPerMinute
+            self.defaultSplitMode = defaultSplitMode
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case wordsPerMinute
+            case defaultSplitMode
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            wordsPerMinute = try container.decodeIfPresent(Int.self, forKey: .wordsPerMinute)
+            defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode)
+        }
+    }
+
+    /// Per-project rhythm-review thresholds (F26). `nil` fields use app defaults.
+    public struct RhythmThresholds: Codable, Sendable, Equatable {
         public var longSentenceWordLimit: Int?
         public var uncoveredSecondsLimit: TimeInterval?
         public var sceneLengthRatioLimit: Double?
         public var hookSecondsLimit: TimeInterval?
 
         public init(
-            wordsPerMinute: Int? = nil,
-            defaultSplitMode: SegmentType? = nil,
             longSentenceWordLimit: Int? = nil,
             uncoveredSecondsLimit: TimeInterval? = nil,
             sceneLengthRatioLimit: Double? = nil,
             hookSecondsLimit: TimeInterval? = nil
         ) {
-            self.wordsPerMinute = wordsPerMinute
-            self.defaultSplitMode = defaultSplitMode
             self.longSentenceWordLimit = longSentenceWordLimit
             self.uncoveredSecondsLimit = uncoveredSecondsLimit
             self.sceneLengthRatioLimit = sceneLengthRatioLimit
@@ -239,8 +259,6 @@ extension FrameScriptDocument {
         }
 
         enum CodingKeys: String, CodingKey {
-            case wordsPerMinute
-            case defaultSplitMode
             case longSentenceWordLimit
             case uncoveredSecondsLimit
             case sceneLengthRatioLimit
@@ -249,8 +267,6 @@ extension FrameScriptDocument {
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            wordsPerMinute = try container.decodeIfPresent(Int.self, forKey: .wordsPerMinute)
-            defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode)
             longSentenceWordLimit = try container.decodeIfPresent(Int.self, forKey: .longSentenceWordLimit)
             uncoveredSecondsLimit = try container.decodeIfPresent(TimeInterval.self, forKey: .uncoveredSecondsLimit)
             sceneLengthRatioLimit = try container.decodeIfPresent(Double.self, forKey: .sceneLengthRatioLimit)
@@ -576,6 +592,10 @@ extension FrameScriptDocument {
         public var note: String
         /// BCP-47-ish language code (`es`, `en`, ...). Empty means the scene's original language.
         public var languageCode: String
+        /// Text shown in the teleprompter when this take was recorded (F10).
+        public var readText: String
+        /// Hash of the scene text used for this take (F10/F11).
+        public var sceneTextHash: String
 
         public init(
             id: UUID = UUID(),
@@ -586,7 +606,9 @@ extension FrameScriptDocument {
             bookmarkData: Data? = nil,
             rating: TakeRating = .unrated,
             note: String = "",
-            languageCode: String = ""
+            languageCode: String = "",
+            readText: String = "",
+            sceneTextHash: String = ""
         ) {
             self.id = id
             self.number = number
@@ -597,6 +619,8 @@ extension FrameScriptDocument {
             self.rating = rating
             self.note = note
             self.languageCode = languageCode
+            self.readText = readText
+            self.sceneTextHash = sceneTextHash
         }
 
         enum CodingKeys: String, CodingKey {
@@ -609,6 +633,8 @@ extension FrameScriptDocument {
             case rating
             case note
             case languageCode
+            case readText
+            case sceneTextHash
         }
 
         public init(from decoder: Decoder) throws {
@@ -622,6 +648,8 @@ extension FrameScriptDocument {
             rating = try container.decodeIfPresent(TakeRating.self, forKey: .rating) ?? .unrated
             note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
             languageCode = try container.decodeIfPresent(String.self, forKey: .languageCode) ?? ""
+            readText = try container.decodeIfPresent(String.self, forKey: .readText) ?? ""
+            sceneTextHash = try container.decodeIfPresent(String.self, forKey: .sceneTextHash) ?? ""
         }
     }
 
@@ -783,6 +811,11 @@ extension FrameScriptDocument {
         public var linkedBRollItemIDs: [UUID]
         public var linkedTakeIDs: [UUID]
         public var isCopiedIntoProject: Bool
+        public var duration: TimeInterval?
+        public var fileSize: Int64?
+        public var modifiedAt: Date?
+        /// True when the last filesystem check could not find the referenced file.
+        public var isLastKnownMissing: Bool
 
         public init(
             id: UUID = UUID(),
@@ -793,7 +826,11 @@ extension FrameScriptDocument {
             linkedSceneIDs: [UUID] = [],
             linkedBRollItemIDs: [UUID] = [],
             linkedTakeIDs: [UUID] = [],
-            isCopiedIntoProject: Bool = false
+            isCopiedIntoProject: Bool = false,
+            duration: TimeInterval? = nil,
+            fileSize: Int64? = nil,
+            modifiedAt: Date? = nil,
+            isLastKnownMissing: Bool = false
         ) {
             self.id = id
             self.path = path
@@ -804,6 +841,10 @@ extension FrameScriptDocument {
             self.linkedBRollItemIDs = linkedBRollItemIDs
             self.linkedTakeIDs = linkedTakeIDs
             self.isCopiedIntoProject = isCopiedIntoProject
+            self.duration = duration
+            self.fileSize = fileSize
+            self.modifiedAt = modifiedAt
+            self.isLastKnownMissing = isLastKnownMissing
         }
 
         enum CodingKeys: String, CodingKey {
@@ -816,6 +857,10 @@ extension FrameScriptDocument {
             case linkedBRollItemIDs
             case linkedTakeIDs
             case isCopiedIntoProject
+            case duration
+            case fileSize
+            case modifiedAt
+            case isLastKnownMissing
         }
 
         public init(from decoder: Decoder) throws {
@@ -829,6 +874,10 @@ extension FrameScriptDocument {
             linkedBRollItemIDs = try container.decodeIfPresent([UUID].self, forKey: .linkedBRollItemIDs) ?? []
             linkedTakeIDs = try container.decodeIfPresent([UUID].self, forKey: .linkedTakeIDs) ?? []
             isCopiedIntoProject = try container.decodeIfPresent(Bool.self, forKey: .isCopiedIntoProject) ?? false
+            duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration)
+            fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
+            modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt)
+            isLastKnownMissing = try container.decodeIfPresent(Bool.self, forKey: .isLastKnownMissing) ?? false
         }
     }
 
@@ -1137,6 +1186,27 @@ extension FrameScriptDocument {
 
     /// A derived short-form clip (F24).
     public struct ShortClip: Codable, Sendable, Equatable, Identifiable {
+        public struct SceneSourceHash: Codable, Sendable, Equatable {
+            public var sceneID: UUID
+            public var hash: String
+
+            public init(sceneID: UUID, hash: String) {
+                self.sceneID = sceneID
+                self.hash = hash
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case sceneID
+                case hash
+            }
+
+            public init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                sceneID = try container.decode(UUID.self, forKey: .sceneID)
+                hash = try container.decodeIfPresent(String.self, forKey: .hash) ?? ""
+            }
+        }
+
         public var id: UUID
         public var title: String
         public var sourceSceneIDs: [UUID]
@@ -1150,6 +1220,8 @@ extension FrameScriptDocument {
         public var description: String
         public var hashtags: [String]
         public var sourceHash: String
+        public var languageCode: String
+        public var sceneSourceHashes: [SceneSourceHash]
         public var status: ShortClipStatus
 
         public init(
@@ -1166,6 +1238,8 @@ extension FrameScriptDocument {
             description: String = "",
             hashtags: [String] = [],
             sourceHash: String = "",
+            languageCode: String = "",
+            sceneSourceHashes: [SceneSourceHash] = [],
             status: ShortClipStatus = .idea
         ) {
             self.id = id
@@ -1181,6 +1255,8 @@ extension FrameScriptDocument {
             self.description = description
             self.hashtags = hashtags
             self.sourceHash = sourceHash
+            self.languageCode = languageCode
+            self.sceneSourceHashes = sceneSourceHashes
             self.status = status
         }
 
@@ -1198,6 +1274,8 @@ extension FrameScriptDocument {
             case description
             case hashtags
             case sourceHash
+            case languageCode
+            case sceneSourceHashes
             case status
         }
 
@@ -1216,6 +1294,8 @@ extension FrameScriptDocument {
             description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
             hashtags = try container.decodeIfPresent([String].self, forKey: .hashtags) ?? []
             sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash) ?? ""
+            languageCode = try container.decodeIfPresent(String.self, forKey: .languageCode) ?? ""
+            sceneSourceHashes = try container.decodeIfPresent([SceneSourceHash].self, forKey: .sceneSourceHashes) ?? []
             status = try container.decodeIfPresent(ShortClipStatus.self, forKey: .status) ?? .idea
         }
 
@@ -1364,30 +1444,114 @@ extension FrameScriptDocument {
     }
 
     public struct PublishedVideoComparison: Codable, Sendable, Equatable {
+        public struct SceneResult: Codable, Sendable, Equatable {
+            public var sceneID: UUID
+            public var realStart: TimeInterval
+            public var realEnd: TimeInterval
+            public var addedWords: Int
+            public var removedWords: Int
+            public var coverage: Double
+            public var avgRetention: Double
+            public var dropMagnitude: Double
+
+            public init(
+                sceneID: UUID,
+                realStart: TimeInterval = 0,
+                realEnd: TimeInterval = 0,
+                addedWords: Int = 0,
+                removedWords: Int = 0,
+                coverage: Double = 0,
+                avgRetention: Double = 0,
+                dropMagnitude: Double = 0
+            ) {
+                self.sceneID = sceneID
+                self.realStart = realStart
+                self.realEnd = realEnd
+                self.addedWords = addedWords
+                self.removedWords = removedWords
+                self.coverage = coverage
+                self.avgRetention = avgRetention
+                self.dropMagnitude = dropMagnitude
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case sceneID
+                case realStart
+                case realEnd
+                case addedWords
+                case removedWords
+                case coverage
+                case avgRetention
+                case dropMagnitude
+            }
+
+            public init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                sceneID = try container.decode(UUID.self, forKey: .sceneID)
+                realStart = try container.decodeIfPresent(TimeInterval.self, forKey: .realStart) ?? 0
+                realEnd = try container.decodeIfPresent(TimeInterval.self, forKey: .realEnd) ?? 0
+                addedWords = try container.decodeIfPresent(Int.self, forKey: .addedWords) ?? 0
+                removedWords = try container.decodeIfPresent(Int.self, forKey: .removedWords) ?? 0
+                coverage = try container.decodeIfPresent(Double.self, forKey: .coverage) ?? 0
+                avgRetention = try container.decodeIfPresent(Double.self, forKey: .avgRetention) ?? 0
+                dropMagnitude = try container.decodeIfPresent(Double.self, forKey: .dropMagnitude) ?? 0
+            }
+        }
+
+        public var videoID: String
+        public var url: String
+        public var title: String
+        public var publishedAt: Date?
         public var transcriptSegments: [TranscriptSegment]
         public var retentionPoints: [RetentionPoint]
+        public var sceneResults: [SceneResult]
+        public var learnings: String
         public var importedAt: Date
 
         public init(
+            videoID: String = "",
+            url: String = "",
+            title: String = "",
+            publishedAt: Date? = nil,
             transcriptSegments: [TranscriptSegment] = [],
             retentionPoints: [RetentionPoint] = [],
+            sceneResults: [SceneResult] = [],
+            learnings: String = "",
             importedAt: Date = Date()
         ) {
+            self.videoID = videoID
+            self.url = url
+            self.title = title
+            self.publishedAt = publishedAt
             self.transcriptSegments = transcriptSegments
             self.retentionPoints = retentionPoints
+            self.sceneResults = sceneResults
+            self.learnings = learnings
             self.importedAt = importedAt
         }
 
         enum CodingKeys: String, CodingKey {
+            case videoID
+            case url
+            case title
+            case publishedAt
             case transcriptSegments
             case retentionPoints
+            case sceneResults
+            case learnings
             case importedAt
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+            videoID = try container.decodeIfPresent(String.self, forKey: .videoID) ?? ""
+            url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+            title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+            publishedAt = try container.decodeIfPresent(Date.self, forKey: .publishedAt)
             transcriptSegments = try container.decodeIfPresent([TranscriptSegment].self, forKey: .transcriptSegments) ?? []
             retentionPoints = try container.decodeIfPresent([RetentionPoint].self, forKey: .retentionPoints) ?? []
+            sceneResults = try container.decodeIfPresent([SceneResult].self, forKey: .sceneResults) ?? []
+            learnings = try container.decodeIfPresent(String.self, forKey: .learnings) ?? ""
             importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt) ?? Date(timeIntervalSince1970: 0)
         }
     }
@@ -1403,6 +1567,8 @@ extension FrameScriptDocument {
         public var settingsOverride: ProjectSettingsOverride?
         public var exportPresets: [ExportPreset]
         public var scenes: [Scene]
+        /// Original script language. Everything else is keyed by language code.
+        public var primaryLanguage: String
 
         // F25 classification
         public var topic: String
@@ -1421,8 +1587,9 @@ extension FrameScriptDocument {
         // F15 / F22 publishing, keyed by language code
         public var publishingPacks: [String: PublishingPack]
 
-        // F16 manual tasks
+        // F16 / F26 per-project overrides
         public var checklistTasks: [ChecklistTask]
+        public var rhythmThresholdsOverride: RhythmThresholds?
 
         // F20 sources and claims
         public var sources: [Source]
@@ -1456,6 +1623,7 @@ extension FrameScriptDocument {
             settingsOverride: ProjectSettingsOverride? = nil,
             exportPresets: [ExportPreset] = [],
             scenes: [Scene] = [],
+            primaryLanguage: String = "es",
             topic: String = "",
             videoType: String = "",
             productionStatus: ProductionStatus = .idea,
@@ -1466,6 +1634,7 @@ extension FrameScriptDocument {
             assets: [ProjectAsset] = [],
             publishingPacks: [String: PublishingPack] = [:],
             checklistTasks: [ChecklistTask] = [],
+            rhythmThresholdsOverride: RhythmThresholds? = nil,
             sources: [Source] = [],
             claims: [Claim] = [],
             comparisonTables: [ComparisonTable] = [],
@@ -1484,6 +1653,7 @@ extension FrameScriptDocument {
             self.settingsOverride = settingsOverride
             self.exportPresets = exportPresets
             self.scenes = scenes
+            self.primaryLanguage = primaryLanguage
             self.topic = topic
             self.videoType = videoType
             self.productionStatus = productionStatus
@@ -1494,6 +1664,7 @@ extension FrameScriptDocument {
             self.assets = assets
             self.publishingPacks = publishingPacks
             self.checklistTasks = checklistTasks
+            self.rhythmThresholdsOverride = rhythmThresholdsOverride
             self.sources = sources
             self.claims = claims
             self.comparisonTables = comparisonTables
@@ -1514,6 +1685,7 @@ extension FrameScriptDocument {
             case settingsOverride
             case exportPresets
             case scenes
+            case primaryLanguage
             case topic
             case videoType
             case productionStatus
@@ -1524,6 +1696,7 @@ extension FrameScriptDocument {
             case assets
             case publishingPacks
             case checklistTasks
+            case rhythmThresholdsOverride
             case sources
             case claims
             case comparisonTables
@@ -1545,6 +1718,7 @@ extension FrameScriptDocument {
             settingsOverride = try container.decodeIfPresent(ProjectSettingsOverride.self, forKey: .settingsOverride)
             exportPresets = try container.decodeIfPresent([ExportPreset].self, forKey: .exportPresets) ?? []
             scenes = try container.decodeIfPresent([Scene].self, forKey: .scenes) ?? []
+            primaryLanguage = try container.decodeIfPresent(String.self, forKey: .primaryLanguage) ?? "es"
             topic = try container.decodeIfPresent(String.self, forKey: .topic) ?? ""
             videoType = try container.decodeIfPresent(String.self, forKey: .videoType) ?? ""
             productionStatus = try container.decodeIfPresent(ProductionStatus.self, forKey: .productionStatus) ?? .idea
@@ -1555,6 +1729,7 @@ extension FrameScriptDocument {
             assets = try container.decodeIfPresent([ProjectAsset].self, forKey: .assets) ?? []
             publishingPacks = try container.decodeIfPresent([String: PublishingPack].self, forKey: .publishingPacks) ?? [:]
             checklistTasks = try container.decodeIfPresent([ChecklistTask].self, forKey: .checklistTasks) ?? []
+            rhythmThresholdsOverride = try container.decodeIfPresent(RhythmThresholds.self, forKey: .rhythmThresholdsOverride)
             sources = try container.decodeIfPresent([Source].self, forKey: .sources) ?? []
             claims = try container.decodeIfPresent([Claim].self, forKey: .claims) ?? []
             comparisonTables = try container.decodeIfPresent([ComparisonTable].self, forKey: .comparisonTables) ?? []

@@ -24,10 +24,9 @@ extension FrameScriptDocument {
             document.migrateLegacySegmentLinks()
             document.migrateV3ToV4()
         default:
-            // v4 files are current, but external tools can write them too.
-            // Keep the historical read-time relationship repair.
-            document.migrateLegacySegmentLinks()
-            document.repairAnchors()
+            // v4 is the current format. Reading it must be lossless: validate
+            // anchors but never rewrite them. Legacy repair belongs to v1-v3.
+            break
         }
         document.fileVersion = FrameScriptFormat.currentFileVersion
         try document.validateSceneIdentifiers()
@@ -174,9 +173,11 @@ extension FrameScriptDocument {
 
     private func validate(_ anchor: TextAnchor?, textLength: Int) throws {
         guard let anchor else { return }
+        // Subtraction instead of addition so Int.max cannot overflow.
         guard anchor.startUTF16 >= 0,
               anchor.lengthUTF16 >= 0,
-              anchor.startUTF16 + anchor.lengthUTF16 <= textLength else {
+              anchor.startUTF16 <= textLength,
+              anchor.lengthUTF16 <= textLength - anchor.startUTF16 else {
             throw FrameScriptDocumentError.invalidAnchor
         }
     }
@@ -250,10 +251,17 @@ extension FrameScriptDocument {
         }
     }
 
-    /// The anchor repair rules from the pre-v4 reader. Kept identical so old
-    /// files keep the same links after migration.
+    /// The anchor repair rules shared by the app and the document reader.
+    /// Legacy migrations are the only callers that rewrite anchors; v4 reads
+    /// validate without mutating.
     public enum TextAnchorRepair {
-        private static let contextLength = 48
+        /// Number of UTF-16 units captured on each side of an anchor.
+        public static let contextLength = 48
+
+        /// Upper bound on how many matches a single repair inspects. A script
+        /// that repeats a phrase this often is treated as unrepairable instead
+        /// of blocking the reader.
+        public static let maximumOccurrences = 512
 
         public static func anchor(for segment: TextSegment, in text: String) -> TextAnchor? {
             let full = text as NSString
@@ -276,31 +284,34 @@ extension FrameScriptDocument {
         public static func anchor(in text: String, range: NSRange) -> TextAnchor? {
             let full = text as NSString
             let bounded = clamp(range, toLength: full.length)
-            guard bounded.length > 0, NSMaxRange(bounded) <= full.length else { return nil }
+            guard bounded.length > 0,
+                  bounded.location >= 0,
+                  bounded.length <= full.length - bounded.location else {
+                return nil
+            }
             let selected = full.substring(with: bounded)
             return TextAnchor(
                 startUTF16: bounded.location,
                 lengthUTF16: bounded.length,
                 selectedText: selected,
-                prefixContext: full.substring(with: NSRange(
-                    location: max(0, bounded.location - contextLength),
-                    length: bounded.location - max(0, bounded.location - contextLength)
-                )),
-                suffixContext: full.substring(with: NSRange(
-                    location: NSMaxRange(bounded),
-                    length: min(contextLength, full.length - NSMaxRange(bounded))
-                ))
+                prefixContext: contextBefore(full, location: bounded.location),
+                suffixContext: contextAfter(full, location: NSMaxRange(bounded))
             )
         }
 
         public static func repair(_ anchor: TextAnchor?, in text: String) -> TextAnchor? {
             guard let anchor else { return nil }
             let full = text as NSString
-            guard anchor.lengthUTF16 >= 0, anchor.startUTF16 >= 0, !anchor.selectedText.isEmpty else { return nil }
+            guard anchor.lengthUTF16 >= 0,
+                  anchor.startUTF16 >= 0,
+                  !anchor.selectedText.isEmpty else {
+                return nil
+            }
             if let current = current(anchor, in: text) {
                 return self.anchor(in: text, range: current.nsRange)
             }
             let matchingRanges = occurrences(of: anchor.selectedText, in: full)
+            guard matchingRanges.count < maximumOccurrences else { return nil }
             let exactCandidates = matchingRanges
                 .filter { hasAdjacentBoundary(anchor: anchor, text: full, range: $0) }
             if exactCandidates.count == 1, let exact = exactCandidates.first {
@@ -313,16 +324,94 @@ extension FrameScriptDocument {
             return self.anchor(in: text, range: repairedRange)
         }
 
+        public static func repair(_ anchor: TextAnchor?, from previousText: String, to text: String) -> TextAnchor? {
+            guard let anchor,
+                  let current = current(anchor, in: previousText) else { return nil }
+            guard previousText != text else { return self.anchor(in: text, range: current.nsRange) }
+            let previous = previousText as NSString
+            let updated = text as NSString
+            let edit = contiguousEdit(from: previous, to: updated)
+            let start = current.startUTF16
+            let end = start + current.lengthUTF16
+            let oldStart = edit.oldRange.location
+            let oldEnd = NSMaxRange(edit.oldRange)
+            let newEnd = NSMaxRange(edit.newRange)
+            let delta = edit.newRange.length - edit.oldRange.length
+
+            let repairedRange: NSRange?
+            if oldEnd <= start {
+                repairedRange = NSRange(location: start + delta, length: current.lengthUTF16)
+            } else if oldStart >= end {
+                repairedRange = current.nsRange
+            } else if oldStart > start, oldEnd < end {
+                repairedRange = NSRange(location: start, length: current.lengthUTF16 + delta)
+            } else if oldStart <= start, oldEnd < end {
+                repairedRange = NSRange(location: oldStart, length: end + delta - oldStart)
+            } else if oldStart > start, oldEnd >= end {
+                repairedRange = NSRange(location: start, length: newEnd - start)
+            } else {
+                repairedRange = nil
+            }
+            guard let repairedRange,
+                  repairedRange.location >= 0,
+                  repairedRange.length > 0,
+                  repairedRange.location <= updated.length,
+                  repairedRange.length <= updated.length - repairedRange.location else {
+                return nil
+            }
+            return self.anchor(in: text, range: repairedRange)
+        }
+
         public static func current(_ anchor: TextAnchor?, in text: String) -> TextAnchor? {
-            guard let anchor, anchor.lengthUTF16 > 0, !anchor.selectedText.isEmpty else { return nil }
+            guard let anchor,
+                  anchor.lengthUTF16 > 0,
+                  anchor.startUTF16 >= 0,
+                  !anchor.selectedText.isEmpty else {
+                return nil
+            }
             let full = text as NSString
             let range = anchor.nsRange
             guard range.location >= 0,
-                  NSMaxRange(range) <= full.length,
+                  range.location <= full.length,
+                  range.length <= full.length - range.location,
                   full.substring(with: range) == anchor.selectedText else {
                 return nil
             }
             return anchor
+        }
+
+        public static func isAnchor(_ anchor: TextAnchor, in segment: TextSegment, text: String) -> Bool {
+            guard let segmentAnchor = self.anchor(for: segment, in: text) else { return false }
+            return NSLocationInRange(anchor.startUTF16, segmentAnchor.nsRange)
+        }
+
+        private static func contextBefore(_ text: NSString, location: Int) -> String {
+            guard location > 0 else { return "" }
+            let start = max(0, location - contextLength)
+            guard start < location else { return "" }
+            let snapped = text.rangeOfComposedCharacterSequences(
+                for: NSRange(location: start, length: location - start)
+            )
+            let snappedStart = max(0, snapped.location)
+            let snappedEnd = NSMaxRange(snapped)
+            // If the anchor starts inside a cluster, drop that partial cluster
+            // rather than cutting a surrogate pair or grapheme.
+            let end = snappedEnd <= location ? snappedEnd : snapped.location
+            guard end > snappedStart else { return "" }
+            return text.substring(with: NSRange(location: snappedStart, length: end - snappedStart))
+        }
+
+        private static func contextAfter(_ text: NSString, location: Int) -> String {
+            guard location >= 0, location < text.length else { return "" }
+            let length = min(contextLength, text.length - location)
+            guard length > 0 else { return "" }
+            let snapped = text.rangeOfComposedCharacterSequences(
+                for: NSRange(location: location, length: length)
+            )
+            let start = max(0, snapped.location)
+            let end = min(text.length, NSMaxRange(snapped))
+            guard end > start else { return "" }
+            return text.substring(with: NSRange(location: start, length: end - start))
         }
 
         private static func occurrences(of value: String, in text: NSString) -> [NSRange] {
@@ -331,13 +420,31 @@ extension FrameScriptDocument {
             var searchStart = searchRange.location
             let searchEnd = NSMaxRange(searchRange)
             guard !value.isEmpty else { return matches }
-            while searchStart < searchEnd {
+            while searchStart < searchEnd, matches.count < maximumOccurrences {
                 let found = text.range(of: value, options: [], range: NSRange(location: searchStart, length: searchEnd - searchStart))
                 guard found.location != NSNotFound else { break }
                 matches.append(found)
                 searchStart = max(NSMaxRange(found), found.location + 1)
             }
             return matches
+        }
+
+        private static func contiguousEdit(from old: NSString, to new: NSString) -> (oldRange: NSRange, newRange: NSRange) {
+            let commonLimit = min(old.length, new.length)
+            var prefix = 0
+            while prefix < commonLimit, old.character(at: prefix) == new.character(at: prefix) {
+                prefix += 1
+            }
+            var suffix = 0
+            while suffix < old.length - prefix,
+                  suffix < new.length - prefix,
+                  old.character(at: old.length - suffix - 1) == new.character(at: new.length - suffix - 1) {
+                suffix += 1
+            }
+            return (
+                NSRange(location: prefix, length: old.length - prefix - suffix),
+                NSRange(location: prefix, length: new.length - prefix - suffix)
+            )
         }
 
         private static func hasAdjacentBoundary(anchor: TextAnchor, text: NSString, range: NSRange) -> Bool {
@@ -350,13 +457,17 @@ extension FrameScriptDocument {
             if anchor.prefixContext.isEmpty {
                 prefixes = [0]
             } else {
-                prefixes = occurrences(of: anchor.prefixContext, in: text).map(NSMaxRange)
+                let matches = occurrences(of: anchor.prefixContext, in: text)
+                guard matches.count < maximumOccurrences else { return nil }
+                prefixes = matches.map(NSMaxRange)
             }
             let suffixes: [Int]
             if anchor.suffixContext.isEmpty {
                 suffixes = [text.length]
             } else {
-                suffixes = occurrences(of: anchor.suffixContext, in: text).map(\.location)
+                let matches = occurrences(of: anchor.suffixContext, in: text)
+                guard matches.count < maximumOccurrences else { return nil }
+                suffixes = matches.map(\.location)
             }
             let candidates: [NSRange] = prefixes.flatMap { prefixEnd in
                 suffixes.compactMap { suffixStart in
@@ -378,7 +489,7 @@ extension FrameScriptDocument {
         private static func hasSuffixBoundary(_ anchor: TextAnchor, text: NSString, after location: Int) -> Bool {
             guard !anchor.suffixContext.isEmpty else { return location == text.length }
             let length = (anchor.suffixContext as NSString).length
-            guard location + length <= text.length else { return false }
+            guard location >= 0, location <= text.length, length <= text.length - location else { return false }
             return text.substring(with: NSRange(location: location, length: length)) == anchor.suffixContext
         }
 

@@ -46,15 +46,9 @@
               "prefixContext": "",
               "suffixContext": " omega"
             },
-            "templateType": "wide",
             "sourceType": "Talking head",
             "descriptionText": "repaired visual",
-            "mood": "energetic",
-            "framing": "medium",
-            "motion": "pan",
-            "duration": 3.5,
-            "notes": "legacy visual note",
-            "status": "Sourced"
+            "notes": "legacy visual note"
           }
         ],
         "editingItems": [

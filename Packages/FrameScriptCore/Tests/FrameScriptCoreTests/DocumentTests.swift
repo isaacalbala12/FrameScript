@@ -76,8 +76,8 @@ struct DocumentFormatTests {
         #expect(visual.textAnchor?.startUTF16 == 4)
         #expect(visual.textAnchor?.lengthUTF16 == 12)
         #expect(visual.textAnchor?.selectedText == "alpha target")
-        #expect(visual.status == .sourced)
-        #expect(visual.mood == "energetic")
+        #expect(visual.status == .idea)
+        #expect(visual.mood.isEmpty)
         #expect(edit.textAnchor == nil)
         #expect(edit.linkedSegmentID == nil)
         #expect(edit.cutStyle == "unrecoverable cut")
@@ -95,23 +95,25 @@ struct DocumentFormatTests {
 
         #expect(visual.textAnchor?.startUTF16 == 2)
         #expect(visual.textAnchor?.selectedText == "one")
-        #expect(visual.mood == "tense")
-        #expect(visual.framing == "wide")
-        #expect(visual.motion == "tracking")
-        #expect(visual.duration == 4.25)
-        #expect(visual.status == .planned)
+        #expect(visual.mood.isEmpty)
+        #expect(visual.framing.isEmpty)
+        #expect(visual.motion.isEmpty)
+        #expect(visual.duration == 0)
+        #expect(visual.status == .idea)
 
-        #expect(edit.templateType == "cut")
+        #expect(edit.templateType.isEmpty)
         #expect(edit.cutStyle == "hard cut")
-        #expect(edit.transition == "dip to black")
-        #expect(edit.subtitleStyle == "bold")
-        #expect(edit.emphasis == "high")
-        #expect(edit.zoom == "105%")
-        #expect(edit.sfx == "whoosh")
-        #expect(edit.musicCue == "beat drop")
-        #expect(edit.graphics == "lower third")
+        #expect(edit.transition.isEmpty)
+        #expect(edit.subtitleStyle.isEmpty)
+        #expect(edit.emphasis.isEmpty)
+        #expect(edit.zoom.isEmpty)
+        #expect(edit.sfx.isEmpty)
+        #expect(edit.musicCue.isEmpty)
+        #expect(edit.graphics.isEmpty)
         #expect(edit.notes == "editing notes")
         #expect(edit.status == .pending)
+        #expect(document.project.primaryLanguage == "es")
+        #expect(document.project.rhythmThresholdsOverride == nil)
 
         #expect(comment.severity == .suggestion)
         #expect(comment.status == .dismissed)
@@ -258,7 +260,9 @@ struct DocumentFormatTests {
             bookmarkData: Data([0x01, 0x02, 0x03]),
             rating: .good,
             note: "best take",
-            languageCode: "es"
+            languageCode: "es",
+            readText: "alpha target omega",
+            sceneTextHash: "scene-hash"
         )
         let variantTake = FrameScriptDocument.Take(
             id: variantTakeID,
@@ -280,7 +284,11 @@ struct DocumentFormatTests {
             linkedSceneIDs: [sceneID],
             linkedBRollItemIDs: [visualID],
             linkedTakeIDs: [takeID],
-            isCopiedIntoProject: true
+            isCopiedIntoProject: true,
+            duration: 12.75,
+            fileSize: 2_048,
+            modifiedAt: Date(timeIntervalSince1970: 1_700_000_250),
+            isLastKnownMissing: true
         )
         let chapter = FrameScriptDocument.ChapterOverride(
             id: chapterID,
@@ -353,6 +361,13 @@ struct DocumentFormatTests {
             description: "Clip description",
             hashtags: ["#short"],
             sourceHash: FrameScriptDocument.TextHash.hash("alpha target omega"),
+            languageCode: "en",
+            sceneSourceHashes: [
+                FrameScriptDocument.ShortClip.SceneSourceHash(
+                    sceneID: sceneID,
+                    hash: FrameScriptDocument.TextHash.hash("alpha target omega")
+                )
+            ],
             status: .ready
         )
         let snapshot = FrameScriptDocument.VersionSnapshot(
@@ -364,6 +379,10 @@ struct DocumentFormatTests {
             compressedPayload: Data([0x1f, 0x8b, 0x08])
         )
         let comparison = FrameScriptDocument.PublishedVideoComparison(
+            videoID: "video-id",
+            url: "https://example.com/video",
+            title: "Published title",
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_450),
             transcriptSegments: [
                 FrameScriptDocument.TranscriptSegment(start: 1.5, end: 2.5, text: "Hello"),
                 FrameScriptDocument.TranscriptSegment(start: 2.5, end: 5, text: "World")
@@ -372,6 +391,19 @@ struct DocumentFormatTests {
                 FrameScriptDocument.RetentionPoint(time: 5, percent: 100),
                 FrameScriptDocument.RetentionPoint(time: 30, percent: 62.5)
             ],
+            sceneResults: [
+                FrameScriptDocument.PublishedVideoComparison.SceneResult(
+                    sceneID: sceneID,
+                    realStart: 1,
+                    realEnd: 8,
+                    addedWords: 4,
+                    removedWords: 2,
+                    coverage: 0.9,
+                    avgRetention: 0.8,
+                    dropMagnitude: 0.15
+                )
+            ],
+            learnings: "Keep the hook shorter.",
             importedAt: Date(timeIntervalSince1970: 1_700_000_500)
         )
 
@@ -462,16 +494,13 @@ struct DocumentFormatTests {
             templateID: templateID,
             settingsOverride: FrameScriptDocument.ProjectSettingsOverride(
                 wordsPerMinute: 160,
-                defaultSplitMode: .sentence,
-                longSentenceWordLimit: 28,
-                uncoveredSecondsLimit: 5,
-                sceneLengthRatioLimit: 1.8,
-                hookSecondsLimit: 15
+                defaultSplitMode: .sentence
             ),
             exportPresets: [
                 FrameScriptDocument.ExportPreset(id: presetID, name: "Preset", format: .csv)
             ],
             scenes: [scene],
+            primaryLanguage: "en",
             topic: "AC EVO",
             videoType: "review",
             productionStatus: .edited,
@@ -482,6 +511,12 @@ struct DocumentFormatTests {
             assets: [asset],
             publishingPacks: ["es": pack, "en": pack],
             checklistTasks: [task],
+            rhythmThresholdsOverride: FrameScriptDocument.RhythmThresholds(
+                longSentenceWordLimit: 28,
+                uncoveredSecondsLimit: 5,
+                sceneLengthRatioLimit: 1.8,
+                hookSecondsLimit: 15
+            ),
             sources: [source],
             claims: [claim],
             comparisonTables: [table],

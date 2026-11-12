@@ -47,15 +47,9 @@
               "prefixContext": "",
               "suffixContext": " two three"
             },
-            "templateType": "insert",
             "sourceType": "Screen recording",
             "descriptionText": "show the lap",
-            "mood": "tense",
-            "framing": "wide",
-            "motion": "tracking",
-            "duration": 4.25,
-            "notes": "b-roll notes",
-            "status": "Planned"
+            "notes": "b-roll notes"
           }
         ],
         "editingItems": [
@@ -68,19 +62,12 @@
               "prefixContext": "X ",
               "suffixContext": " two three"
             },
-            "templateType": "cut",
             "description": "hard cut",
-            "transition": "dip to black",
-            "subtitleStyle": "bold",
-            "emphasis": "high",
-            "zoom": "105%",
-            "sfx": "whoosh",
-            "musicCue": "beat drop",
-            "graphics": "lower third",
             "notes": "editing notes"
           }
         ]
       }
-    ]
+    ],
+    "exportPresets": []
   }
 }
