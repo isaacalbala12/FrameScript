@@ -121,6 +121,8 @@ final class AppState {
     let errorCenter: ErrorCenter
     let themeManager: ResolvedThemeManager
     let dependencies: AppDependencies
+    /// F10 recording state and the obs-websocket client.
+    let recording: RecordingController
     private let aiProviderConfigurationStore: AIProviderConfigurationStore
     let securityScope: SecurityScopedResourceAccess
     private let exportFolderBookmarkCreator: ExportFolderBookmarkCreator
@@ -164,6 +166,7 @@ final class AppState {
         errorCenter: ErrorCenter = ErrorCenter(),
         themeManager: ResolvedThemeManager = ResolvedThemeManager(),
         dependencies: AppDependencies = .live,
+        recording: RecordingController? = nil,
         aiProviderConfigurationStore: AIProviderConfigurationStore = AIProviderConfigurationStore(),
         securityScope: SecurityScopedResourceAccess = .live,
         closeConfirmation: CloseConfirmation? = nil,
@@ -187,6 +190,7 @@ final class AppState {
         self.errorCenter = errorCenter
         self.themeManager = themeManager
         self.dependencies = dependencies
+        self.recording = recording ?? RecordingController()
         self.aiProviderConfigurationStore = aiProviderConfigurationStore
         self.securityScope = securityScope
         self.closeConfirmation = closeConfirmation
@@ -202,6 +206,7 @@ final class AppState {
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
+        attachRecordingContext()
     }
 
     func configure() {

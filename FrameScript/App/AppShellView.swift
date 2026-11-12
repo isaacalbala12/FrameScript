@@ -83,6 +83,7 @@ struct AppShellView: View {
     var body: some View {
         @Bindable var windowState = appState.windowState
         @Bindable var settingsStore = appState.settingsStore
+        @Bindable var recording = appState.recording
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
             && appState.settings.windowPreferences.focusModeBehavior == .hidePanels
@@ -103,7 +104,12 @@ struct AppShellView: View {
                     editorContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if appState.settings.editorPreferences.showAIReviewPanel && !appState.isFocusModeEnabled {
+                    if appState.recording.isPanelVisible && !appState.isFocusModeEnabled {
+                        Divider()
+                            .overlay(theme.divider)
+
+                        RecordingPanel()
+                    } else if appState.settings.editorPreferences.showAIReviewPanel && !appState.isFocusModeEnabled {
                         Divider()
                             .overlay(theme.divider)
 
@@ -125,6 +131,11 @@ struct AppShellView: View {
         }
         .sheet(isPresented: $windowState.isShortcutsPresented) {
             ShortcutsOverlay()
+                .environment(appState)
+                .environment(\.frameTheme, theme)
+        }
+        .sheet(isPresented: $recording.isSettingsPresented) {
+            OBSSettingsSheet()
                 .environment(appState)
                 .environment(\.frameTheme, theme)
         }

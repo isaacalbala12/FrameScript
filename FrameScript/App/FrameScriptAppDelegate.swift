@@ -34,7 +34,16 @@ final class FrameScriptAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState else { return .terminateNow }
-        return appState.confirmApplicationTermination() ? .terminateNow : .terminateCancel
+        guard appState.recording.hasActiveTake else {
+            return appState.confirmApplicationTermination() ? .terminateNow : .terminateCancel
+        }
+        // Saving prompts come first; if the user cancels, the take keeps running.
+        guard appState.confirmApplicationTermination() else { return .terminateCancel }
+        Task { @MainActor in
+            await appState.recording.stopForApplicationTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     static func isProjectFile(_ url: URL) -> Bool {
