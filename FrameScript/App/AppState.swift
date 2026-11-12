@@ -355,6 +355,7 @@ final class AppState {
             blankProjectStart: settings.generalPreferences.blankProjectStart,
             defaultSceneName: localized("templates.defaultScene"),
             exportPresetName: localized("export.editorHandoff"),
+            language: currentLanguage,
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
         projectStore.openProject(project, fileURL: nil, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: true)

@@ -1167,6 +1167,7 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
     case english
     case spanish
     case russian
+    case spanish
 
     var id: String { rawValue }
 
@@ -1178,6 +1179,7 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
         case .english: "English"
         case .spanish: "Español"
         case .russian: "Русский"
+        case .spanish: "Español"
         }
     }
 
