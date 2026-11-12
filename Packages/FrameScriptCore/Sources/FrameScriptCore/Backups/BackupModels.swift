@@ -50,6 +50,7 @@ public struct BackupFailure: Error, Equatable, Sendable, LocalizedError {
         case listBackups
         case removeBackup
         case readBackup
+        case validateBackup
         case writeDestination
         case restore
     }

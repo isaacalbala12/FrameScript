@@ -43,8 +43,28 @@ struct BackupsWindowView: View {
     @State private var pendingRestore: BackupEntry?
 
     var body: some View {
+        @Bindable var health = BackupHealth.shared
         VStack(alignment: .leading, spacing: 14) {
             header
+
+            if let failure = health.lastFailure {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text(appState.localized("backups.warning.lastFailure"))
+                    Spacer()
+                    Text(failure.operation.rawValue)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(theme.tertiaryText)
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.warning)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(theme.warning.opacity(0.12))
+                }
+            }
 
             Group {
                 if appState.currentProjectFileURL == nil {

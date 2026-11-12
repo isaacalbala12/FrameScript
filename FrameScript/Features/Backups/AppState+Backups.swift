@@ -50,49 +50,61 @@ extension AppState {
     }
 
     /// Restores a backup over the current project file. The current version is
-    /// always backed up first (ignoring the automatic interval); if that
-    /// safeguard cannot be written, the restore is refused.
+    /// always backed up first (ignoring the automatic interval); the backup is
+    /// decoded before anything is written, and if the safeguard cannot be
+    /// written the restore is refused.
     @discardableResult
     func restoreBackup(_ entry: BackupEntry) -> Bool {
         guard let destination = projectStore.currentFileURL,
               let projectID = currentBackupProjectID else {
             return false
         }
+
+        // Validate the selected backup before touching the destination. A
+        // corrupt backup must leave the current project file exactly as it was.
+        // The bytes are kept in memory because saving unsaved edits can run
+        // retention and remove the selected backup before the write.
+        let backupData: Data
+        let restoredProject: FrameProject
+        do {
+            backupData = try Data(contentsOf: entry.url)
+            restoredProject = try FrameScriptFileStore.decoder
+                .decode(FrameScriptFile.self, from: backupData)
+                .makeProject()
+        } catch {
+            if let appError = AppError.project(error, fileURL: entry.url, operation: .read) {
+                errorCenter.present(appError)
+            }
+            return false
+        }
+
         if projectStore.hasUnsavedFileChanges, !saveProject() {
             return false
         }
 
         let previousSceneID = editorState.selectedSceneID
         let outcome = withFileAccess(to: destination) {
-            BackupsCenter.store.restore(entry, over: destination, projectID: projectID)
+            BackupsCenter.store.restore(data: backupData, over: destination, projectID: projectID) { data in
+                _ = try FrameScriptFileStore.decoder.decode(FrameScriptFile.self, from: data).makeProject()
+            }
         }
 
         switch outcome {
         case .failed:
             return false
         case .restored:
-            do {
-                let restoredProject = try withFileAccess(to: destination) {
-                    try FrameScriptFileStore.read(from: destination)
-                }
-                projectStore.openProject(
-                    restoredProject,
-                    fileURL: destination,
-                    wordsPerMinute: settings.editorPreferences.wordsPerMinute,
-                    markUnsaved: false
-                )
-                let orderedScenes = restoredProject.scenes.sortedByOrder
-                editorState.selectedSceneID = orderedScenes.contains(where: { $0.id == previousSceneID })
-                    ? previousSceneID
-                    : orderedScenes.first?.id
-                editorState.selectedMode = .script
-                return true
-            } catch {
-                if let appError = AppError.project(error, fileURL: destination, operation: .read) {
-                    errorCenter.present(appError)
-                }
-                return false
-            }
+            projectStore.openProject(
+                restoredProject,
+                fileURL: destination,
+                wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+                markUnsaved: false
+            )
+            let orderedScenes = restoredProject.scenes.sortedByOrder
+            editorState.selectedSceneID = orderedScenes.contains(where: { $0.id == previousSceneID })
+                ? previousSceneID
+                : orderedScenes.first?.id
+            editorState.selectedMode = .script
+            return true
         }
     }
 

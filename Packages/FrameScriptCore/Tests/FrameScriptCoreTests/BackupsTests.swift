@@ -187,6 +187,65 @@ private func read(_ url: URL) throws -> String {
     #expect(deleted.map(\.url) == [yesterdayMorning.url])
 }
 
+@Test func clockRollbackAndFutureTimestampsDoNotBlockBackups() {
+    let policy = BackupPolicy()
+    let newest = BackupEntry(
+        url: URL(fileURLWithPath: "/backups/new.fscr"),
+        createdAt: baseDate,
+        byteSize: 1,
+        originalFileName: "Project.fscr"
+    )
+    // Wall clock moved backwards: the next save must still back up.
+    #expect(policy.allowsBackup(existing: [newest], now: baseDate.addingTimeInterval(-86_400)))
+    #expect(policy.allowsBackup(existing: [newest], now: baseDate.addingTimeInterval(-1)))
+    // A mis-set future stamp must be treated as stale, not block until that date.
+    let future = BackupEntry(
+        url: URL(fileURLWithPath: "/backups/future.fscr"),
+        createdAt: baseDate.addingTimeInterval(365 * 86_400),
+        byteSize: 1,
+        originalFileName: "Project.fscr"
+    )
+    #expect(policy.allowsBackup(existing: [future], now: baseDate))
+    // A future stamp must not force a backup on every save: the recent past
+    // entry still throttles normally.
+    let recent = BackupEntry(
+        url: URL(fileURLWithPath: "/backups/recent.fscr"),
+        createdAt: baseDate.addingTimeInterval(-60),
+        byteSize: 1,
+        originalFileName: "Project.fscr"
+    )
+    #expect(policy.allowsBackup(existing: [recent, future], now: baseDate) == false)
+    #expect(policy.allowsBackup(existing: [newest], now: baseDate.addingTimeInterval(9 * 60)) == false)
+    #expect(policy.allowsBackup(existing: [newest], now: baseDate.addingTimeInterval(10 * 60)))
+}
+
+@Test func subSecondBackupsArePrunedInTheRightOrder() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let clock = TestClock(baseDate)
+    let store = BackupStore(
+        rootDirectory: root,
+        policy: BackupPolicy(minimumInterval: 0, maximumCount: 2, dailyRetentionDays: 0),
+        calendar: utcCalendar,
+        now: { clock.now }
+    )
+    let source = backupURL("Project.fscr", in: root)
+
+    for index in 0..<3 {
+        try write("content-\(index)", to: source)
+        clock.now = baseDate.addingTimeInterval(0.1 + Double(index) / 10)
+        guard case .created = store.backUpIfNeeded(fileURL: source, projectID: sampleProjectID) else {
+            Issue.record("Backup \(index) should have been created")
+            return
+        }
+    }
+
+    let entries = store.listBackups(projectID: sampleProjectID)
+    #expect(entries.count == 2)
+    #expect(try Set(entries.map { try read($0.url) }) == ["content-1", "content-2"])
+}
+
 @Test func degeneratePolicyStillKeepsTheNewestBackup() {
     let older = BackupEntry(
         url: URL(fileURLWithPath: "/backups/old.fscr"),
@@ -276,6 +335,68 @@ private func read(_ url: URL) throws -> String {
     #expect(try Set(entries.map { try read($0.url) }) == ["current version", "original version"])
 }
 
+@Test func restoreReadsTheSelectedBackupBeforeTheSafeguardCanPruneIt() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let clock = TestClock(baseDate.addingTimeInterval(-30 * 86_400))
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { clock.now })
+    let source = backupURL("Project.fscr", in: root)
+
+    for index in 0..<20 {
+        try write("old-\(index)", to: source)
+        clock.now = baseDate.addingTimeInterval(-30 * 86_400 + TimeInterval(index))
+        guard case .created = store.backUpIfNeeded(fileURL: source, projectID: sampleProjectID, force: true) else {
+            Issue.record("Historical backup \(index) should have been created")
+            return
+        }
+    }
+    let entries = store.listBackups(projectID: sampleProjectID)
+    #expect(entries.count == 20)
+    guard let oldest = entries.last else {
+        Issue.record("Expected an oldest backup")
+        return
+    }
+
+    try write("current version", to: source)
+    clock.now = baseDate
+    // The safeguard is #21, so a prune-before-read would delete the selected
+    // oldest entry and the restore would fail.
+    switch store.restore(oldest, over: source, projectID: sampleProjectID) {
+    case .restored:
+        #expect(try read(source) == "old-0")
+    case let .failed(failure):
+        Issue.record("Restore of the oldest backup failed: \(failure.reason)")
+    }
+}
+
+@Test func restoreFromDataSurvivesTheSourceBackupBeingPruned() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    let source = backupURL("Source.fscr", in: root)
+    try write("payload to restore", to: source)
+    guard case let .created(entry, _) = store.backUpIfNeeded(fileURL: source, projectID: sampleProjectID) else {
+        Issue.record("The source backup should have been created")
+        return
+    }
+    let payload = try Data(contentsOf: entry.url)
+
+    // Simulate a save hook running retention after the app read the payload.
+    try FileManager.default.removeItem(at: entry.url)
+
+    let destination = backupURL("Project.fscr", in: root)
+    try write("current content", to: destination)
+
+    switch store.restore(data: payload, over: destination, projectID: sampleProjectID) {
+    case .restored:
+        #expect(try read(destination) == "payload to restore")
+    case let .failed(failure):
+        Issue.record("Restore from data failed: \(failure.reason)")
+    }
+}
+
 @Test func restoreIsRefusedWhenTheSafeguardCannotBeWritten() throws {
     let root = try makeTempRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -357,6 +478,134 @@ private func read(_ url: URL) throws -> String {
     }
 }
 
+@Test func veryLongEmojiNamesProduceAValidBackupFileName() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    // 113 emoji are 231 UTF-16 units, which is a legal APFS file name, but the
+    // ISO stamp pushes the backup name past the 255-unit limit.
+    let name = String(repeating: "🎬", count: 113) + ".fscr"
+    let source = backupURL(name, in: root)
+    try write("long name", to: source)
+
+    guard case let .created(entry, _) = store.backUpIfNeeded(fileURL: source, projectID: sampleProjectID) else {
+        Issue.record("A long unicode name should still be backed up")
+        return
+    }
+    #expect(entry.url.lastPathComponent.utf16.count <= 255)
+    #expect(entry.url.lastPathComponent.utf8.count <= 255)
+    #expect(entry.originalFileName == name)
+    #expect(try read(entry.url) == "long name")
+}
+
+@Test func restoreRejectsInvalidBackupBeforeTouchingTheDestination() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    let invalidSource = backupURL("Invalid.fscr", in: root)
+    try write("not a project", to: invalidSource)
+    guard case let .created(entry, _) = store.backUpIfNeeded(fileURL: invalidSource, projectID: sampleProjectID) else {
+        Issue.record("The invalid source should still have a byte-for-byte backup")
+        return
+    }
+
+    let destination = backupURL("Project.fscr", in: root)
+    try write("current content", to: destination)
+
+    let outcome = store.restore(entry, over: destination, projectID: sampleProjectID) { data in
+        guard String(decoding: data, as: UTF8.self) == "a valid project" else {
+            throw ValidationFailure()
+        }
+    }
+
+    guard case let .failed(failure) = outcome else {
+        Issue.record("A backup rejected by the validator must not be restored")
+        return
+    }
+    #expect(failure.operation == .validateBackup)
+    #expect(try read(destination) == "current content")
+    // Validation runs before the safeguard, so no backup of the destination is made.
+    #expect(store.listBackups(projectID: sampleProjectID).count == 1)
+}
+
+@Test func restoreWritesThroughASymlinkedDestination() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    let source = backupURL("Source.fscr", in: root)
+    try write("restored content", to: source)
+    guard case let .created(entry, _) = store.backUpIfNeeded(fileURL: source, projectID: sampleProjectID) else {
+        Issue.record("The source backup should have been created")
+        return
+    }
+
+    let target = backupURL("Real Project.fscr", in: root)
+    try write("current content", to: target)
+    let link = backupURL("Linked Project.fscr", in: root)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+    switch store.restore(entry, over: link, projectID: sampleProjectID) {
+    case .restored:
+        #expect(try read(target) == "restored content")
+        #expect(try read(link) == "restored content")
+    case let .failed(failure):
+        Issue.record("Restore through a symlink failed: \(failure.reason)")
+    }
+
+    let attributes = try FileManager.default.attributesOfItem(atPath: link.path)
+    #expect((attributes[.type] as? FileAttributeType) == .typeSymbolicLink)
+}
+
+@Test func legacyWholeSecondMetadataStillLists() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    let directory = store.projectDirectory(forProjectID: sampleProjectID)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let backup = directory.appendingPathComponent("2023-11-14T22-13-20Z__Project.fscr")
+    try write("legacy", to: backup)
+    let sidecar = backup.appendingPathExtension("json")
+    let json = """
+    {"originalPath":"/old/Project.fscr","originalFileName":"Project.fscr","createdAt":"2023-11-14T22:13:20Z","byteSize":6}
+    """
+    try write(json, to: sidecar)
+
+    let entries = store.listBackups(projectID: sampleProjectID)
+    #expect(entries.count == 1)
+    #expect(entries.first?.createdAt == baseDate)
+    #expect(entries.first?.originalPath == "/old/Project.fscr")
+    #expect(entries.first?.originalFileName == "Project.fscr")
+}
+
+@Test func sharedWritePathHelperUsesProjectIdentity() throws {
+    let root = try makeTempRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let store = BackupStore(rootDirectory: root, calendar: utcCalendar, now: { baseDate })
+    let uuid = UUID()
+    let withUUID = backupURL("With UUID.fscr", in: root)
+    try write("uuid content", to: withUUID)
+
+    guard case .created = store.backUpBeforeOverwrite(projectUUID: uuid, fileURL: withUUID) else {
+        Issue.record("The shared helper should back up a UUID project")
+        return
+    }
+    #expect(store.listBackups(projectID: uuid.uuidString.lowercased()).count == 1)
+
+    let withoutUUID = backupURL("Path Only.fscr", in: root)
+    try write("path content", to: withoutUUID)
+    guard case .created = store.backUpBeforeOverwrite(projectUUID: nil, fileURL: withoutUUID) else {
+        Issue.record("The shared helper should fall back to the path hash")
+        return
+    }
+    let pathID = BackupProjectIdentity.identifier(projectUUID: nil, fileURL: withoutUUID)
+    #expect(store.listBackups(projectID: pathID).count == 1)
+}
+
 // MARK: - Reporting, identity and codable policy
 
 @Test func directoryFailureIsReportedInsteadOfThrown() throws {
@@ -403,6 +652,8 @@ private func read(_ url: URL) throws -> String {
 }
 
 // MARK: - Helpers
+
+private struct ValidationFailure: Error {}
 
 private struct FailingDirectoryFileManager: BackupFileManaging {
     private let base = SystemBackupFileManager()

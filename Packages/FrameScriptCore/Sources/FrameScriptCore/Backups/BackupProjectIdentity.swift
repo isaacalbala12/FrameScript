@@ -6,6 +6,12 @@ import Foundation
 /// (or a caller only has a path) a deterministic hash of the standardized path
 /// takes its place, so backups survive moves only when the UUID is available —
 /// which is the normal case for saved projects.
+///
+/// Copies that keep the same UUID (Save As, a Finder duplicate) intentionally
+/// share one history: F29 keys backups by project, not by file path, and a
+/// rename/move must not orphan them. The backups sheet shows each entry's
+/// original path so the user can tell which file a snapshot came from. "Open
+/// as Copy" regenerates the UUID and therefore starts an independent history.
 public enum BackupProjectIdentity {
     /// Returns a directory-safe identifier. Never empty.
     public static func identifier(projectUUID: UUID?, fileURL: URL?) -> String {

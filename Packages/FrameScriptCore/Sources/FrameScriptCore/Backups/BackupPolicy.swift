@@ -32,12 +32,18 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
 
     /// Whether a new automatic backup is allowed now.
     ///
-    /// The comparison uses the newest existing entry, not the newest file on
-    /// disk, so a backup created with a forced restore safeguard also resets
-    /// the automatic interval.
+    /// The comparison uses the newest existing entry that is not in the
+    /// future, not the newest file on disk, so a backup created with a forced
+    /// restore safeguard also resets the automatic interval. A clock moved
+    /// backwards, or a future stamp left by a mis-set clock, must not silently
+    /// disable backups; future entries are simply ignored for the interval.
     public func allowsBackup(existing: [BackupEntry], now: Date) -> Bool {
-        guard let newest = existing.map(\.createdAt).max() else { return true }
-        return now.timeIntervalSince(newest) >= max(0, minimumInterval)
+        let newestPast = existing
+            .map(\.createdAt)
+            .filter { $0 <= now }
+            .max()
+        guard let newestPast else { return true }
+        return now.timeIntervalSince(newestPast) >= max(0, minimumInterval)
     }
 
     /// Existing backups that may be removed under this policy.
@@ -55,7 +61,9 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
 
         let sorted = existing.sorted { lhs, rhs in
             if lhs.createdAt == rhs.createdAt {
-                return lhs.url.standardizedFileURL.path < rhs.url.standardizedFileURL.path
+                // The date is authoritative. When two entries share a stamp,
+                // the later file name (timestamp + collision suffix) wins.
+                return lhs.url.standardizedFileURL.path > rhs.url.standardizedFileURL.path
             }
             return lhs.createdAt > rhs.createdAt
         }

@@ -17,7 +17,7 @@ public struct BackupStore: Sendable {
         rootDirectory: URL = BackupStore.defaultRootDirectory,
         policy: BackupPolicy = BackupPolicy(),
         fileManager: any BackupFileManaging = SystemBackupFileManager(),
-        calendar: Calendar = .current,
+        calendar: Calendar = .autoupdatingCurrent,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.rootDirectory = rootDirectory
@@ -178,7 +178,7 @@ public struct BackupStore: Sendable {
 
         entries.sort { lhs, rhs in
             if lhs.createdAt == rhs.createdAt {
-                return lhs.url.standardizedFileURL.path < rhs.url.standardizedFileURL.path
+                return lhs.url.standardizedFileURL.path > rhs.url.standardizedFileURL.path
             }
             return lhs.createdAt > rhs.createdAt
         }
@@ -225,13 +225,21 @@ public struct BackupStore: Sendable {
     /// Replaces `destination` with a backup after first taking a forced backup
     /// of the destination. If that safeguard cannot be written, the restore is
     /// refused and the destination is left untouched.
+    ///
+    /// The selected backup is read into memory before the safeguard runs, so a
+    /// retention prune can never delete the copy that is being restored. An
+    /// optional `validate` closure runs on those bytes before anything on disk
+    /// changes; callers use it to reject malformed project files.
     public func restore(
         _ entry: BackupEntry,
         over destination: URL,
-        projectID: String
+        projectID: String,
+        validate: (@Sendable (Data) throws -> Void)? = nil
     ) -> RestoreOutcome {
-        let destination = destination.standardizedFileURL
-        let backupURL = entry.url.standardizedFileURL
+        // Follow a symlinked destination so the target file is restored and the
+        // link itself is not replaced by a regular file.
+        let destination = destination.resolvingSymlinksInPath().standardizedFileURL
+        let backupURL = entry.url.resolvingSymlinksInPath().standardizedFileURL
 
         guard fileManager.fileExists(atPath: backupURL.path) else {
             return .failed(BackupFailure(
@@ -248,6 +256,59 @@ public struct BackupStore: Sendable {
             ))
         }
 
+        // Read first: the safeguard below prunes, and the selected entry may be
+        // the oldest copy in the ring.
+        let data: Data
+        do {
+            data = try fileManager.read(from: backupURL)
+        } catch {
+            return .failed(failure(.readBackup, url: backupURL, error: error))
+        }
+        if let validate {
+            do {
+                try validate(data)
+            } catch {
+                return .failed(BackupFailure(
+                    operation: .validateBackup,
+                    path: backupURL.path,
+                    reason: error.localizedDescription
+                ))
+            }
+        }
+        return writeValidatedData(data, over: destination, projectID: projectID)
+    }
+
+    /// Restores bytes that were already read from a backup.
+    ///
+    /// The app uses this when it must save unsaved edits before restoring:
+    /// that save can run retention and remove the selected file, so the payload
+    /// has to survive the save/prune cycle.
+    public func restore(
+        data: Data,
+        over destination: URL,
+        projectID: String,
+        validate: (@Sendable (Data) throws -> Void)? = nil
+    ) -> RestoreOutcome {
+        if let validate {
+            do {
+                try validate(data)
+            } catch {
+                return .failed(BackupFailure(
+                    operation: .validateBackup,
+                    path: destination.path,
+                    reason: error.localizedDescription
+                ))
+            }
+        }
+        return writeValidatedData(data, over: destination, projectID: projectID)
+    }
+
+    private func writeValidatedData(
+        _ data: Data,
+        over destination: URL,
+        projectID: String
+    ) -> RestoreOutcome {
+        let destination = destination.resolvingSymlinksInPath().standardizedFileURL
         var safeguard: BackupEntry?
         if fileManager.fileExists(atPath: destination.path) {
             switch backUpIfNeeded(fileURL: destination, projectID: projectID, force: true) {
@@ -265,7 +326,6 @@ public struct BackupStore: Sendable {
         }
 
         do {
-            let data = try fileManager.read(from: backupURL)
             try fileManager.write(data, to: destination)
             return .restored(safeguard: safeguard)
         } catch {
@@ -276,16 +336,68 @@ public struct BackupStore: Sendable {
     // MARK: - Naming and metadata
 
     private struct BackupMetadata: Codable {
-        let originalPath: String
-        let originalFileName: String
+        let originalPath: String?
+        let originalFileName: String?
         let createdAt: Date
-        let byteSize: Int
+        let byteSize: Int?
+
+        init(
+            originalPath: String?,
+            originalFileName: String?,
+            createdAt: Date,
+            byteSize: Int?
+        ) {
+            self.originalPath = originalPath
+            self.originalFileName = originalFileName
+            self.createdAt = createdAt
+            self.byteSize = byteSize
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case originalPath
+            case originalFileName
+            case createdAt
+            case createdAtMilliseconds
+            case byteSize
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+            originalFileName = try container.decodeIfPresent(String.self, forKey: .originalFileName)
+            byteSize = try container.decodeIfPresent(Int.self, forKey: .byteSize)
+            if let milliseconds = try container.decodeIfPresent(Int64.self, forKey: .createdAtMilliseconds) {
+                createdAt = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+            } else if let legacyDate = try container.decodeIfPresent(Date.self, forKey: .createdAt) {
+                // Sidecars written before 0.5 stored whole-second ISO dates.
+                createdAt = legacyDate
+            } else {
+                throw DecodingError.keyNotFound(
+                    CodingKeys.createdAtMilliseconds,
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath,
+                        debugDescription: "Backup metadata has no creation date."
+                    )
+                )
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encodeIfPresent(originalPath, forKey: .originalPath)
+            try container.encodeIfPresent(originalFileName, forKey: .originalFileName)
+            try container.encodeIfPresent(byteSize, forKey: .byteSize)
+            // Whole-second ISO dates collapsed sub-second backups and could
+            // make pruning delete the actual newest copy.
+            try container.encode(
+                Int64((createdAt.timeIntervalSince1970 * 1000).rounded()),
+                forKey: .createdAtMilliseconds
+            )
+        }
     }
 
     private static func metadataEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
+        JSONEncoder()
     }
 
     private static func metadataDecoder() -> JSONDecoder {
@@ -337,7 +449,42 @@ public struct BackupStore: Sendable {
         }
         let trimmed = String(replaced).trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = trimmed.isEmpty ? "project" : trimmed
-        return String(fallback.prefix(120))
+        return truncatedFileNameStem(fallback)
+    }
+
+    /// Truncates by UTF-8 bytes *and* UTF-16 units, with a short hash suffix.
+    ///
+    /// APFS rejects names over 255 UTF-16 units; the ISO stamp, `__`, an
+    /// optional `-NNN` collision suffix and `.fscr` already spend about 31.
+    /// Counting `Character` instead (the old bug) let 113 emoji through, which
+    /// made every backup fail with "file name invalid".
+    static func truncatedFileNameStem(
+        _ value: String,
+        maxUTF8Bytes: Int = 200,
+        maxUTF16Units: Int = 200
+    ) -> String {
+        guard value.utf8.count > maxUTF8Bytes || value.utf16.count > maxUTF16Units else {
+            return value
+        }
+
+        let suffix = "-" + String(BackupProjectIdentity.pathHash(value).prefix(8))
+        let byteBudget = max(0, maxUTF8Bytes - suffix.utf8.count)
+        let unitBudget = max(0, maxUTF16Units - suffix.utf16.count)
+        var result = ""
+        var bytes = 0
+        var units = 0
+        for character in value {
+            let piece = String(character)
+            let pieceBytes = piece.utf8.count
+            let pieceUnits = piece.utf16.count
+            guard bytes + pieceBytes <= byteBudget, units + pieceUnits <= unitBudget else {
+                break
+            }
+            result.append(character)
+            bytes += pieceBytes
+            units += pieceUnits
+        }
+        return result.isEmpty ? "project" + suffix : result + suffix
     }
 
     static func originalFileName(fromBackupFileName fileName: String) -> String {
@@ -360,6 +507,24 @@ public struct BackupStore: Sendable {
             operation: operation,
             path: url.path,
             reason: error.localizedDescription
+        )
+    }
+}
+
+public extension BackupStore {
+    /// Shared entry point for every write path: the app save hook now and the
+    /// `framescript` CLI/MCP later. Resolves the stable project id and takes a
+    /// backup of `fileURL` before it is overwritten.
+    @discardableResult
+    func backUpBeforeOverwrite(
+        projectUUID: UUID?,
+        fileURL: URL,
+        force: Bool = false
+    ) -> BackupOutcome {
+        backUpIfNeeded(
+            fileURL: fileURL,
+            projectID: BackupProjectIdentity.identifier(projectUUID: projectUUID, fileURL: fileURL),
+            force: force
         )
     }
 }

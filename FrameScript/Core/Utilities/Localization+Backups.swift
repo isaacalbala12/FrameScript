@@ -25,6 +25,7 @@ extension L10n {
             "backups.restore.failed": "Could not restore the backup. The current project file was not changed.",
             "backups.refresh": "Refresh",
             "backups.close": "Close",
+            "backups.warning.lastFailure": "The last automatic backup failed. Saving still works; check disk space and folder permissions.",
             "backups.error.title": "Backups Unavailable",
             "backups.error.message": "FrameScript could not read the backup folder. The project file was not changed."
         ],
@@ -50,6 +51,7 @@ extension L10n {
             "backups.restore.failed": "Не удалось восстановить копию. Текущий файл проекта не изменён.",
             "backups.refresh": "Обновить",
             "backups.close": "Закрыть",
+            "backups.warning.lastFailure": "Последняя автоматическая резервная копия не создана. Сохранение работает; проверьте место на диске и права на папку.",
             "backups.error.title": "Резервные копии недоступны",
             "backups.error.message": "FrameScript не удалось прочитать папку резервных копий. Файл проекта не изменён."
         ]
@@ -79,6 +81,7 @@ extension L10n {
         "backups.restore.failed": "No se pudo restaurar la copia. El archivo del proyecto actual no ha cambiado.",
         "backups.refresh": "Actualizar",
         "backups.close": "Cerrar",
+        "backups.warning.lastFailure": "La última copia automática falló. Guardar sigue funcionando; revisa el espacio en disco y los permisos de la carpeta.",
         "backups.error.title": "Copias de seguridad no disponibles",
         "backups.error.message": "FrameScript no pudo leer la carpeta de copias. El archivo del proyecto no ha cambiado."
     ]
