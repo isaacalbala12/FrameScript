@@ -109,8 +109,7 @@ struct ScriptEditorView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if appState.settings.editorPreferences.showSceneDuration {
-                    Text(DurationEstimator.formatted(scene.estimatedDuration))
-                    Text(appState.localized("script.estimated"))
+                    SceneDurationControl(scene: scene)
                 }
                 if appState.settings.editorPreferences.showSceneDuration && appState.settings.editorPreferences.showWordCount { Text("·") }
                 if appState.settings.editorPreferences.showWordCount { Text("\(wordCount) \(appState.localized("script.words"))") }

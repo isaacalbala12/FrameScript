@@ -43,10 +43,7 @@ struct TopToolbar: View {
 
             Spacer(minLength: 8)
 
-            Text(DurationEstimator.formatted(appState.totalDuration))
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(theme.secondaryText)
-                .monospacedDigit()
+            ProjectDurationControl()
 
             HStack(spacing: 5) {
                 toolbarButton(

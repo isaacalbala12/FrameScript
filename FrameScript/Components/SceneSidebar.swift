@@ -73,10 +73,7 @@ struct SidebarRow: View {
                             .lineLimit(1)
                     }
 
-                    Text(DurationEstimator.formatted(scene.estimatedDuration))
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.secondaryText.opacity(0.82))
-                        .monospacedDigit()
+                    SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
                 }
 
                 Spacer(minLength: 0)
