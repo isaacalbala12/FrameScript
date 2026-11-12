@@ -1,0 +1,17 @@
+1
+00:00:00,000 --> 00:00:03,500
+Hola, bienvenidos al canal.
+
+2
+00:00:03,500 --> 00:00:07,000
+Hoy vamos a analizar / el nuevo mod
+de *Assetto Corsa EVO*.
+
+3
+00:00:07,000 --> 00:00:10,250
+[risas] Esto es una prueba.
+
+4
+00:00:10,250 --> 00:00:13,000
+- Primera línea
+- Segunda línea
