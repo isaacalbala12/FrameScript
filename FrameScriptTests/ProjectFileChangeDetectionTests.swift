@@ -58,7 +58,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         )
         let recorder = ConfirmationRecorder()
         let appState = makeAppState(url: url, recorder: recorder)
-        defer { appState.closeProjectWithoutConfirmationForTests() }
+        defer { appState.resetProjectFileTracking() }
         XCTAssertEqual(appState.editorState.selectedSceneID, selectedID)
 
         try FrameScriptFileStore.write(
@@ -81,7 +81,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
         let recorder = ConfirmationRecorder()
         let appState = makeAppState(url: url, recorder: recorder)
-        defer { appState.closeProjectWithoutConfirmationForTests() }
+        defer { appState.resetProjectFileTracking() }
 
         appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
         XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
@@ -103,7 +103,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
         let recorder = ConfirmationRecorder()
         let appState = makeAppState(url: url, recorder: recorder)
-        defer { appState.closeProjectWithoutConfirmationForTests() }
+        defer { appState.resetProjectFileTracking() }
 
         appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
         try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
@@ -124,7 +124,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
         let recorder = ConfirmationRecorder()
         let appState = makeAppState(url: url, recorder: recorder)
-        defer { appState.closeProjectWithoutConfirmationForTests() }
+        defer { appState.resetProjectFileTracking() }
 
         appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
         try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
@@ -150,7 +150,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
         let recorder = ConfirmationRecorder()
         let appState = makeAppState(url: url, recorder: recorder)
-        defer { appState.closeProjectWithoutConfirmationForTests() }
+        defer { appState.resetProjectFileTracking() }
 
         appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
         try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
@@ -189,7 +189,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         )
         destination.appState = appState
         defer {
-            appState.closeProjectWithoutConfirmationForTests()
+            appState.resetProjectFileTracking()
             if let target = destination.url { try? FileManager.default.removeItem(at: target) }
         }
 
@@ -279,12 +279,5 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(50))
         }
-    }
-}
-
-private extension AppState {
-    /// Test teardown helper: skips the save prompt and stops the file monitor.
-    func closeProjectWithoutConfirmationForTests() {
-        resetProjectFileTracking()
     }
 }
