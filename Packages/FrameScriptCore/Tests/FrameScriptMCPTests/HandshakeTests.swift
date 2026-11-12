@@ -6,7 +6,7 @@ import Testing
 struct HandshakeTests {
     @Test("initialize negotiates the latest supported version")
     func initializeNegotiatesLatest() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             let response = try await harness.performInitialize()
             let result = try #require(response.rpcResult)
 
@@ -18,9 +18,27 @@ struct HandshakeTests {
         }
     }
 
+    @Test("only advertises versions whose semantics are implemented")
+    func advertisesOnlyImplementedVersions() async throws {
+        #expect(MCPProtocolVersion.supported == [
+            MCPProtocolVersion.v2025_11_25,
+            MCPProtocolVersion.v2025_06_18
+        ])
+
+        try await withHarness(try TestTools.standard()) { harness in
+            let response = try await harness.performInitialize(version: "2025-03-26")
+            #expect(response.rpcResult?["protocolVersion"]?.stringValue == MCPProtocolVersion.v2025_11_25)
+        }
+
+        try await withHarness(try TestTools.standard()) { harness in
+            let response = try await harness.performInitialize(version: "2024-11-05")
+            #expect(response.rpcResult?["protocolVersion"]?.stringValue == MCPProtocolVersion.v2025_11_25)
+        }
+    }
+
     @Test("echoes an older supported version")
     func initializeEchoesOlderVersion() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             let response = try await harness.performInitialize(version: "2025-06-18")
             #expect(response.rpcResult?["protocolVersion"]?.stringValue == "2025-06-18")
         }
@@ -28,7 +46,7 @@ struct HandshakeTests {
 
     @Test("falls back to the newest supported version")
     func initializeFallsBack() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             let response = try await harness.performInitialize(version: "1900-01-01")
             #expect(response.rpcResult?["protocolVersion"]?.stringValue == MCPProtocolVersion.latest)
         }
@@ -36,15 +54,18 @@ struct HandshakeTests {
 
     @Test("uses the configured newest version when falling back")
     func initializeUsesConfiguredFallback() async throws {
-        try await withHarness(TestTools.standard(), supportedVersions: ["2024-11-05"]) { harness in
+        try await withHarness(
+            try TestTools.standard(),
+            supportedVersions: ["2025-06-18"]
+        ) { harness in
             let response = try await harness.performInitialize(version: "2025-11-25")
-            #expect(response.rpcResult?["protocolVersion"]?.stringValue == "2024-11-05")
+            #expect(response.rpcResult?["protocolVersion"]?.stringValue == "2025-06-18")
         }
     }
 
     @Test("rejects a second initialize")
     func rejectsDuplicateInitialize() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.initialize(id: 2))
             let response = try await harness.nextResponse()
@@ -54,7 +75,7 @@ struct HandshakeTests {
 
     @Test("rejects tools requests before initialize")
     func rejectsToolsBeforeInitialize() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             try harness.send(RPC.request(id: 1, method: "tools/list"))
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
@@ -64,7 +85,7 @@ struct HandshakeTests {
 
     @Test("ping works before initialize")
     func pingBeforeInitialize() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             try harness.send(RPC.request(id: 8, method: "ping"))
             let response = try await harness.nextResponse()
             #expect(response["id"]?.intValue == 8)
@@ -74,19 +95,19 @@ struct HandshakeTests {
 
     @Test("initialize validates its required params")
     func initializeValidatesParams() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             try harness.send(RPC.request(id: 1, method: "initialize", params: .object([:])))
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidParams.rawValue)
         }
 
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             try harness.send(RPC.request(id: 1, method: "initialize", params: .array([])))
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidParams.rawValue)
         }
 
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             try harness.send(RPC.request(id: 1, method: "initialize", params: .object([
                 "protocolVersion": .string(MCPProtocolVersion.latest),
                 "capabilities": .object([:])
@@ -98,7 +119,7 @@ struct HandshakeTests {
 
     @Test("initialized notification produces no response")
     func initializedNotificationIsSilent() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.notification("notifications/initialized"))
 
@@ -113,7 +134,7 @@ struct HandshakeTests {
 
     @Test("tools/list returns schemas, output schemas and annotations")
     func toolsListReturnsSchemas() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.notification("notifications/initialized"))
             try harness.send(RPC.request(id: 2, method: "tools/list"))
@@ -122,9 +143,16 @@ struct HandshakeTests {
             let result = try #require(response.rpcResult)
             let tools = try #require(result["tools"]?.arrayValue)
 
-            #expect(tools.count == 7)
+            #expect(tools.count == 10)
             #expect(response.toolNames.first == "echo")
             #expect(response.toolNames.contains("framescript_version"))
+
+            for tool in tools {
+                #expect(tool["inputSchema"]?["type"]?.stringValue == "object")
+                if let outputSchema = tool["outputSchema"] {
+                    #expect(outputSchema["type"]?.stringValue == "object")
+                }
+            }
 
             let echo = try #require(tools.first)
             #expect(echo["name"]?.stringValue == "echo")
@@ -140,7 +168,7 @@ struct HandshakeTests {
 
     @Test("tools/list rejects an unknown cursor")
     func toolsListRejectsCursor() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.request(
                 id: 2,
@@ -154,7 +182,7 @@ struct HandshakeTests {
 
     @Test("EOF shuts the server down")
     func eofShutsDown() async throws {
-        let harness = MCPTestHarness(registry: TestTools.standard())
+        let harness = MCPTestHarness(registry: try TestTools.standard())
         _ = try await harness.performInitialize()
         harness.channel.closeInput()
         await harness.serverTask.value

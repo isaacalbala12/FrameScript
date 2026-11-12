@@ -31,10 +31,10 @@ public final class MCPStdioChannel: MCPMessageChannel, @unchecked Sendable {
             let chunk = try await readChunk()
             guard let chunk, !chunk.isEmpty else {
                 endOfFile = true
-                return framer.flush()
+                return try framer.flush()
             }
 
-            let lines = framer.append(chunk)
+            let lines = try framer.append(chunk)
             if !lines.isEmpty {
                 pendingLines.append(contentsOf: lines)
                 return pendingLines.removeFirst()

@@ -6,8 +6,8 @@ import FrameScriptMCP
 /// later wave. They exercise text content, structured content, JSON Schemas,
 /// annotations and argument validation.
 enum DemoTools {
-    static func registry() -> MCPToolRegistry {
-        MCPToolRegistry([versionTool(), echoTool()])
+    static func registry() throws -> MCPToolRegistry {
+        try MCPToolRegistry([versionTool(), echoTool()])
     }
 
     static func versionTool() -> MCPTool {
@@ -39,10 +39,9 @@ enum DemoTools {
                 openWorldHint: false
             ),
             handler: { _ in
-                let payload = JSONValue.object(["version": .string(FrameScriptCore.version)])
-                return MCPToolResult(
-                    content: [.text("framescript \(FrameScriptCore.version)")],
-                    structuredContent: payload
+                MCPToolResult.structured(
+                    text: "framescript \(FrameScriptCore.version)",
+                    structuredContent: ["version": .string(FrameScriptCore.version)]
                 )
             }
         )
@@ -91,9 +90,9 @@ enum DemoTools {
                 let text = try args.requiredString("text")
                 let uppercase = try args.optionalBool("uppercase") ?? false
                 let output = uppercase ? text.uppercased() : text
-                return MCPToolResult(
-                    content: [.text(output)],
-                    structuredContent: .object(["text": .string(output)])
+                return MCPToolResult.structured(
+                    text: output,
+                    structuredContent: ["text": .string(output)]
                 )
             }
         )

@@ -4,19 +4,21 @@ import Testing
 
 @Suite("JSON-RPC protocol errors")
 struct ProtocolErrorTests {
-    @Test("malformed JSON returns -32700")
+    @Test("malformed JSON returns -32700 without decoder internals")
     func parseError() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine("{not json")
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.parseError.rawValue)
             #expect(response["id"]?.isNull == true)
+            #expect(response.rpcError?["data"] == nil)
+            #expect(response.errorMessage == "Parse error: invalid JSON")
         }
     }
 
     @Test("empty lines are ignored")
     func emptyLinesIgnored() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine("")
             harness.sendLine("   ")
             try harness.send(RPC.request(id: 1, method: "ping"))
@@ -27,7 +29,7 @@ struct ProtocolErrorTests {
 
     @Test("a wrong jsonrpc version returns -32600")
     func wrongJSONRPCVersion() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine(#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#)
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
@@ -36,7 +38,7 @@ struct ProtocolErrorTests {
 
     @Test("a missing method returns -32600")
     func missingMethod() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine(#"{"jsonrpc":"2.0","id":2}"#)
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
@@ -45,7 +47,7 @@ struct ProtocolErrorTests {
 
     @Test("batch arrays return -32600")
     func batchUnsupported() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine(#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#)
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
@@ -55,7 +57,7 @@ struct ProtocolErrorTests {
 
     @Test("null ids return -32600")
     func nullID() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             harness.sendLine(#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#)
             let response = try await harness.nextResponse()
             #expect(response.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
@@ -65,7 +67,7 @@ struct ProtocolErrorTests {
 
     @Test("unknown methods return -32601")
     func unknownMethod() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.request(id: 3, method: "does/not/exist"))
             let response = try await harness.nextResponse()
@@ -76,7 +78,7 @@ struct ProtocolErrorTests {
 
     @Test("tools/call validates the request shape")
     func toolsCallValidatesShape() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
 
             try harness.send(RPC.request(id: 1, method: "tools/call"))
@@ -111,7 +113,7 @@ struct ProtocolErrorTests {
 
     @Test("unknown tools return -32602 with the tool name")
     func unknownTool() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.toolsCall(id: 4, name: "no_such_tool"))
             let response = try await harness.nextResponse()
@@ -122,7 +124,7 @@ struct ProtocolErrorTests {
 
     @Test("client responses are ignored")
     func clientResponsesIgnored() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(.object([
                 "jsonrpc": .string("2.0"),
@@ -137,7 +139,7 @@ struct ProtocolErrorTests {
 
     @Test("unknown notifications are ignored")
     func unknownNotificationsIgnored() async throws {
-        try await withHarness(TestTools.standard()) { harness in
+        try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
             try harness.send(RPC.notification("notifications/whatever", params: .object([:])))
             try harness.send(RPC.request(id: 5, method: "ping"))
@@ -148,7 +150,7 @@ struct ProtocolErrorTests {
 
     @Test("duplicate in-flight ids are rejected")
     func duplicateInFlightID() async throws {
-        let registry = MCPToolRegistry([
+        let registry = try MCPToolRegistry([
             TestTools.slowTool(duration: .seconds(5))
         ])
         try await withHarness(registry) { harness in

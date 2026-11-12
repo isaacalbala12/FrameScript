@@ -82,6 +82,10 @@ final class SubprocessSession: @unchecked Sendable {
     func send(_ value: JSONValue) throws {
         var data = try MCPJSON.encode(value)
         data.append(0x0A)
+        try sendRaw(data)
+    }
+
+    func sendRaw(_ data: Data) throws {
         try stdinPipe.fileHandleForWriting.write(contentsOf: data)
     }
 
@@ -223,10 +227,10 @@ struct StdioEndToEndTests {
         #expect(call.rpcResult?["structuredContent"]?["text"]?.stringValue == "HELLO FROM A SUBPROCESS")
 
         try session.send(RPC.toolsCall(id: 4, name: "echo", arguments: .object([:])))
-        let toolErrorLine = try #require(session.nextLine(timeout: 10))
-        let toolError = try decodeLine(toolErrorLine)
-        #expect(toolError.resultIsError == true)
-        #expect(toolError.firstTextContent?.contains("Missing required argument 'text'") == true)
+        let schemaErrorLine = try #require(session.nextLine(timeout: 10))
+        let schemaError = try decodeLine(schemaErrorLine)
+        #expect(schemaError.errorCode == JSONRPCErrorCode.invalidParams.rawValue)
+        #expect(schemaError.errorMessage?.contains("missing required property 'text'") == true)
 
         try session.send(RPC.toolsCall(id: 5, name: "unknown_tool"))
         let protocolErrorLine = try #require(session.nextLine(timeout: 10))
@@ -244,6 +248,58 @@ struct StdioEndToEndTests {
             session.waitForExit(timeout: 5),
             "server did not exit after stdin EOF; stderr: \(session.stderr)"
         )
+    }
+
+    @Test(
+        "pipe workflow: closing stdin immediately still flushes in-flight responses",
+        .enabled(if: FrameScriptBinary.locate() != nil, "build framescript first")
+    )
+    func pipeWorkflowFlushesResponses() throws {
+        let binary = try #require(FrameScriptBinary.locate())
+        let session = try SubprocessSession(binary: binary)
+        defer { session.stop() }
+
+        try session.send(RPC.initialize(id: 1))
+        try session.send(RPC.toolsCall(
+            id: 2,
+            name: "echo",
+            arguments: .object(["text": .string("pipe")])
+        ))
+        try session.closeInput()
+
+        var ids: Set<Int> = []
+        for _ in 0..<2 {
+            let line = try #require(
+                session.nextLine(timeout: 5),
+                "missing piped response; stderr: \(session.stderr)"
+            )
+            let response = try decodeLine(line)
+            if let id = response["id"]?.intValue { ids.insert(id) }
+        }
+        #expect(ids == Set([1, 2]))
+        #expect(session.waitForExit(timeout: 5), "server did not exit; stderr: \(session.stderr)")
+    }
+
+    @Test(
+        "a final unterminated line is flushed and answered",
+        .enabled(if: FrameScriptBinary.locate() != nil, "build framescript first")
+    )
+    func unterminatedFinalLineIsAnswered() throws {
+        let binary = try #require(FrameScriptBinary.locate())
+        let session = try SubprocessSession(binary: binary)
+        defer { session.stop() }
+
+        try session.sendRaw(try MCPJSON.encode(RPC.initialize(id: 1)))
+        try session.closeInput()
+
+        let line = try #require(
+            session.nextLine(timeout: 5),
+            "no response for unterminated final line; stderr: \(session.stderr)"
+        )
+        let response = try decodeLine(line)
+        #expect(response["id"]?.intValue == 1)
+        #expect(response["result"]?["protocolVersion"]?.stringValue == MCPProtocolVersion.latest)
+        #expect(session.waitForExit(timeout: 5), "server did not exit; stderr: \(session.stderr)")
     }
 
     @Test(

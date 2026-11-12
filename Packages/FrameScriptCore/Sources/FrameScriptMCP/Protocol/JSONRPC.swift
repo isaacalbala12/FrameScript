@@ -8,9 +8,17 @@ public enum JSONRPCID: Sendable, Hashable, Codable {
 
     public init?(jsonValue: JSONValue) {
         switch jsonValue {
-        case .string(let value): self = .string(value)
-        case .int(let value): self = .int(value)
-        default: return nil
+        case .string(let value):
+            self = .string(value)
+        case .int(let value):
+            self = .int(value)
+        case .double(let value):
+            // MCP ids are integers, but JSON numbers such as `1.0` are
+            // unambiguous; accept them when they are exactly integral.
+            guard let integer = Int(exactly: value) else { return nil }
+            self = .int(integer)
+        default:
+            return nil
         }
     }
 
@@ -108,6 +116,13 @@ public enum JSONRPCResponse: Sendable, Equatable {
     case result(id: JSONRPCID, value: JSONValue)
     case error(id: JSONRPCID?, error: JSONRPCErrorObject)
 
+    public var id: JSONRPCID? {
+        switch self {
+        case .result(let id, _): return id
+        case .error(let id, _): return id
+        }
+    }
+
     public var jsonValue: JSONValue {
         switch self {
         case .result(let id, let value):
@@ -139,12 +154,12 @@ public enum JSONRPCIncoming: Sendable, Equatable {
         do {
             return parse(try MCPJSON.decode(data))
         } catch {
+            // Do not leak Foundation decoder internals to the peer.
             return .invalid(
                 id: nil,
                 error: JSONRPCErrorObject(
                     code: .parseError,
-                    message: "Parse error: invalid JSON",
-                    data: .string(String(describing: error))
+                    message: "Parse error: invalid JSON"
                 )
             )
         }

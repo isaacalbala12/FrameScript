@@ -48,11 +48,33 @@ extension JSONValue {
         case .int(let value):
             return value
         case .double(let value):
-            guard value.isFinite,
-                  value.rounded() == value,
-                  value >= Double(Int.min),
-                  value <= Double(Int.max) else { return nil }
-            return Int(value)
+            guard value.isFinite, let integer = Int(exactly: value) else { return nil }
+            return integer
+        default:
+            return nil
+        }
+    }
+
+    /// Returns the path of the first non-finite double in this value, or nil.
+    /// JSON cannot represent NaN or infinity, so such values must never reach
+    /// an encoder. An empty path means the value itself is non-finite.
+    public var nonFiniteNumberPath: String? {
+        switch self {
+        case .double(let value):
+            return value.isFinite ? nil : ""
+        case .array(let values):
+            for (index, value) in values.enumerated() {
+                guard let path = value.nonFiniteNumberPath else { continue }
+                return path.isEmpty ? "[\(index)]" : "[\(index)].\(path)"
+            }
+            return nil
+        case .object(let object):
+            for key in object.keys.sorted() {
+                guard let value = object[key], let path = value.nonFiniteNumberPath else { continue }
+                if path.isEmpty { return key }
+                return path.hasPrefix("[") ? "\(key)\(path)" : "\(key).\(path)"
+            }
+            return nil
         default:
             return nil
         }

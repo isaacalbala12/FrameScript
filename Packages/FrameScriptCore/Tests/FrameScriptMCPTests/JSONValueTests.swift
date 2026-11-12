@@ -66,38 +66,95 @@ struct JSONValueTests {
         #expect(decoded["text"]?.stringValue == "line one\nline two")
     }
 
-    @Test("JSON-RPC ids accept strings and integers only")
+    @Test("refuses to encode non-finite numbers")
+    func refusesNonFiniteNumbers() {
+        do {
+            _ = try MCPJSON.encode(.object(["n": .double(.infinity)]))
+            Issue.record("expected MCPJSONError.nonFiniteNumber")
+        } catch let error as MCPJSONError {
+            #expect(error == .nonFiniteNumber(path: "n"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        let nested = JSONValue.object(["a": .array([.double(.nan)])])
+        #expect(nested.nonFiniteNumberPath == "a[0]")
+        #expect(JSONValue.double(.infinity).nonFiniteNumberPath == "")
+    }
+
+    @Test("JSON-RPC ids accept strings and integral numbers only")
     func jsonRPCIDs() {
         #expect(JSONRPCID(jsonValue: .int(7)) == .int(7))
         #expect(JSONRPCID(jsonValue: .string("abc")) == .string("abc"))
+        #expect(JSONRPCID(jsonValue: .double(7.0)) == .int(7))
         #expect(JSONRPCID(jsonValue: .null) == nil)
         #expect(JSONRPCID(jsonValue: .double(1.5)) == nil)
+        #expect(JSONRPCID(jsonValue: .double(.infinity)) == nil)
         #expect(JSONRPCID(jsonValue: .bool(true)) == nil)
         #expect(JSONRPCID(jsonValue: .array([])) == nil)
     }
 
     @Test("line framer splits arbitrary chunks")
-    func framerSplitsChunks() {
+    func framerSplitsChunks() throws {
         var framer = MCPLineFramer()
 
-        #expect(framer.append(Data("one\ntw".utf8)) == [Data("one".utf8)])
-        #expect(framer.append(Data("o\nthree\r".utf8)) == [Data("two".utf8)])
-        #expect(framer.append(Data("\n".utf8)) == [Data("three".utf8)])
-        #expect(framer.flush() == nil)
+        #expect(try framer.append(Data("one\ntw".utf8)) == [Data("one".utf8)])
+        #expect(try framer.append(Data("o\nthree\r".utf8)) == [Data("two".utf8)])
+        #expect(try framer.append(Data("\n".utf8)) == [Data("three".utf8)])
+        #expect(try framer.flush() == nil)
     }
 
     @Test("line framer flushes an unterminated final line")
-    func framerFlushesTail() {
+    func framerFlushesTail() throws {
         var framer = MCPLineFramer()
-        #expect(framer.append(Data("partial".utf8)).isEmpty)
-        #expect(framer.flush() == Data("partial".utf8))
-        #expect(framer.flush() == nil)
+        #expect(try framer.append(Data("partial".utf8)).isEmpty)
+        #expect(try framer.flush() == Data("partial".utf8))
+        #expect(try framer.flush() == nil)
     }
 
     @Test("line framer preserves empty lines")
-    func framerPreservesEmptyLines() {
+    func framerPreservesEmptyLines() throws {
         var framer = MCPLineFramer()
-        #expect(framer.append(Data("\n\n".utf8)) == [Data(), Data()])
+        #expect(try framer.append(Data("\n\n".utf8)) == [Data(), Data()])
+    }
+
+    @Test("line framer scans each byte only once")
+    func framerScansLinearly() throws {
+        var framer = MCPLineFramer()
+        let chunkSize = 64 * 1024
+        let total = 4 * 1024 * 1024
+        let chunk = Data(repeating: 0x61, count: chunkSize)
+
+        for _ in 0..<(total / chunkSize) {
+            #expect(try framer.append(chunk).isEmpty)
+        }
+
+        #expect(framer.scannedByteCount == total)
+        #expect(framer.hasBufferedBytes)
+        #expect(try framer.flush()?.count == total)
+    }
+
+    @Test("line framer enforces a maximum message size")
+    func framerEnforcesMaximumSize() {
+        var framer = MCPLineFramer(maximumMessageSize: 1024)
+        do {
+            _ = try framer.append(Data(repeating: 0x61, count: 1025))
+            Issue.record("expected MCPFramingError.messageTooLarge")
+        } catch let error as MCPFramingError {
+            #expect(error == .messageTooLarge(limit: 1024))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        var completeLine = MCPLineFramer(maximumMessageSize: 8)
+        do {
+            _ = try completeLine.append(Data("123456789\n".utf8))
+            Issue.record("expected a complete over-limit line to be rejected")
+        } catch let error as MCPFramingError {
+            #expect(error == .messageTooLarge(limit: 8))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
     }
 
     @Test("in-memory channel rejects embedded newlines")
@@ -166,5 +223,6 @@ struct JSONValueTests {
         }
         #expect(malformedID == nil)
         #expect(parseError.code == JSONRPCErrorCode.parseError.rawValue)
+        #expect(parseError.data == nil)
     }
 }

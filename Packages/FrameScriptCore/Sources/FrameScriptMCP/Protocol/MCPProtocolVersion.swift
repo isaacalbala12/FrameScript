@@ -13,9 +13,13 @@ import Foundation
 /// them (see the versioning compatibility matrix).
 ///
 /// This server therefore advertises 2025-11-25 as its latest version and also
-/// accepts older initialization-based revisions whose tool surface is
-/// identical. It deliberately does not claim 2026-07-28: it does not implement
-/// `server/discover` or per-request `_meta` metadata.
+/// accepts 2025-06-18. Those two revisions share the tool surface implemented
+/// here: `outputSchema`, `structuredContent`, tool annotations and the absence
+/// of JSON-RPC batching. 2025-03-26 (which still allowed batching) and
+/// 2024-11-05 (which lacked output schemas and structured content) are
+/// deliberately not claimed; negotiating them would promise semantics this
+/// server does not implement. It also does not claim 2026-07-28: it does not
+/// implement `server/discover` or per-request `_meta` metadata.
 public enum MCPProtocolVersion {
     /// Latest MCP revision overall (stateless, no initialize handshake).
     public static let latestPublished = "2026-07-28"
@@ -29,10 +33,9 @@ public enum MCPProtocolVersion {
     public static let latest = v2025_11_25
 
     /// Newest first. Used both for capability negotiation and documentation.
+    /// Only versions whose tool semantics this server actually implements.
     public static let supported: [String] = [
         v2025_11_25,
-        v2025_06_18,
-        v2025_03_26,
-        v2024_11_05
+        v2025_06_18
     ]
 }

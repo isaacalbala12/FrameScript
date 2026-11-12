@@ -56,12 +56,15 @@ public enum MCPToolContent: Sendable, Equatable {
 public struct MCPToolResult: Sendable, Equatable {
     public var content: [MCPToolContent]
     public var isError: Bool
-    public var structuredContent: JSONValue?
+    /// Structured results are objects by definition. Tools with an
+    /// `outputSchema` must provide one when the call succeeds; the server
+    /// validates it before writing the response.
+    public var structuredContent: [String: JSONValue]?
 
     public init(
         content: [MCPToolContent],
         isError: Bool = false,
-        structuredContent: JSONValue? = nil
+        structuredContent: [String: JSONValue]? = nil
     ) {
         self.content = content
         self.isError = isError
@@ -72,12 +75,32 @@ public struct MCPToolResult: Sendable, Equatable {
         MCPToolResult(content: [.text(text)], isError: isError)
     }
 
+    /// Builds a result with human-readable text plus the serialized JSON as a
+    /// second text block, as MCP recommends for structured results.
+    public static func structured(
+        text: String,
+        structuredContent: [String: JSONValue],
+        isError: Bool = false
+    ) -> MCPToolResult {
+        var content: [MCPToolContent] = [.text(text)]
+        if let data = try? MCPJSON.encode(.object(structuredContent)),
+           let serialized = String(data: data, encoding: .utf8),
+           serialized != text {
+            content.append(.text(serialized))
+        }
+        return MCPToolResult(
+            content: content,
+            isError: isError,
+            structuredContent: structuredContent
+        )
+    }
+
     public var jsonValue: JSONValue {
         var object: [String: JSONValue] = [
             "content": .array(content.map(\.jsonValue)),
             "isError": .bool(isError)
         ]
-        if let structuredContent { object["structuredContent"] = structuredContent }
+        if let structuredContent { object["structuredContent"] = .object(structuredContent) }
         return .object(object)
     }
 }

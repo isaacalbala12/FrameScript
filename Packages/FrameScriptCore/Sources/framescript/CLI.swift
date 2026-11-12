@@ -46,8 +46,7 @@ enum FrameScriptCLI {
                 write("framescript: unexpected argument '\(extra[0])' for mcp\n", to: .standardError)
                 return 2
             }
-            await runMCP()
-            return 0
+            return await runMCP()
 
         default:
             write("framescript: unknown command '\(command)'\n", to: .standardError)
@@ -56,12 +55,18 @@ enum FrameScriptCLI {
         }
     }
 
-    private static func runMCP() async {
-        let server = MCPServer(
-            registry: DemoTools.registry(),
-            channel: MCPStdioChannel()
-        )
-        await server.run()
+    private static func runMCP() async -> Int32 {
+        do {
+            let server = MCPServer(
+                registry: try DemoTools.registry(),
+                channel: MCPStdioChannel()
+            )
+            await server.run()
+            return 0
+        } catch {
+            write("framescript: invalid tool registry: \(error)\n", to: .standardError)
+            return 1
+        }
     }
 
     private static func write(_ string: String, to handle: FileHandle) {

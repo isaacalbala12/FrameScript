@@ -90,12 +90,14 @@ final class MCPTestHarness {
 
     init(
         registry: MCPToolRegistry,
-        supportedVersions: [String] = MCPProtocolVersion.supported
+        supportedVersions: [String] = MCPProtocolVersion.supported,
+        shutdownGracePeriod: Duration = .seconds(1)
     ) {
         let channel = MCPInMemoryChannel()
         self.channel = channel
         let configuration = MCPServerConfiguration(
             supportedProtocolVersions: supportedVersions,
+            shutdownGracePeriod: shutdownGracePeriod,
             log: MCPLog.disabled
         )
         let server = MCPServer(registry: registry, channel: channel, configuration: configuration)
@@ -141,11 +143,13 @@ final class MCPTestHarness {
 func withHarness<T>(
     _ registry: MCPToolRegistry,
     supportedVersions: [String] = MCPProtocolVersion.supported,
+    shutdownGracePeriod: Duration = .seconds(1),
     _ body: (MCPTestHarness) async throws -> T
 ) async rethrows -> T {
     let harness = MCPTestHarness(
         registry: registry,
-        supportedVersions: supportedVersions
+        supportedVersions: supportedVersions,
+        shutdownGracePeriod: shutdownGracePeriod
     )
     defer { harness.shutdownNow() }
     return try await body(harness)
@@ -163,8 +167,8 @@ actor CancellationProbe {
 struct BoomError: Error, Sendable {}
 
 enum TestTools {
-    static func standard() -> MCPToolRegistry {
-        MCPToolRegistry([
+    static func standard() throws -> MCPToolRegistry {
+        try MCPToolRegistry([
             echoTool(),
             MCPTool(
                 name: "framescript_version",
@@ -184,22 +188,16 @@ enum TestTools {
                 ]),
                 annotations: MCPToolAnnotations(title: "Version", readOnlyHint: true),
                 handler: { _ in
-                    MCPToolResult(
-                        content: [.text("test-version")],
-                        structuredContent: .object(["version": .string("test-version")])
+                    MCPToolResult.structured(
+                        text: "test-version",
+                        structuredContent: ["version": .string("test-version")]
                     )
                 }
             ),
             MCPTool(
                 name: "needs_text",
-                description: "Requires a text argument.",
-                inputSchema: .object([
-                    "type": .string("object"),
-                    "properties": .object([
-                        "text": .object(["type": .string("string")])
-                    ]),
-                    "required": .array([.string("text")])
-                ]),
+                description: "Validates its own arguments with the helper API.",
+                inputSchema: .object(["type": .string("object")]),
                 handler: { arguments in
                     let args = try MCPArguments(arguments)
                     return .text(try args.requiredString("text"))
@@ -228,6 +226,56 @@ enum TestTools {
                 description: "Throws an internal error.",
                 inputSchema: .object(["type": .string("object")]),
                 handler: { _ in throw MCPToolError.internalError("internal boom") }
+            ),
+            MCPTool(
+                name: "bad_output_infinity",
+                description: "Returns a non-finite number in structuredContent.",
+                inputSchema: .object(["type": .string("object")]),
+                outputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "value": .object(["type": .string("number")])
+                    ]),
+                    "required": .array([.string("value")])
+                ]),
+                handler: { _ in
+                    MCPToolResult(
+                        content: [.text("bad")],
+                        structuredContent: ["value": .double(.infinity)]
+                    )
+                }
+            ),
+            MCPTool(
+                name: "bad_output_schema",
+                description: "Returns structuredContent that violates outputSchema.",
+                inputSchema: .object(["type": .string("object")]),
+                outputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "n": .object(["type": .string("integer")])
+                    ]),
+                    "required": .array([.string("n")]),
+                    "additionalProperties": .bool(false)
+                ]),
+                handler: { _ in
+                    MCPToolResult(
+                        content: [.text("bad")],
+                        structuredContent: ["n": .string("not-an-integer")]
+                    )
+                }
+            ),
+            MCPTool(
+                name: "missing_structured",
+                description: "Declares outputSchema but omits structuredContent.",
+                inputSchema: .object(["type": .string("object")]),
+                outputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "n": .object(["type": .string("integer")])
+                    ]),
+                    "required": .array([.string("n")])
+                ]),
+                handler: { _ in .text("no structured content") }
             )
         ])
     }
@@ -271,9 +319,9 @@ enum TestTools {
                 let text = try args.requiredString("text")
                 let uppercase = try args.optionalBool("uppercase") ?? false
                 let output = uppercase ? text.uppercased() : text
-                return MCPToolResult(
-                    content: [.text(output)],
-                    structuredContent: .object(["text": .string(output)])
+                return MCPToolResult.structured(
+                    text: output,
+                    structuredContent: ["text": .string(output)]
                 )
             }
         )

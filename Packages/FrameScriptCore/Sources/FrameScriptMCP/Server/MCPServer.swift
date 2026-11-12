@@ -44,7 +44,7 @@ public final class MCPServer: Sendable {
             guard let data else { break }
             await session.handleIncoming(data)
         }
-        await session.shutdown()
+        await session.drain(gracePeriod: configuration.shutdownGracePeriod)
         configuration.log("server stopped")
     }
 }
@@ -320,7 +320,25 @@ private actor MCPSession {
         }
 
         do {
+            try JSONSchemaValidator.validate(
+                arguments,
+                against: tool.inputSchema,
+                path: "arguments"
+            )
+        } catch let error as JSONSchemaValidationError {
+            throw MCPProtocolError.invalidParams("Invalid params: \(error.description)")
+        } catch {
+            throw MCPProtocolError.invalidParams("Invalid params: \(error)")
+        }
+
+        do {
             let toolResult = try await tool.handler(arguments)
+            if let issue = validateToolResult(toolResult, tool: tool) {
+                return MCPToolResult.text(
+                    "Tool '\(name)' returned an invalid result: \(issue)",
+                    isError: true
+                ).jsonValue
+            }
             return toolResult.jsonValue
         } catch is CancellationError {
             throw CancellationError()
@@ -347,6 +365,34 @@ private actor MCPSession {
         }
     }
 
+    /// Validates a successful tool result before it is written. This prevents
+    /// the server from emitting spec-invalid or unencodable MCP.
+    private func validateToolResult(_ result: MCPToolResult, tool: MCPTool) -> String? {
+        if let path = result.jsonValue.nonFiniteNumberPath {
+            return "non-finite number at \(path.isEmpty ? "<root>" : path)"
+        }
+
+        guard let outputSchema = tool.outputSchema else { return nil }
+
+        if let structuredContent = result.structuredContent {
+            do {
+                try JSONSchemaValidator.validate(
+                    .object(structuredContent),
+                    against: outputSchema,
+                    path: "structuredContent"
+                )
+            } catch let error as JSONSchemaValidationError {
+                return error.description
+            } catch {
+                return String(describing: error)
+            }
+        } else if !result.isError {
+            return "outputSchema is declared but structuredContent is missing"
+        }
+
+        return nil
+    }
+
     // MARK: Outbound
 
     private func send(_ response: JSONRPCResponse) async {
@@ -354,21 +400,59 @@ private actor MCPSession {
             let data = try MCPJSON.encode(response.jsonValue)
             try await channel.send(data)
         } catch {
-            configuration.log("failed to send response: \(error)")
+            configuration.log("failed to encode or send response: \(error)")
+            await sendFallbackInternalError(id: response.id)
         }
     }
 
-    func shutdown() async {
-        let slots = Array(inFlight.values)
-        inFlight.removeAll()
-        for slot in slots { slot.cancel() }
-        for slot in slots {
-            if let task = slot.task {
-                await task.value
-            }
+    /// The fallback contains only strings and integers, so it is always
+    /// encodable. It guarantees a request never ends in silence even if a tool
+    /// produced an unencodable value.
+    private func sendFallbackInternalError(id: JSONRPCID?) async {
+        let response = JSONRPCResponse.error(
+            id: id,
+            error: JSONRPCErrorObject(
+                code: .internalError,
+                message: "Internal error: response could not be encoded"
+            )
+        )
+        do {
+            let data = try MCPJSON.encode(response.jsonValue)
+            try await channel.send(data)
+        } catch {
+            configuration.log("failed to send fallback internal error: \(error)")
         }
-        if !slots.isEmpty {
-            configuration.log("cancelled \(slots.count) in-flight request(s) at shutdown")
+    }
+
+    /// On stdin EOF: let in-flight requests finish and flush their responses,
+    /// then cancel whatever remains after the grace period. A second bounded
+    /// wait prevents a cancellation-ignoring tool from hanging process exit.
+    func drain(gracePeriod: Duration) async {
+        guard !inFlight.isEmpty else { return }
+
+        let naturalDeadline = ContinuousClock.now + gracePeriod
+        while !inFlight.isEmpty, ContinuousClock.now < naturalDeadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        guard !inFlight.isEmpty else { return }
+
+        configuration.log(
+            "shutdown grace expired with \(inFlight.count) in-flight request(s); cancelling"
+        )
+        let slots = Array(inFlight.values)
+        for slot in slots { slot.cancel() }
+
+        let cancellationDeadline = ContinuousClock.now + .milliseconds(500)
+        while !inFlight.isEmpty, ContinuousClock.now < cancellationDeadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        if !inFlight.isEmpty {
+            configuration.log(
+                "\(inFlight.count) request(s) still running after cancellation; exiting"
+            )
+            inFlight.removeAll()
         }
     }
 

@@ -1,10 +1,26 @@
 import Foundation
 
+public enum MCPJSONError: Error, Sendable, Equatable, CustomStringConvertible, LocalizedError {
+    case nonFiniteNumber(path: String)
+
+    public var description: String {
+        switch self {
+        case .nonFiniteNumber(let path):
+            return "JSON cannot encode a non-finite number at \(path)"
+        }
+    }
+
+    public var errorDescription: String? { description }
+}
+
 /// JSON coding shared by the MCP transports and the server.
 public enum MCPJSON {
     /// Compact, deterministic JSON. No pretty printing: the stdio transport is
     /// newline-delimited and a message must not contain embedded newlines.
     public static func encode(_ value: JSONValue) throws -> Data {
+        if let path = value.nonFiniteNumberPath {
+            throw MCPJSONError.nonFiniteNumber(path: path.isEmpty ? "<root>" : path)
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(value)
