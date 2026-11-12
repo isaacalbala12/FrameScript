@@ -4,12 +4,18 @@ import Testing
 
 @Suite("Shot list CSV")
 struct ShotListCSVTests {
-    private func settings(bom: Bool = true, fps: FrameRate = .fps25, dropFrame: Bool = false) -> ExportSettings {
+    private func settings(
+        bom: Bool = false,
+        formulas: Bool = false,
+        fps: FrameRate = .fps25,
+        dropFrame: Bool = false
+    ) -> ExportSettings {
         ExportSettings(
             projectName: "Demo",
             fps: fps,
             dropFrame: dropFrame,
-            csvIncludesByteOrderMark: bom
+            csvIncludesByteOrderMark: bom,
+            csvEscapesFormulas: formulas
         )
     }
 
@@ -45,15 +51,40 @@ struct ShotListCSVTests {
             + "00,\"Gancho, ¿por qué?\",01:00:12:00,\"Decir \"\"esto\"\" y girar\",OBS,grabado,\"nota,\ncon salto\"\r\n")
     }
 
-    @Test("Writes a UTF-8 BOM by default and can omit it")
+    @Test("Writes no BOM by default and can add one")
     func byteOrderMark() {
         let scenes = [ExportScene(title: "A", start: 0, duration: 10)]
+        let defaultData = ShotListCSV.makeData(scenes: scenes, settings: settings(bom: false))
         let withBOM = ShotListCSV.makeData(scenes: scenes, settings: settings(bom: true))
-        let withoutBOM = ShotListCSV.makeData(scenes: scenes, settings: settings(bom: false))
 
+        #expect(Array(defaultData.prefix(3)) == Array("Esc".utf8))
         #expect(Array(withBOM.prefix(3)) == [0xEF, 0xBB, 0xBF])
-        #expect(Array(withoutBOM.prefix(3)) == Array("Esc".utf8))
         #expect(String(data: withBOM.dropFirst(3), encoding: .utf8)?.hasPrefix("Escena,") == true)
+    }
+
+    @Test("Formula escaping is opt-in")
+    func formulaEscaping() {
+        let scenes = [
+            ExportScene(
+                title: "A",
+                start: 0,
+                duration: 10,
+                shots: [ExportShot(summary: "=SUM(A1:A2)")]
+            ),
+        ]
+
+        let plain = ShotListCSV.make(scenes: scenes, settings: settings(formulas: false))
+        let escaped = ShotListCSV.make(scenes: scenes, settings: settings(formulas: true))
+
+        #expect(plain.contains(",=SUM(A1:A2),"))
+        #expect(escaped.contains(",'=SUM(A1:A2),"))
+    }
+
+    @Test("Sanitises non-CSV controls and quotes tabs")
+    func controlCharacters() {
+        #expect(ShotListCSV.escape("a\tb") == "\"a\tb\"")
+        #expect(ShotListCSV.escape("a\u{0001}b") == "a b")
+        #expect(ShotListCSV.escape("a\u{001B}b") == "a b")
     }
 
     @Test("Only shots become rows")

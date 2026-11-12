@@ -11,8 +11,43 @@ public struct FrameRate: Sendable, Hashable, Codable, CustomStringConvertible {
 
     public init(numerator: Int, denominator: Int) {
         precondition(numerator > 0 && denominator > 0, "Frame rate must be positive")
-        self.numerator = numerator
-        self.denominator = denominator
+        let divisor = Self.greatestCommonDivisor(numerator, denominator)
+        self.numerator = numerator / divisor
+        self.denominator = denominator / divisor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case numerator
+        case denominator
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let numerator = try container.decode(Int.self, forKey: .numerator)
+        let denominator = try container.decode(Int.self, forKey: .denominator)
+        guard numerator > 0, denominator > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .denominator,
+                in: container,
+                debugDescription: "Frame rate must be positive"
+            )
+        }
+        self.init(numerator: numerator, denominator: denominator)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(numerator, forKey: .numerator)
+        try container.encode(denominator, forKey: .denominator)
+    }
+
+    private static func greatestCommonDivisor(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            (x, y) = (y, x % y)
+        }
+        return x == 0 ? 1 : x
     }
 
     public static let fps23_976 = FrameRate(numerator: 24_000, denominator: 1_001)
@@ -76,9 +111,38 @@ public struct Timecode: Sendable, Hashable, Codable, Comparable, CustomStringCon
     public static let zero = Timecode(frames: 0)
 
     /// Rounds to the nearest frame, clamped at zero.
+    ///
+    /// Non-finite or out-of-range input (for example `.infinity`) becomes zero
+    /// instead of trapping.
     public init(seconds: TimeInterval, rate: FrameRate) {
         let value = seconds * rate.framesPerSecond
-        self.frames = max(0, Int(value.rounded()))
+        guard value.isFinite, value >= 0, let rounded = Int(exactly: value.rounded()) else {
+            self.frames = 0
+            return
+        }
+        self.frames = max(0, rounded)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case frames
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let frames = try container.decode(Int.self, forKey: .frames)
+        guard frames >= 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .frames,
+                in: container,
+                debugDescription: "Timecode cannot be negative"
+            )
+        }
+        self.init(frames: frames)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(frames, forKey: .frames)
     }
 
     /// 01:00:00:00 as Resolve starts new timelines (01:00:00;00 at 29.97 DF).
@@ -210,8 +274,9 @@ public enum DurationFormat {
     }
 
     public static func clock(frames: Int, rate: FrameRate) -> String {
-        // Floor so a timestamp never points past the chapter it describes.
-        let seconds = Int((Double(frames) * Double(rate.denominator) / Double(rate.numerator)).rounded(.down))
+        // Display timestamps round to the nearest second: 35964 frames at
+        // 29.97 is 1199.9994 s and must print 20:00, not 19:59.
+        let seconds = Int((Double(frames) * Double(rate.denominator) / Double(rate.numerator)).rounded())
         return clock(seconds: seconds)
     }
 

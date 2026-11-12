@@ -7,8 +7,17 @@ import Foundation
 /// The DTD requires markers to live on a story element, so they go inside the
 /// `<gap>`; a `<marker>` directly under `<sequence>` would not validate.
 ///
+/// Offset rule (Apple's FCPXML DTD): "in a sequence with a 'tcStart' of
+/// '3600s', a child element that starts 30 seconds from the start has an
+/// 'offset' of '3630s'". The gap therefore starts at `tcStart`, and markers
+/// are placed at `gap.offset + marker.start - gap.start`.
+///
 /// Best-effort caveat: some Resolve versions import the timeline but drop or
 /// blue-wash FCPXML markers. The EDL is the authoritative marker path.
+///
+/// The format resource is 1920×1080 stereo 48 kHz, matching the documented
+/// ZV-E10/1080p delivery workflow. A vertical or 4K project needs a different
+/// Apple format name, which this pack does not guess.
 public enum ResolveFCPXML {
     public static func make(scenes: [ExportScene], settings: ExportSettings) -> String {
         let projectName = XMLText.attribute(settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -32,7 +41,7 @@ public enum ResolveFCPXML {
             "      <project name=\"\(projectName)\">",
             "        <sequence format=\"r1\" duration=\"\(sequenceDuration)\" tcStart=\"\(tcStart)\" tcFormat=\"\(tcFormat)\" audioLayout=\"stereo\" audioRate=\"48k\">",
             "          <spine>",
-            "            <gap name=\"Timeline\" offset=\"0s\" duration=\"\(sequenceDuration)\" start=\"0s\">",
+            "            <gap name=\"Timeline\" offset=\"\(tcStart)\" duration=\"\(sequenceDuration)\" start=\"0s\">",
         ]
 
         for marker in markers {

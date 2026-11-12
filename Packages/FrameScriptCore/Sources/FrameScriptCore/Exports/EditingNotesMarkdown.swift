@@ -23,7 +23,9 @@ public enum EditingNotesMarkdown {
             return lines.joined(separator: "\n")
         }
 
-        let allMarkers = ExportMarkerResolver.markers(scenes: scenes, settings: settings)
+        // Notes are a human-readable safety net: keep every raw cue, even ones
+        // that the EDL/FCPXML deduplicates into a scene marker's note.
+        let allMarkers = ExportMarkerResolver.allMarkers(scenes: scenes, settings: settings)
         var markersByScene: [Int: [ResolvedMarker]] = [:]
         for marker in allMarkers where marker.kind != .scene {
             markersByScene[marker.sceneIndex, default: []].append(marker)
@@ -33,7 +35,8 @@ public enum EditingNotesMarkdown {
             let index = entry.offset
             let scene = entry.element
             let number = String(format: "%02d", position)
-            let title = ExportTextSanitizer.collapseWhitespace(scene.title.isEmpty ? "Escena" : scene.title)
+            let cleanedTitle = ExportTextSanitizer.collapseWhitespace(scene.title)
+            let title = cleanedTitle.isEmpty ? "Escena" : cleanedTitle
             let start = DurationFormat.clock(seconds: max(0, scene.start), rate: settings.fps)
             let startFrame = Timecode(seconds: max(0, scene.start), rate: settings.fps).frames
             let absoluteStart = Timecode(frames: settings.startTimecode.frames + startFrame)
@@ -51,7 +54,7 @@ public enum EditingNotesMarkdown {
             if let excerpt = scene.scriptExcerpt?.trimmingCharacters(in: .whitespacesAndNewlines),
                !excerpt.isEmpty {
                 lines.append("**GUION**")
-                for line in excerpt.split(separator: "\n", omittingEmptySubsequences: false) {
+                for line in normalizedLines(excerpt) {
                     lines.append("> \(line)")
                 }
                 lines.append("")
@@ -61,7 +64,7 @@ public enum EditingNotesMarkdown {
                 lines.append("**PLAN DE IMAGEN**")
                 for shot in scene.shots {
                     var item = "- [\(shot.status.displayName)] \(shot.source.displayName) · \(shot.summary)"
-                    let note = shot.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note = ExportTextSanitizer.collapseWhitespace(shot.notes)
                     if !note.isEmpty {
                         item += " — \(note)"
                     }
@@ -72,17 +75,13 @@ public enum EditingNotesMarkdown {
 
             if !scene.editingNotes.isEmpty {
                 lines.append("**MONTAJE**")
-                for note in scene.editingNotes {
-                    lines.append("- \(note)")
-                }
+                appendBullets(scene.editingNotes, to: &lines)
                 lines.append("")
             }
 
             if !scene.warnings.isEmpty {
                 lines.append("**AVISOS**")
-                for warning in scene.warnings {
-                    lines.append("- \(warning)")
-                }
+                appendBullets(scene.warnings, to: &lines)
                 lines.append("")
             }
 
@@ -98,7 +97,7 @@ public enum EditingNotesMarkdown {
                     let frame = Timecode(frames: settings.startTimecode.frames + marker.frame)
                     let timecode = frame.string(rate: settings.fps, dropFrame: settings.effectiveDropFrame)
                     var item = "- \(timecode) · \(marker.name) (\(marker.color.spanishName))"
-                    let note = marker.note.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note = ExportTextSanitizer.collapseWhitespace(marker.note)
                     if !note.isEmpty {
                         item += " — \(note)"
                     }
@@ -109,5 +108,27 @@ public enum EditingNotesMarkdown {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// Splits on CRLF, LF and CR so a Windows-imported script does not leave
+    /// stray carriage returns in the blockquote.
+    private static func normalizedLines(_ value: String) -> [String] {
+        value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+    }
+
+    /// Emits one bullet per non-empty line. A multi-line note keeps its
+    /// content instead of breaking the list or being flattened silently.
+    private static func appendBullets(_ values: [String], to lines: inout [String]) {
+        for value in values {
+            for line in normalizedLines(value) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+                lines.append("- \(trimmed)")
+            }
+        }
     }
 }

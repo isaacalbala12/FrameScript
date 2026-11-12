@@ -45,23 +45,25 @@ struct ResolveMarkerEDLTests {
 
         let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
 
-        #expect(edl == """
+        let expectedLF = """
         TITLE: AC EVO 0.9
         FCM: NON-DROP FRAME
 
         001  001      V     C        01:00:00:00 01:00:00:01 01:00:00:00 01:00:00:01
-         |C:ResolveColorBlue |M:00 Gancho |D:1
+         Inicio de escena |C:ResolveColorBlue |M:00 Gancho |D:1
 
         002  001      V     C        01:00:12:00 01:00:12:01 01:00:12:00 01:00:12:01
-         |C:ResolveColorYellow |M:OBS Special Events |D:1
+         Gameplay |C:ResolveColorYellow |M:OBS Special Events |D:1
 
         003  001      V     C        01:00:45:00 01:00:45:01 01:00:45:00 01:00:45:01
-         |C:ResolveColorBlue |M:01 El verdadero problema |D:1
+         Escena con re-hook |C:ResolveColorBlue |M:01 El verdadero problema |D:1
 
         004  001      V     C        01:00:45:01 01:00:45:02 01:00:45:01 01:00:45:02
-         |C:ResolveColorPurple |M:01 Re-hook El verdadero problema |D:1
+         Punto de re-enganche |C:ResolveColorPurple |M:01 Re-hook El verdadero problema |D:1
 
-        """)
+        """
+        #expect(edl == expectedLF.replacingOccurrences(of: "\n", with: "\r\n"))
+        #expect(!edl.replacingOccurrences(of: "\r\n", with: "").contains("\n"))
     }
 
     @Test("29.97 drop frame uses semicolons and FCM: DROP FRAME")
@@ -146,12 +148,12 @@ struct ResolveMarkerEDLTests {
         let long = String(repeating: "a", count: 100)
         let scenes = [ExportScene(title: long, start: 0, duration: 20)]
         let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
-        let markerLine = edl.split(separator: "\n").first { $0.contains("|M:") }
+        let markerLine = edl.components(separatedBy: "\r\n").first { $0.contains("|M:") }
         let name = markerLine?
-            .split(separator: "|")
-            .first { $0.hasPrefix("M:") }?
-            .dropFirst(2)
-            .trimmingCharacters(in: .whitespaces) ?? ""
+            .components(separatedBy: "|M:")
+            .last?
+            .components(separatedBy: " |D:")
+            .first ?? ""
         #expect(name.count == 60)
     }
 
@@ -169,6 +171,8 @@ struct ResolveMarkerEDLTests {
         ]
         let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
         #expect(edl.contains("|M:Rango |D:125"))
+        // Resolve writes a one-frame event and carries the range in |D:.
+        #expect(edl.contains("01:00:05:00 01:00:05:01 01:00:05:00 01:00:05:01"))
     }
 
     @Test("Offsets record timecode by the configured start time")
@@ -200,8 +204,8 @@ struct ResolveMarkerEDLTests {
 
         let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
         let names = edl
-            .split(separator: "\n")
-            .filter { $0.hasPrefix(" |C:") }
+            .components(separatedBy: "\r\n")
+            .filter { $0.contains("|C:") }
             .compactMap { line -> String? in
                 guard let range = line.range(of: "|M:") else { return nil }
                 let rest = line[range.upperBound...]
@@ -213,10 +217,74 @@ struct ResolveMarkerEDLTests {
         #expect(edl.contains("004  001"))
     }
 
+    @Test("Writes marker notes before the |C directive")
+    func markerNotes() {
+        let scenes = [
+            ExportScene(
+                title: "Uno",
+                start: 0,
+                duration: 30,
+                markers: [
+                    ExportMarker(
+                        offset: 5,
+                        name: "Cue",
+                        note: "Gameplay | menú\nsegunda línea",
+                        color: .yellow
+                    ),
+                ]
+            ),
+        ]
+
+        let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
+
+        #expect(edl.contains(" Gameplay / menu segunda linea |C:ResolveColorYellow |M:Cue |D:1"))
+        #expect(!edl.contains("Gameplay |"))
+    }
+
+    @Test("Merges colliding markers so each frame has one event")
+    func mergesMarkerCollisions() {
+        let scenes = [
+            ExportScene(
+                title: "Uno",
+                start: 0,
+                duration: 30,
+                markers: [
+                    ExportMarker(offset: 0, name: "Cue al inicio", note: "B-roll", color: .green),
+                    ExportMarker(offset: 0, name: "Segundo cue", note: "", color: .pink),
+                ]
+            ),
+        ]
+
+        let edl = ResolveMarkerEDL.make(scenes: scenes, settings: settings())
+        let events = edl.components(separatedBy: "\r\n").filter { line in
+            let prefix = line.prefix(3)
+            return prefix.count == 3 && prefix.allSatisfy(\.isNumber)
+        }
+        let recordIns = events.compactMap { line -> String? in
+            let parts = line.split(whereSeparator: { $0 == " " })
+            return parts.count >= 8 ? String(parts[6]) : nil
+        }
+
+        #expect(recordIns == ["01:00:00:00"])
+        #expect(edl.contains("Cue al inicio: B-roll"))
+        #expect(edl.contains("Segundo cue"))
+        let warnings = ResolveMarkerEDL.warnings(scenes: scenes, settings: settings())
+        #expect(warnings.filter { $0.kind == .duplicateFrame }.count == 2)
+    }
+
+    @Test("Warns when the marker count exceeds the CMX 999-event limit")
+    func tooManyEvents() {
+        let scenes = (0..<1_000).map { index in
+            ExportScene(title: "S\(index)", start: Double(index) * 2, duration: 2)
+        }
+        let warnings = ResolveMarkerEDL.warnings(scenes: scenes, settings: settings())
+        #expect(warnings.contains { $0.kind == .tooManyEvents })
+    }
+
     @Test("Empty scene list produces a valid header")
     func emptyScenes() {
         let edl = ResolveMarkerEDL.make(scenes: [], settings: settings(project: "Test"))
-        #expect(edl == "TITLE: Test\nFCM: NON-DROP FRAME\n")
+        #expect(edl == "TITLE: Test\r\nFCM: NON-DROP FRAME\r\n")
     }
 
     @Test("All 16 Resolve colours are available and none is 'Orange'")

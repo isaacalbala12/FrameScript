@@ -225,22 +225,99 @@ struct YouTubeChaptersTests {
         """)
     }
 
-    @Test("Is frame-accurate at 29.97: 299 frames is shorter than 10 s")
+    @Test("Uses displayed seconds for the 10 s minimum at 29.97")
     func frameAccurateMinimum() {
-        // 9.98 s at 29.97 rounds to 299 frames, one frame short of 10 s.
-        let scenes = [
+        // 9.4 s displays as 0:09, so it is one second short and must merge.
+        let shortScenes = [
+            scene("A", start: 0, duration: 9.4),
+            scene("B", start: 9.4, duration: 20),
+            scene("C", start: 29.4, duration: 20),
+        ]
+        let short = YouTubeChapters.make(scenes: shortScenes, rate: .fps29_97)
+        #expect(short.text == """
+        0:00 A
+        0:29 C
+        """)
+        #expect(short.warnings.contains { $0.kind == .shortSceneMerged && $0.sceneIndex == 0 })
+
+        // 9.98 s displays as 0:10, which YouTube accepts as a 10 s chapter.
+        let exactScenes = [
             scene("A", start: 0, duration: 9.98),
             scene("B", start: 9.98, duration: 20),
             scene("C", start: 29.98, duration: 20),
         ]
+        let exact = YouTubeChapters.make(scenes: exactScenes, rate: .fps29_97)
+        #expect(exact.text == """
+        0:00 A
+        0:10 B
+        0:30 C
+        """)
+        #expect(!exact.warnings.contains { $0.kind == .shortSceneMerged })
+        #expect(exact.isValidForYouTube)
+    }
 
-        let result = YouTubeChapters.make(scenes: scenes, rate: .fps29_97)
+    @Test("Displays 0/60/120/600/1200 s correctly at every frame rate")
+    func roundTimestampsAtEveryRate() {
+        let starts: [TimeInterval] = [0, 60, 120, 600, 1_200]
+        let titles = ["Uno", "Dos", "Tres", "Cuatro", "Cinco"]
+        let expected = """
+        0:00 Uno
+        1:00 Dos
+        2:00 Tres
+        10:00 Cuatro
+        20:00 Cinco
+        """
+
+        for rate in FrameRate.all {
+            let scenes = zip(starts, titles).map { start, title in
+                scene(title, start: start, duration: 60)
+            }
+            let result = YouTubeChapters.make(scenes: scenes, rate: rate)
+            #expect(result.text == expected, "rate \(rate)")
+            #expect(result.chapters.map(\.startSeconds) == [0, 60, 120, 600, 1_200], "rate \(rate)")
+            #expect(result.isValidForYouTube, "rate \(rate)")
+        }
+    }
+
+    @Test("59.94 keeps ordinary 10-second chapters")
+    func keepsTenSecondChaptersAt5994() {
+        let scenes = [
+            scene("A", start: 0, duration: 10),
+            scene("B", start: 10, duration: 10),
+            scene("C", start: 20, duration: 10),
+            scene("D", start: 30, duration: 10),
+        ]
+
+        let result = YouTubeChapters.make(scenes: scenes, rate: .fps59_94)
 
         #expect(result.text == """
         0:00 A
-        0:29 C
+        0:10 B
+        0:20 C
+        0:30 D
         """)
-        #expect(result.warnings.contains { $0.kind == .shortSceneMerged && $0.sceneIndex == 0 })
+        #expect(result.isValidForYouTube)
+        #expect(!result.warnings.contains { $0.kind == .shortSceneMerged })
+    }
+
+    @Test("Drops scenes whose timestamps collide after rounding")
+    func dropsRoundedTimestampCollisions() {
+        let scenes = [
+            scene("A", start: 0, duration: 60),
+            scene("B", start: 60.1, duration: 20),
+            scene("C", start: 60.4, duration: 20),
+            scene("D", start: 90, duration: 20),
+        ]
+
+        let result = YouTubeChapters.make(scenes: scenes, rate: .fps25)
+
+        // Both B and C print 1:00; C is dropped and reported.
+        #expect(result.text == """
+        0:00 A
+        1:00 B
+        1:30 D
+        """)
+        #expect(result.warnings.contains { $0.kind == .duplicateTimestamp && $0.sceneIndex == 2 })
     }
 
     @Test("Returns an empty list for no scenes")

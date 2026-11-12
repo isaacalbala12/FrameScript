@@ -192,16 +192,22 @@ public enum ExportShotStatus: String, Sendable, Hashable, Codable, CaseIterable 
 /// Timeline and file settings for the Resolve / YouTube pack.
 public struct ExportSettings: Sendable, Hashable, Codable {
     public var projectName: String
-    public var fps: FrameRate
-    public var dropFrame: Bool
+    /// The frame rate is fixed at init so the default start timecode cannot go
+    /// stale. Use `with(fps:…)` to change it.
+    public let fps: FrameRate
+    public let dropFrame: Bool
     /// Absolute timeline timecode where frame 0 sits.
     public var startTimecode: Timecode
     /// Transliterate marker names and the EDL title to ASCII.
     public var asciiSafeNames: Bool
     /// Also emit FCPXML `chapter-marker` elements. Resolve may ignore them.
     public var includeChapterMarkers: Bool
-    /// Prefix the CSV with a UTF-8 byte-order mark.
+    /// Prefix the CSV with a UTF-8 byte-order mark. Off by default so the
+    /// output stays strict RFC 4180; turn it on for Excel.
     public var csvIncludesByteOrderMark: Bool
+    /// Prefix cells starting with = + - @ with an apostrophe so spreadsheet
+    /// apps do not evaluate them as formulas. Off by default to preserve data.
+    public var csvEscapesFormulas: Bool
 
     public init(
         projectName: String = "FrameScript",
@@ -210,7 +216,8 @@ public struct ExportSettings: Sendable, Hashable, Codable {
         startTimecode: Timecode? = nil,
         asciiSafeNames: Bool = true,
         includeChapterMarkers: Bool = false,
-        csvIncludesByteOrderMark: Bool = true
+        csvIncludesByteOrderMark: Bool = false,
+        csvEscapesFormulas: Bool = false
     ) {
         self.projectName = projectName
         self.fps = fps
@@ -219,6 +226,29 @@ public struct ExportSettings: Sendable, Hashable, Codable {
         self.asciiSafeNames = asciiSafeNames
         self.includeChapterMarkers = includeChapterMarkers
         self.csvIncludesByteOrderMark = csvIncludesByteOrderMark
+        self.csvEscapesFormulas = csvEscapesFormulas
+    }
+
+    /// Returns a copy with a new rate. When the rate changes, the default
+    /// 01:00:00:00 start is recomputed unless an explicit one is supplied.
+    public func with(
+        fps newFPS: FrameRate? = nil,
+        dropFrame newDropFrame: Bool? = nil,
+        startTimecode newStartTimecode: Timecode? = nil
+    ) -> ExportSettings {
+        let rateChanged = (newFPS != nil && newFPS != fps)
+            || (newDropFrame != nil && newDropFrame != dropFrame)
+        let resolvedStart = newStartTimecode ?? (rateChanged ? nil : startTimecode)
+        return ExportSettings(
+            projectName: projectName,
+            fps: newFPS ?? fps,
+            dropFrame: newDropFrame ?? dropFrame,
+            startTimecode: resolvedStart,
+            asciiSafeNames: asciiSafeNames,
+            includeChapterMarkers: includeChapterMarkers,
+            csvIncludesByteOrderMark: csvIncludesByteOrderMark,
+            csvEscapesFormulas: csvEscapesFormulas
+        )
     }
 
     /// Drop frame is silently disabled for rates that do not support it.
@@ -247,8 +277,8 @@ public struct ExportSettings: Sendable, Hashable, Codable {
 public struct ResolvedMarker: Sendable, Hashable {
     public enum Kind: Int, Sendable, Hashable {
         case scene = 0
-        case cue = 1
-        case rehook = 2
+        case rehook = 1
+        case cue = 2
     }
 
     public var frame: Int
@@ -260,11 +290,41 @@ public struct ResolvedMarker: Sendable, Hashable {
     public var sceneIndex: Int
 }
 
+public struct MarkerWarning: Sendable, Hashable {
+    public enum Kind: String, Sendable, Hashable {
+        case duplicateFrame
+        case tooManyEvents
+    }
+
+    public let kind: Kind
+    public let message: String
+    public let frame: Int?
+
+    public init(kind: Kind, message: String, frame: Int? = nil) {
+        self.kind = kind
+        self.message = message
+        self.frame = frame
+    }
+}
+
+public struct MarkerResolution: Sendable, Hashable {
+    public let markers: [ResolvedMarker]
+    public let warnings: [MarkerWarning]
+
+    public init(markers: [ResolvedMarker], warnings: [MarkerWarning]) {
+        self.markers = markers
+        self.warnings = warnings
+    }
+}
+
 public enum ExportMarkerResolver {
     /// Flattens scene markers, cue markers and re-hook markers onto the
-    /// timeline, sorted by frame. Re-hook markers sit one frame after the scene
-    /// marker so Resolve does not stack two markers on the same frame.
-    public static func markers(scenes: [ExportScene], settings: ExportSettings) -> [ResolvedMarker] {
+    /// timeline, sorted by frame, without merging collisions.
+    ///
+    /// Re-hook markers sit one frame after the scene marker so they do not
+    /// stack on it. Cue offsets are rounded together with the scene start so
+    /// the EDL/FCPXML frame matches the CSV frame.
+    public static func allMarkers(scenes: [ExportScene], settings: ExportSettings) -> [ResolvedMarker] {
         let indexed = scenes.enumerated().sorted { lhs, rhs in
             if lhs.element.start == rhs.element.start { return lhs.offset < rhs.offset }
             return lhs.element.start < rhs.element.start
@@ -274,7 +334,8 @@ public enum ExportMarkerResolver {
         for (position, entry) in indexed.enumerated() {
             let index = entry.offset
             let scene = entry.element
-            let startFrame = Timecode(seconds: max(0, scene.start), rate: settings.fps).frames
+            let sceneStart = max(0, scene.start)
+            let startFrame = Timecode(seconds: sceneStart, rate: settings.fps).frames
             let sceneNumber = String(format: "%02d", position)
             let title = scene.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let displayTitle = title.isEmpty ? "Escena" : title
@@ -306,10 +367,11 @@ public enum ExportMarkerResolver {
             }
 
             for marker in scene.markers {
-                let offsetFrames = Timecode(seconds: max(0, marker.offset), rate: settings.fps).frames
+                let absoluteSeconds = sceneStart + max(0, marker.offset)
+                let absoluteFrame = Timecode(seconds: absoluteSeconds, rate: settings.fps).frames
                 resolved.append(
                     ResolvedMarker(
-                        frame: startFrame + offsetFrames,
+                        frame: absoluteFrame,
                         name: marker.name,
                         note: marker.note,
                         color: marker.color,
@@ -328,15 +390,70 @@ public enum ExportMarkerResolver {
         }
     }
 
+    /// Resolves markers and merges any that share a frame.
+    ///
+    /// Resolve stores one marker per frame, so two events at the same record
+    /// timecode cannot both survive. The scene (or re-hook) marker is kept and
+    /// the colliding marker's name and note are appended to its note; the
+    /// collision is reported as a warning.
+    public static func resolve(scenes: [ExportScene], settings: ExportSettings) -> MarkerResolution {
+        let raw = allMarkers(scenes: scenes, settings: settings)
+        var groups: [Int: [ResolvedMarker]] = [:]
+        for marker in raw {
+            groups[marker.frame, default: []].append(marker)
+        }
+
+        var merged: [ResolvedMarker] = []
+        var warnings: [MarkerWarning] = []
+
+        for frame in groups.keys.sorted() {
+            let group = groups[frame] ?? []
+            guard var primary = group.first else { continue }
+            for dropped in group.dropFirst() {
+                let addition = dropped.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? dropped.name
+                    : "\(dropped.name): \(dropped.note)"
+                primary.note = primary.note.isEmpty ? addition : "\(primary.note) · \(addition)"
+                primary.durationFrames = max(primary.durationFrames, dropped.durationFrames)
+                warnings.append(
+                    MarkerWarning(
+                        kind: .duplicateFrame,
+                        message: "«\(dropped.name)» coincide en el fotograma \(frame) con «\(primary.name)»; se ha fusionado en su nota.",
+                        frame: frame
+                    )
+                )
+            }
+            merged.append(primary)
+        }
+
+        if merged.count > 999 {
+            warnings.append(
+                MarkerWarning(
+                    kind: .tooManyEvents,
+                    message: "Hay \(merged.count) marcadores; CMX3600 solo admite 999 eventos. Resolve puede ignorar los últimos."
+                )
+            )
+        }
+
+        return MarkerResolution(markers: merged, warnings: warnings)
+    }
+
+    /// Deduplicated markers, ready to write to EDL or FCPXML.
+    public static func markers(scenes: [ExportScene], settings: ExportSettings) -> [ResolvedMarker] {
+        resolve(scenes: scenes, settings: settings).markers
+    }
+
     /// Last frame covered by scenes and markers, at least one frame long.
     public static func timelineEndFrame(scenes: [ExportScene], settings: ExportSettings) -> Int {
         var end = 1
         for scene in scenes {
-            let start = Timecode(seconds: max(0, scene.start), rate: settings.fps).frames
-            let duration = Timecode(seconds: max(0, scene.duration), rate: settings.fps).frames
-            end = max(end, start + duration)
+            let sceneEnd = Timecode(
+                seconds: max(0, scene.start) + max(0, scene.duration),
+                rate: settings.fps
+            ).frames
+            end = max(end, sceneEnd)
         }
-        for marker in markers(scenes: scenes, settings: settings) {
+        for marker in allMarkers(scenes: scenes, settings: settings) {
             end = max(end, marker.frame + marker.durationFrames)
         }
         return end

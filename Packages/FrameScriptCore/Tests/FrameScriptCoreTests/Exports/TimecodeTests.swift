@@ -147,9 +147,19 @@ struct TimecodeTests {
         #expect(DurationFormat.clock(seconds: 65) == "1:05")
         #expect(DurationFormat.clock(seconds: 3_723) == "1:02:03")
         #expect(DurationFormat.clock(frames: 250, rate: .fps25) == "0:10")
-        #expect(DurationFormat.clock(frames: 299, rate: .fps29_97) == "0:09")
+        #expect(DurationFormat.clock(frames: 299, rate: .fps29_97) == "0:10")
         #expect(DurationFormat.clock(frames: 300, rate: .fps29_97) == "0:10")
+        // 35964 frames at 29.97 is 1199.9994 s and must print 20:00.
+        #expect(DurationFormat.clock(frames: 35_964, rate: .fps29_97) == "20:00")
         #expect(DurationFormat.clock(seconds: 10, rate: .fps59_94) == "0:10")
         #expect(DurationFormat.clock(seconds: 9.6, rate: .fps25) == "0:10")
+    }
+
+    @Test("Non-finite seconds do not trap")
+    func nonFiniteSeconds() {
+        #expect(Timecode(seconds: .infinity, rate: .fps25).frames == 0)
+        #expect(Timecode(seconds: -.infinity, rate: .fps25).frames == 0)
+        #expect(Timecode(seconds: .nan, rate: .fps25).frames == 0)
+        #expect(Timecode(seconds: -3, rate: .fps25).frames == 0)
     }
 }

@@ -3,7 +3,9 @@ import Foundation
 /// RFC 4180 shot list. One row per shot, CRLF line endings, UTF-8.
 ///
 /// The header is kept ASCII so Numbers/Excel/Sheets never mis-detect the
-/// encoding, while the values remain full Spanish UTF-8.
+/// encoding, while the values remain full Spanish UTF-8. The BOM is opt-in
+/// (`csvIncludesByteOrderMark`), because a BOM is outside RFC 4180's field
+/// grammar; turn it on when Excel needs help detecting UTF-8.
 public enum ShotListCSV {
     public static let header = "Escena,Titulo,TC entrada,Plano,Fuente,Estado,Notas"
 
@@ -35,14 +37,18 @@ public enum ShotListCSV {
                     shot.status.displayName,
                     shot.notes,
                 ]
-                rows.append(fields.map(escape).joined(separator: ","))
+                rows.append(
+                    fields
+                        .map { escape($0, escapeFormulas: settings.csvEscapesFormulas) }
+                        .joined(separator: ",")
+                )
             }
         }
 
         return rows.joined(separator: "\r\n") + "\r\n"
     }
 
-    /// UTF-8 bytes, optionally prefixed with a BOM (default, per settings).
+    /// UTF-8 bytes, optionally prefixed with a BOM.
     public static func makeData(scenes: [ExportScene], settings: ExportSettings) -> Data {
         let text = make(scenes: scenes, settings: settings)
         var data = Data()
@@ -53,15 +59,34 @@ public enum ShotListCSV {
         return data
     }
 
-    /// RFC 4180: quote commas, quotes and line breaks; double inner quotes.
-    public static func escape(_ field: String) -> String {
-        let needsQuoting = field.contains(",")
-            || field.contains("\"")
-            || field.contains("\n")
-            || field.contains("\r")
-            || field.hasPrefix(" ")
-            || field.hasSuffix(" ")
-        guard needsQuoting else { return field }
-        return "\"\(field.replacingOccurrences(of: "\"", with: "\"\""))\""
+    /// RFC 4180: quote commas, quotes, tabs and line breaks; double inner quotes.
+    public static func escape(_ field: String, escapeFormulas: Bool = false) -> String {
+        var value = sanitized(field)
+        if escapeFormulas, let first = value.first, "=+-@".contains(first) {
+            value = "'" + value
+        }
+        let needsQuoting = value.contains(",")
+            || value.contains("\"")
+            || value.contains("\n")
+            || value.contains("\r")
+            || value.contains("\t")
+            || value.hasPrefix(" ")
+            || value.hasSuffix(" ")
+        guard needsQuoting else { return value }
+        return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    /// Replaces C0/C1 controls that are not legal CSV text with spaces.
+    private static func sanitized(_ field: String) -> String {
+        var output = String.UnicodeScalarView()
+        for scalar in field.unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F, 0x7F...0x9F, 0x2028, 0x2029:
+                output.append(" ")
+            default:
+                output.append(scalar)
+            }
+        }
+        return String(output)
     }
 }

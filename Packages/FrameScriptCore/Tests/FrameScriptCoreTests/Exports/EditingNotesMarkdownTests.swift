@@ -126,4 +126,31 @@ struct EditingNotesMarkdownTests {
             #expect(firstRange.lowerBound < secondRange.lowerBound)
         }
     }
+
+    @Test("Normalises CRLF excerpts and keeps multi-line notes as bullets")
+    func multilineContent() {
+        let scenes = [
+            ExportScene(
+                title: "Uno",
+                start: 0,
+                duration: 10,
+                scriptExcerpt: "Línea uno\r\nLínea dos",
+                editingNotes: ["Corte uno\nCorte dos"],
+                warnings: ["Aviso\ncon línea"]
+            ),
+        ]
+        let notes = EditingNotesMarkdown.make(scenes: scenes, settings: settings())
+
+        #expect(notes.contains("> Línea uno\n> Línea dos"))
+        #expect(!notes.contains("\r"))
+        #expect(notes.contains("- Corte uno\n- Corte dos"))
+        #expect(notes.contains("- Aviso\n- con línea"))
+    }
+
+    @Test("Whitespace-only titles fall back to Escena")
+    func whitespaceTitle() {
+        let scenes = [ExportScene(title: "   ", start: 0, duration: 10)]
+        let notes = EditingNotesMarkdown.make(scenes: scenes, settings: settings())
+        #expect(notes.contains("## 00 — Escena (0:00)"))
+    }
 }

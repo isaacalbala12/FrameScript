@@ -17,20 +17,105 @@ public enum ExportTextSanitizer {
             .joined(separator: " ")
     }
 
-    /// Removes the light Markdown used in scene titles: `**bold**`, `*italic*`,
-    /// `_italic_`, inline code and leading heading marks.
+    /// Removes the light Markdown used in scene titles, but only balanced
+    /// emphasis. Underscores in `snake_case` and multiplication signs in
+    /// `2*3` survive.
     public static func stripMarkdown(_ value: String) -> String {
         var text = value
-        for token in ["**", "__", "`", "*", "_"] {
-            text = text.replacingOccurrences(of: token, with: "")
+        text = stripPaired(text, marker: "*", double: true, requiresBoundaries: true)
+        text = stripPaired(text, marker: "_", double: true, requiresBoundaries: true)
+        text = stripPaired(text, marker: "*", double: false, requiresBoundaries: true)
+        text = stripPaired(text, marker: "_", double: false, requiresBoundaries: true)
+        text = stripPaired(text, marker: "`", double: false, requiresBoundaries: false)
+        return stripLeadingBlockMarkers(text)
+    }
+
+    private static func stripPaired(
+        _ value: String,
+        marker: Character,
+        double: Bool,
+        requiresBoundaries: Bool
+    ) -> String {
+        var characters = Array(value)
+        var index = 0
+        while index < characters.count {
+            guard characters[index] == marker else {
+                index += 1
+                continue
+            }
+            let markerLength = double ? 2 : 1
+            if double {
+                guard index + 1 < characters.count, characters[index + 1] == marker else {
+                    index += 1
+                    continue
+                }
+            }
+
+            let previousOK = !requiresBoundaries
+                || index == 0
+                || characters[index - 1].isWhitespace
+                || characters[index - 1].isPunctuation
+            let contentStart = index + markerLength
+            guard previousOK, contentStart < characters.count, !characters[contentStart].isWhitespace else {
+                index += 1
+                continue
+            }
+
+            var closing = contentStart + 1
+            var found = false
+            while closing + markerLength <= characters.count {
+                if characters[closing] == marker,
+                   !double || (closing + 1 < characters.count && characters[closing + 1] == marker) {
+                    let after = closing + markerLength
+                    let afterOK = !requiresBoundaries
+                        || after >= characters.count
+                        || characters[after].isWhitespace
+                        || characters[after].isPunctuation
+                    if afterOK {
+                        found = true
+                        break
+                    }
+                }
+                closing += 1
+            }
+
+            if found {
+                characters.removeSubrange(closing..<(closing + markerLength))
+                characters.removeSubrange(index..<contentStart)
+                continue
+            }
+            index += 1
         }
-        while text.hasPrefix("#") {
-            text.removeFirst()
-        }
-        if text.hasPrefix(">") {
-            text.removeFirst()
+        return String(characters)
+    }
+
+    private static func stripLeadingBlockMarkers(_ value: String) -> String {
+        var text = value
+        if text.hasPrefix("#") {
+            let hashes = text.prefix { $0 == "#" }
+            let rest = text.dropFirst(hashes.count)
+            if rest.first?.isWhitespace == true {
+                text = String(rest.drop(while: { $0.isWhitespace }))
+            }
+        } else if text.hasPrefix(">"), text.dropFirst().first?.isWhitespace == true {
+            text = String(text.dropFirst().drop(while: { $0.isWhitespace }))
         }
         return text
+    }
+
+    /// Removes C0/C1 control characters and Unicode line separators that can
+    /// corrupt an EDL line, while keeping tab/CR/LF for whitespace collapsing.
+    public static func stripControlCharacters(_ value: String) -> String {
+        var output = String.UnicodeScalarView()
+        for scalar in value.unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F, 0x7F...0x9F, 0x2028, 0x2029:
+                continue
+            default:
+                output.append(scalar)
+            }
+        }
+        return String(output)
     }
 
     /// Removes emoji and their invisible joiners / variation selectors.
@@ -86,24 +171,41 @@ public enum ExportTextSanitizer {
         asciiSafe useASCII: Bool,
         limit: Int = 60
     ) -> String {
-        let base = useASCII ? asciiSafe(value) : collapseWhitespace(stripEmoji(stripMarkdown(value)))
+        var base = useASCII ? asciiSafe(value) : stripEmoji(stripMarkdown(value))
+        base = stripControlCharacters(collapseWhitespace(base))
         let withoutPipes = base.replacingOccurrences(of: "|", with: "/")
         let trimmed = withoutPipes.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Marker" }
         return truncated(trimmed, limit: limit).text
     }
 
+    /// A safe EDL marker note: one line, no pipes, never empty with a fallback.
+    /// The full note still lives in the FCPXML and the Markdown.
+    public static func markerNote(
+        _ value: String,
+        asciiSafe useASCII: Bool,
+        limit: Int = 160
+    ) -> String {
+        var base = useASCII ? asciiSafe(value) : stripEmoji(stripMarkdown(value))
+        base = stripControlCharacters(collapseWhitespace(base))
+        let withoutPipes = base.replacingOccurrences(of: "|", with: "/")
+        let trimmed = withoutPipes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return truncated(trimmed, limit: limit).text
+    }
+
     /// A safe EDL title line.
     public static func title(_ value: String, asciiSafe useASCII: Bool) -> String {
-        let base = useASCII ? asciiSafe(value) : collapseWhitespace(stripEmoji(value))
-        let withoutControl = base.replacingOccurrences(of: "|", with: "/")
-        let trimmed = withoutControl.trimmingCharacters(in: .whitespacesAndNewlines)
+        var base = useASCII ? asciiSafe(value) : stripEmoji(value)
+        base = stripControlCharacters(collapseWhitespace(base))
+        let withoutPipes = base.replacingOccurrences(of: "|", with: "/")
+        let trimmed = withoutPipes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "FrameScript" : truncated(trimmed, limit: 80).text
     }
 
     /// YouTube chapter title: no Markdown, no emoji, at most 60 characters.
     public static func chapterTitle(_ value: String, limit: Int = 60) -> (text: String, wasTruncated: Bool) {
-        let cleaned = collapseWhitespace(stripEmoji(stripMarkdown(value)))
+        let cleaned = stripControlCharacters(collapseWhitespace(stripEmoji(stripMarkdown(value))))
         return truncated(cleaned, limit: limit)
     }
 
@@ -128,8 +230,14 @@ public enum XMLText {
             case "\"": output += "&quot;"
             case "'": output += "&apos;"
             default:
-                // XML 1.0 forbids most C0 controls; drop them.
-                if scalar.value == 0x09 || scalar.value == 0x0A || scalar.value == 0x0D || scalar.value >= 0x20 {
+                // XML 1.0 forbids most C0 controls and the FFFE/FFFF
+                // noncharacters; drop them so xmllint and Resolve accept
+                // the document.
+                let value = scalar.value
+                if (value & 0xFFFF) == 0xFFFE || (value & 0xFFFF) == 0xFFFF {
+                    continue
+                }
+                if value == 0x09 || value == 0x0A || value == 0x0D || value >= 0x20 {
                     output.unicodeScalars.append(scalar)
                 }
             }
