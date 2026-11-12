@@ -31,6 +31,8 @@ struct SettingsRootView: View {
                             AppearanceSettings(settings: $settingsStore.settings)
                         case .editor:
                             EditorSettings(settings: $settingsStore.settings)
+                            EditorMarkupSettingsSection()
+                                .padding(.top, 24)
                         case .templates:
                             TemplateSettings()
                         case .ai:

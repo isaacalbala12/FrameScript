@@ -1253,6 +1253,19 @@ struct EditorPreferences: Codable, Hashable {
     var showAIReviewPanel: Bool
     var defaultNotesVisibility: NotesDefaultVisibility
 
+    // MARK: Markup, duration and rhythm (F4 / F11 / F26)
+
+    /// Explicit per-language reading speeds (language code → words per minute).
+    /// Missing codes fall back to the built-in defaults for `es`, `en` and `ru`
+    /// and finally to ``wordsPerMinute``.
+    var wordsPerMinuteByLanguage: [String: Int]
+    /// Duration of a single `/` pause, in seconds. Clamped to `0...60`.
+    var shortPauseSeconds: Double
+    /// Duration of `//` and a bare `[pausa]`, in seconds. Clamped to `0...60`.
+    var longPauseSeconds: Double
+    /// Shows the local rhythm review (warnings, sidebar badge and review section).
+    var rhythmReviewEnabled: Bool
+
     init(
         wordsPerMinute: Int,
         fontSize: Double,
@@ -1261,7 +1274,11 @@ struct EditorPreferences: Codable, Hashable {
         showWordCount: Bool,
         showSceneDuration: Bool,
         showAIReviewPanel: Bool,
-        defaultNotesVisibility: NotesDefaultVisibility = .collapsed
+        defaultNotesVisibility: NotesDefaultVisibility = .collapsed,
+        wordsPerMinuteByLanguage: [String: Int] = [:],
+        shortPauseSeconds: Double = 0.5,
+        longPauseSeconds: Double = 1.0,
+        rhythmReviewEnabled: Bool = true
     ) {
         self.wordsPerMinute = wordsPerMinute
         self.fontSize = fontSize
@@ -1271,6 +1288,10 @@ struct EditorPreferences: Codable, Hashable {
         self.showSceneDuration = showSceneDuration
         self.showAIReviewPanel = showAIReviewPanel
         self.defaultNotesVisibility = defaultNotesVisibility
+        self.wordsPerMinuteByLanguage = wordsPerMinuteByLanguage
+        self.shortPauseSeconds = EditorPreferences.sanitizedPause(shortPauseSeconds, fallback: 0.5)
+        self.longPauseSeconds = EditorPreferences.sanitizedPause(longPauseSeconds, fallback: 1.0)
+        self.rhythmReviewEnabled = rhythmReviewEnabled
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1282,6 +1303,10 @@ struct EditorPreferences: Codable, Hashable {
         case showSceneDuration
         case showAIReviewPanel
         case defaultNotesVisibility
+        case wordsPerMinuteByLanguage
+        case shortPauseSeconds
+        case longPauseSeconds
+        case rhythmReviewEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -1294,6 +1319,27 @@ struct EditorPreferences: Codable, Hashable {
         showSceneDuration = try container.decodeIfPresent(Bool.self, forKey: .showSceneDuration) ?? true
         showAIReviewPanel = try container.decodeIfPresent(Bool.self, forKey: .showAIReviewPanel) ?? true
         defaultNotesVisibility = container.decodeSettingsEnum(NotesDefaultVisibility.self, forKey: .defaultNotesVisibility, default: .collapsed)
+        let decodedWordsPerMinute = (try? container.decodeIfPresent(
+            [String: Int].self,
+            forKey: .wordsPerMinuteByLanguage
+        )) ?? [:]
+        wordsPerMinuteByLanguage = decodedWordsPerMinute.filter { $0.value > 0 }
+        shortPauseSeconds = EditorPreferences.sanitizedPause(
+            (try? container.decodeIfPresent(Double.self, forKey: .shortPauseSeconds)) ?? 0.5,
+            fallback: 0.5
+        )
+        longPauseSeconds = EditorPreferences.sanitizedPause(
+            (try? container.decodeIfPresent(Double.self, forKey: .longPauseSeconds)) ?? 1.0,
+            fallback: 1.0
+        )
+        rhythmReviewEnabled = (try? container.decodeIfPresent(Bool.self, forKey: .rhythmReviewEnabled)) ?? true
+    }
+
+    /// Keeps hand-edited or legacy JSON from producing a non-finite or absurd
+    /// pause default. Mirrors `PauseDefaults` clamping.
+    private static func sanitizedPause(_ value: Double, fallback: Double) -> Double {
+        guard value.isFinite else { return fallback }
+        return min(max(0, value), 60)
     }
 }
 
@@ -1436,6 +1482,9 @@ struct ExportPreferences: Codable, Hashable {
     var teleprompterFormatting: Bool
     var defaultExportFolder: String
     var defaultExportFolderBookmarkData: Data?
+    /// F4: strips pause/emphasis/cue markers from script text in text and
+    /// Markdown exports. Markers are kept by default.
+    var cleanMarkup: Bool
 
     enum CodingKeys: String, CodingKey {
         case defaultFormat
@@ -1447,6 +1496,7 @@ struct ExportPreferences: Codable, Hashable {
         case teleprompterFormatting
         case defaultExportFolder
         case defaultExportFolderBookmarkData
+        case cleanMarkup
     }
 
     init(
@@ -1458,7 +1508,8 @@ struct ExportPreferences: Codable, Hashable {
         includeAINotes: Bool,
         teleprompterFormatting: Bool,
         defaultExportFolder: String,
-        defaultExportFolderBookmarkData: Data?
+        defaultExportFolderBookmarkData: Data?,
+        cleanMarkup: Bool = false
     ) {
         self.defaultFormat = defaultFormat
         self.includeTimestamps = includeTimestamps
@@ -1469,6 +1520,7 @@ struct ExportPreferences: Codable, Hashable {
         self.teleprompterFormatting = teleprompterFormatting
         self.defaultExportFolder = defaultExportFolder
         self.defaultExportFolderBookmarkData = defaultExportFolderBookmarkData
+        self.cleanMarkup = cleanMarkup
     }
 
     init(from decoder: Decoder) throws {
@@ -1482,6 +1534,7 @@ struct ExportPreferences: Codable, Hashable {
         teleprompterFormatting = try container.decodeIfPresent(Bool.self, forKey: .teleprompterFormatting) ?? false
         defaultExportFolder = try container.decodeIfPresent(String.self, forKey: .defaultExportFolder) ?? ""
         defaultExportFolderBookmarkData = try container.decodeIfPresent(Data.self, forKey: .defaultExportFolderBookmarkData)
+        cleanMarkup = try container.decodeIfPresent(Bool.self, forKey: .cleanMarkup) ?? false
     }
 }
 

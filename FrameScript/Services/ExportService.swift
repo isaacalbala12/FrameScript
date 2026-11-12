@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 import UniformTypeIdentifiers
 
 protocol ExportServicing {
@@ -198,7 +199,11 @@ struct ExportService: ExportServicing {
     }
 
     private func formattedScript(_ text: String, preferences: ExportPreferences) -> String {
-        preferences.teleprompterFormatting ? text.replacingOccurrences(of: ". ", with: ".\n\n") : text
+        // F4: "sin marcas" removes pauses, cues, emphasis delimiters and
+        // escapes. Markdown keeps the markers unless the export asks for the
+        // clean variant, so a round trip through Markdown stays lossless.
+        let source = preferences.cleanMarkup ? ScriptMarkup.spokenText(text) : text
+        return preferences.teleprompterFormatting ? source.replacingOccurrences(of: ". ", with: ".\n\n") : source
     }
 
     private func appendLine(_ output: inout String, key: String, value: String, language: AppLanguage, indent: String) {

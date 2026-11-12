@@ -199,6 +199,9 @@ final class AppState {
         self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: Self.loadCustomTemplates())
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
+        self.projectStore.durationConfigurationProvider = { [weak self] scene in
+            self?.durationConfiguration(for: scene) ?? .standard
+        }
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
@@ -1870,6 +1873,9 @@ final class ProjectStore {
     private(set) var origin: ProjectStoreOrigin = .normal
     private var segmentSplitMode: SegmentType = AppSettings.defaults.generalPreferences.defaultSplitMode
     private let projectWriter: (FrameProject, URL) throws -> Void
+    /// Resolves the markup-aware duration configuration for a scene. Set by
+    /// `AppState`; a closure keeps this store independent from settings.
+    var durationConfigurationProvider: ((Scene) -> DurationConfiguration)?
 
     init(
         project: FrameProject = SampleData.defaultProject,
@@ -2055,7 +2061,7 @@ final class ProjectStore {
 
     func updateCurrentSceneMetrics(sceneID: UUID, wordsPerMinute: Int) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
-        scene.estimatedDuration = DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: wordsPerMinute)
+        scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
     }
 
     private func prepareForSave(wordsPerMinute: Int) {
@@ -2082,7 +2088,7 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
-        scene.estimatedDuration = DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: wordsPerMinute)
+        scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
         project.updatedAt = Date()
         if markUnsaved {
             hasUnsavedFileChanges = true
@@ -2199,10 +2205,7 @@ final class ProjectStore {
 
     private func recalculateDurations(wordsPerMinute: Int) {
         for scene in project.scenes {
-            scene.estimatedDuration = DurationEstimator.estimate(
-                text: scene.scriptText,
-                wordsPerMinute: wordsPerMinute
-            )
+            scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
         }
     }
 
