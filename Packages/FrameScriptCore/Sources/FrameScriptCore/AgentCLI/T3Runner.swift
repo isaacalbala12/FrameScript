@@ -69,9 +69,11 @@ public struct T3Runner: AgentCLIRunner {
     }
 
     public func run(_ request: AgentCLIRequest) async throws -> AgentCLIResult {
-        guard let prompt = request.prompt.nilIfBlank else {
+        guard request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AgentCLIError.invalidConfiguration("The AI prompt is empty.")
         }
+        // Validate blankness but send the caller's prompt byte-for-byte.
+        let prompt = request.prompt
 
         let threadID = request.threadID?.nilIfBlank
         let arguments: [String]
@@ -90,6 +92,9 @@ public struct T3Runner: AgentCLIRunner {
             outputByteLimit: request.outputByteLimit
         )
         let output = try await launcher.launch(processRequest)
+        if output.standardOutputTruncated, output.exitCode == 0 || output.exitCode == 2 {
+            throw AgentCLIError.outputTruncated(limit: request.outputByteLimit)
+        }
         let envelope = Self.decodeRunEnvelope(output.standardOutputText)
         let stderr = output.standardErrorSummary
 
@@ -203,7 +208,7 @@ public struct T3Runner: AgentCLIRunner {
     }
 
     private func showArguments(threadID: String) -> [String] {
-        ["thread", "show", threadID, "--messages", "1"] + baseDirectoryArguments + ["--json"]
+        ["thread", "show", threadID, "--messages", "20"] + baseDirectoryArguments + ["--json"]
     }
 
     private var baseDirectoryArguments: [String] {
@@ -224,7 +229,7 @@ public struct T3Runner: AgentCLIRunner {
         rawJSON: String,
         fallbackQuestion: String
     ) async -> AgentCLIResult {
-        let details = await threadDetails(threadID: threadID)
+        let details = await threadDetails(threadID: threadID, runID: runID)
         let question = details?.question
             ?? fallbackQuestion.nilIfBlank
             ?? "Thread \(threadID) is waiting for an answer. Open it in T3 Code to respond."
@@ -240,7 +245,7 @@ public struct T3Runner: AgentCLIRunner {
         )
     }
 
-    private func threadDetails(threadID: String) async -> (question: String?, link: URL?)? {
+    private func threadDetails(threadID: String, runID: String?) async -> (question: String?, link: URL?)? {
         let timeout = min(20, max(1, effectiveTimeout(0)))
         let request = AgentProcessRequest(
             executableURL: configuration.executable,
@@ -255,10 +260,17 @@ public struct T3Runner: AgentCLIRunner {
             return nil
         }
 
+        // Only an assistant message from the pending run can be the question.
+        // The user's prompt also appears in `show`, and must never be shown as
+        // if the agent had asked it.
+        let matchingRun = runID?.nilIfBlank
         let question = show.messages?
-            .last(where: { ($0.role ?? "assistant") == "assistant" && ($0.text?.nilIfBlank != nil) })?
+            .last(where: {
+                $0.role == "assistant"
+                    && $0.text?.nilIfBlank != nil
+                    && (matchingRun == nil || $0.runId == matchingRun)
+            })?
             .text?.nilIfBlank
-            ?? show.messages?.last(where: { $0.text?.nilIfBlank != nil })?.text?.nilIfBlank
 
         let link: URL? = show.thread?.link.flatMap { raw -> URL? in
             guard let url = URL(string: raw),

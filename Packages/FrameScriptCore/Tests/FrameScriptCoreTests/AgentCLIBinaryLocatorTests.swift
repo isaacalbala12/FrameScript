@@ -94,9 +94,65 @@ struct AgentCLIBinaryLocatorTests {
         #expect(await locator.locate(executableNamed: "t3; rm -rf /") == nil)
         #expect(await locator.locate(executableNamed: "$(whoami)") == nil)
         #expect(await locator.locate(executableNamed: "") == nil)
+        #expect(await locator.locate(executableNamed: "-t3") == nil)
+        #expect(await locator.locate(executableNamed: "--help") == nil)
         #expect(SystemAgentCLIBinaryProbe.isSafeExecutableName("t3"))
         #expect(SystemAgentCLIBinaryProbe.isSafeExecutableName("claude-code.2"))
         #expect(!SystemAgentCLIBinaryProbe.isSafeExecutableName("t3 --help"))
+        #expect(!SystemAgentCLIBinaryProbe.isSafeExecutableName("-t3"))
+    }
+
+    @Test("login shell tries both -lc and -ic")
+    func loginShellTriesBothModes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("framescript-agentcli-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let target = directory.appendingPathComponent("claude")
+        FileManager.default.createFile(atPath: target.path, contents: Data("#!/bin/sh\n".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
+
+        let log = directory.appendingPathComponent("modes.log")
+        let shell = directory.appendingPathComponent("fakezsh")
+        let script = """
+        #!/bin/sh
+        printf '%s\\n' "$1" >> '\(log.path)'
+        if [ "$1" = "-ic" ]; then printf '%s\\n' '\(target.path)'; fi
+        """
+        try script.write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+
+        let probe = SystemAgentCLIBinaryProbe(loginShellTimeout: 2)
+        let path = await probe.loginShellExecutablePath(
+            named: "claude",
+            shellPath: shell.path
+        )
+
+        #expect(path == target.path)
+        let modes = String(decoding: try Data(contentsOf: log), as: UTF8.self)
+        #expect(modes.contains("-lc"))
+        #expect(modes.contains("-ic"))
+    }
+
+    @Test("a hanging login shell is bounded")
+    func loginShellTimeout() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("framescript-agentcli-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let shell = directory.appendingPathComponent("hangzsh")
+        try "#!/bin/sh\nsleep 5\n".write(to: shell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
+
+        let probe = SystemAgentCLIBinaryProbe(loginShellTimeout: 0.2)
+        let start = ContinuousClock.now
+        let path = await probe.loginShellExecutablePath(named: "claude", shellPath: shell.path)
+        let elapsed = start.duration(to: .now)
+
+        #expect(path == nil)
+        #expect(elapsed < .seconds(1.5))
     }
 
     @Test("locates all three binaries")

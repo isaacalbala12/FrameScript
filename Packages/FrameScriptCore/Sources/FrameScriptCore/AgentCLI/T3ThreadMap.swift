@@ -1,5 +1,62 @@
 import Foundation
 
+/// Decision D2's key: one thread per (provider instance, model) pair.
+public struct T3ThreadKey: Sendable, Hashable, Codable {
+    public var providerInstanceID: String
+    public var modelSlug: String
+
+    public init(providerInstanceID: String, modelSlug: String) {
+        self.providerInstanceID = providerInstanceID
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.modelSlug = modelSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    public init?(selection: AgentCLIModelSelection) {
+        guard let provider = selection.providerInstanceID?.nilIfBlank,
+              let model = selection.modelSlug?.nilIfBlank
+        else {
+            return nil
+        }
+        self.init(providerInstanceID: provider, modelSlug: model)
+    }
+}
+
+/// Storage seam for the D2 map. The app can back this with the project's
+/// `.fscr` settings while tests use `T3ThreadMapStore`.
+public protocol T3ThreadMapping: Sendable {
+    func threadID(for key: T3ThreadKey) async -> String?
+    func record(threadID: String, for key: T3ThreadKey) async
+}
+
+/// In-memory D2 map, used by the router and by tests.
+public actor T3ThreadMapStore: T3ThreadMapping {
+    private var map: T3ThreadMap
+
+    public init(map: T3ThreadMap = T3ThreadMap()) {
+        self.map = map
+    }
+
+    public func threadID(for key: T3ThreadKey) async -> String? {
+        map.threadID(providerInstanceID: key.providerInstanceID, modelSlug: key.modelSlug)
+    }
+
+    public func record(threadID: String, for key: T3ThreadKey) async {
+        map.record(
+            threadID: threadID,
+            providerInstanceID: key.providerInstanceID,
+            modelSlug: key.modelSlug
+        )
+    }
+
+    public func snapshot() -> T3ThreadMap {
+        map
+    }
+
+    public func replace(with map: T3ThreadMap) {
+        self.map = map
+    }
+}
+
 /// Decision D2: a FrameScript project reuses one T3 thread per
 /// (provider instance, model) pair. Changing the model starts a new thread;
 /// the entry for the old pair stays so switching back can reuse it.

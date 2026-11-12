@@ -95,6 +95,34 @@ struct ClaudeCLIRunnerTests {
         let recorded = await launcher.recordedRequests()
         #expect(recorded.isEmpty)
     }
+
+    @Test("prompt whitespace is sent byte-for-byte")
+    func promptWhitespace() async throws {
+        let fixture = try AgentCLIFixtures.text("claude-result.json")
+        let launcher = FakeProcessLauncher([.json(fixture)])
+        let runner = ClaudeCLIRunner(executable: fakeClaudeExecutable, launcher: launcher)
+        let prompt = "  keep this indentation\nand trailing space \n"
+
+        _ = try await runner.run(makeRequest(prompt: prompt, kind: .claude))
+
+        let recorded = await launcher.recordedRequests()
+        #expect(recorded.first?.standardInput == Data(prompt.utf8))
+    }
+
+    @Test("truncated output is an explicit truncation error")
+    func truncatedOutput() async {
+        let fixture = try? AgentCLIFixtures.text("claude-result.json")
+        let launcher = FakeProcessLauncher([.json(fixture ?? "{}", stdoutTruncated: true)])
+        let runner = ClaudeCLIRunner(executable: fakeClaudeExecutable, launcher: launcher)
+        var request = makeRequest(kind: .claude)
+        request.outputByteLimit = 77
+
+        let error = await captureAgentCLIError {
+            try await runner.run(request)
+        }
+
+        #expect(error == .outputTruncated(limit: 77))
+    }
 }
 
 @Suite("Codex CLI runner")
@@ -194,5 +222,50 @@ struct CodexCLIRunnerTests {
         #expect(error == .invalidConfiguration("The AI prompt is empty."))
         let recorded = await launcher.recordedRequests()
         #expect(recorded.isEmpty)
+    }
+
+    @Test("prompt whitespace is sent byte-for-byte")
+    func promptWhitespace() async throws {
+        let fixture = try AgentCLIFixtures.text("codex-exec.jsonl")
+        let launcher = FakeProcessLauncher([.json(fixture)])
+        let runner = CodexCLIRunner(executable: fakeCodexExecutable, launcher: launcher)
+        let prompt = "  keep this indentation\nand trailing space \n"
+
+        _ = try await runner.run(makeRequest(prompt: prompt, kind: .codex))
+
+        let recorded = await launcher.recordedRequests()
+        #expect(recorded.first?.standardInput == Data(prompt.utf8))
+    }
+
+    @Test("tail truncation still returns the final agent message")
+    func truncatedTailStillSucceeds() async throws {
+        let fixture = """
+        {"type":"item.completed","item":{"type":"agent_message","text":"OK"}}
+        {"type":"turn.completed","usage":{}}
+        """
+        let launcher = FakeProcessLauncher([.json(fixture, stdoutTruncated: true)])
+        let runner = CodexCLIRunner(executable: fakeCodexExecutable, launcher: launcher)
+
+        let result = try await runner.run(makeRequest(kind: .codex))
+        let reply = try #require(result.reply)
+
+        #expect(reply.text == "OK")
+        #expect(reply.outputTruncated)
+    }
+
+    @Test("truncation without an agent message is an explicit error")
+    func truncatedWithoutMessage() async {
+        let launcher = FakeProcessLauncher([
+            .json(#"{"type":"turn.started"}"#, stdoutTruncated: true)
+        ])
+        let runner = CodexCLIRunner(executable: fakeCodexExecutable, launcher: launcher)
+        var request = makeRequest(kind: .codex)
+        request.outputByteLimit = 55
+
+        let error = await captureAgentCLIError {
+            try await runner.run(request)
+        }
+
+        #expect(error == .outputTruncated(limit: 55))
     }
 }

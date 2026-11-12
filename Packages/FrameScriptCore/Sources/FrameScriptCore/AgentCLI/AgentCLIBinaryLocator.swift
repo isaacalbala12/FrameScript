@@ -11,7 +11,18 @@ public protocol AgentCLIBinaryProbing: Sendable {
 }
 
 public struct SystemAgentCLIBinaryProbe: AgentCLIBinaryProbing {
-    public init() {}
+    /// Both login and interactive startup files are checked: `-lc` covers
+    /// `.zprofile`/`.zlogin`, `-ic` covers `.zshrc`.
+    public var loginShellModes: [String]
+    public var loginShellTimeout: TimeInterval
+
+    public init(
+        loginShellModes: [String] = ["-lc", "-ic"],
+        loginShellTimeout: TimeInterval = 5
+    ) {
+        self.loginShellModes = loginShellModes
+        self.loginShellTimeout = loginShellTimeout
+    }
 
     public func isExecutableFile(atPath path: String) -> Bool {
         var isDirectory: ObjCBool = false
@@ -23,27 +34,35 @@ public struct SystemAgentCLIBinaryProbe: AgentCLIBinaryProbing {
 
     public func loginShellExecutablePath(named name: String, shellPath: String) async -> String? {
         guard Self.isSafeExecutableName(name) else { return nil }
-        let request = AgentProcessRequest(
-            executableURL: URL(fileURLWithPath: shellPath),
-            arguments: ["-lc", "command -v \(name)"],
-            standardInput: Data(),
-            timeout: 8,
-            outputByteLimit: 64 * 1024
-        )
-        guard let output = try? await SystemAgentProcessLauncher().launch(request),
-              output.exitCode == 0
-        else {
-            return nil
+
+        for mode in loginShellModes {
+            let request = AgentProcessRequest(
+                executableURL: URL(fileURLWithPath: shellPath),
+                arguments: [mode, "command -v \(name)"],
+                standardInput: Data(),
+                timeout: loginShellTimeout,
+                outputByteLimit: 64 * 1024,
+                standardOutputTruncation: .keepHead,
+                standardErrorTruncation: .keepHead
+            )
+            guard let output = try? await SystemAgentProcessLauncher().launch(request),
+                  output.exitCode == 0
+            else {
+                continue
+            }
+            if let path = AgentCLIBinaryLocator.executablePath(
+                inShellOutput: output.standardOutputText,
+                isExecutable: isExecutableFile
+            ) {
+                return path
+            }
         }
-        return AgentCLIBinaryLocator.executablePath(
-            inShellOutput: output.standardOutputText,
-            isExecutable: isExecutableFile
-        )
+        return nil
     }
 
     /// Rejects names that could change the meaning of the shell command.
     static func isSafeExecutableName(_ name: String) -> Bool {
-        guard !name.isEmpty, name.count <= 128 else { return false }
+        guard !name.isEmpty, name.count <= 128, !name.hasPrefix("-") else { return false }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
         return name.unicodeScalars.allSatisfy { allowed.contains($0) }
     }

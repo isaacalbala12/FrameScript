@@ -30,9 +30,11 @@ public struct CodexCLIRunner: AgentCLIRunner {
     }
 
     public func run(_ request: AgentCLIRequest) async throws -> AgentCLIResult {
-        guard let prompt = request.prompt.nilIfBlank else {
+        guard request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AgentCLIError.invalidConfiguration("The AI prompt is empty.")
         }
+        // Validate blankness but send the caller's prompt byte-for-byte.
+        let prompt = request.prompt
 
         var arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral"]
         if let model = request.model.modelSlug?.nilIfBlank {
@@ -61,6 +63,9 @@ public struct CodexCLIRunner: AgentCLIRunner {
             )
         }
         guard let text = events.lastAgentMessage?.nilIfBlank else {
+            if output.standardOutputTruncated {
+                throw AgentCLIError.outputTruncated(limit: request.outputByteLimit)
+            }
             throw AgentCLIError.malformedOutput(
                 exitCode: output.exitCode,
                 detail: failure ?? "codex printed no agent message."
@@ -72,7 +77,8 @@ public struct CodexCLIRunner: AgentCLIRunner {
                 provider: .codex,
                 text: text,
                 sessionID: events.threadID,
-                rawJSON: output.standardOutputText
+                rawJSON: output.standardOutputText,
+                outputTruncated: output.standardOutputTruncated
             )
         )
     }

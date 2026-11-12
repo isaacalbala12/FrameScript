@@ -24,9 +24,11 @@ public struct ClaudeCLIRunner: AgentCLIRunner {
     }
 
     public func run(_ request: AgentCLIRequest) async throws -> AgentCLIResult {
-        guard let prompt = request.prompt.nilIfBlank else {
+        guard request.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             throw AgentCLIError.invalidConfiguration("The AI prompt is empty.")
         }
+        // Validate blankness but send the caller's prompt byte-for-byte.
+        let prompt = request.prompt
 
         var arguments = ["-p", "--output-format", "json", "--no-session-persistence"]
         if let model = request.model.modelSlug?.nilIfBlank {
@@ -42,6 +44,9 @@ public struct ClaudeCLIRunner: AgentCLIRunner {
             outputByteLimit: request.outputByteLimit
         )
         let output = try await launcher.launch(processRequest)
+        if output.standardOutputTruncated {
+            throw AgentCLIError.outputTruncated(limit: request.outputByteLimit)
+        }
         let envelope = Self.decode(output.standardOutputText)
         let stderr = output.standardErrorSummary
 

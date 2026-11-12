@@ -52,7 +52,7 @@ public struct AgentCLIRequest: Sendable, Equatable {
         threadID: String? = nil,
         workingDirectory: URL? = nil,
         timeout: TimeInterval = 180,
-        outputByteLimit: Int = 1_048_576
+        outputByteLimit: Int = 8 * 1024 * 1024
     ) {
         self.prompt = prompt
         self.model = model
@@ -76,6 +76,9 @@ public struct AgentCLIReply: Sendable, Equatable {
     public var sessionID: String?
     /// The raw stdout JSON, kept for diagnostics and for future structured parsing.
     public var rawJSON: String?
+    /// True when the stream cap was hit but the final bytes still contained a
+    /// usable result (Codex JSONL). Whole-JSON formats throw instead.
+    public var outputTruncated: Bool
 
     public init(
         provider: AgentCLIKind,
@@ -83,7 +86,8 @@ public struct AgentCLIReply: Sendable, Equatable {
         threadID: String? = nil,
         runID: String? = nil,
         sessionID: String? = nil,
-        rawJSON: String? = nil
+        rawJSON: String? = nil,
+        outputTruncated: Bool = false
     ) {
         self.provider = provider
         self.text = text
@@ -91,6 +95,7 @@ public struct AgentCLIReply: Sendable, Equatable {
         self.runID = runID
         self.sessionID = sessionID
         self.rawJSON = rawJSON
+        self.outputTruncated = outputTruncated
     }
 }
 
@@ -143,6 +148,14 @@ public enum AgentCLIResult: Sendable, Equatable {
         case let .awaitingAnswer(pending): pending.provider
         }
     }
+
+    /// The T3 thread id, for either a reply or a pending question.
+    public var threadID: String? {
+        switch self {
+        case let .completed(reply): reply.threadID
+        case let .awaitingAnswer(pending): pending.threadID
+        }
+    }
 }
 
 /// Anything that can answer an `AgentCLIRequest`.
@@ -183,6 +196,8 @@ public enum AgentCLIError: Error, Equatable, Sendable, LocalizedError {
     /// Exit code 1 for T3, or a failed non-interactive Claude/Codex turn.
     case runFailed(threadID: String?, message: String, exitCode: Int32)
     case malformedOutput(exitCode: Int32, detail: String)
+    /// The stdout cap was reached before a complete result could be parsed.
+    case outputTruncated(limit: Int)
     case projectNotFound(String)
     case projectAlreadyExists(String)
     case projectNameLookupUnsupported(String)
@@ -208,6 +223,8 @@ public enum AgentCLIError: Error, Equatable, Sendable, LocalizedError {
             return "The AI run failed: \(message)"
         case let .malformedOutput(_, detail):
             return "The AI command returned output FrameScript could not read: \(detail)"
+        case let .outputTruncated(limit):
+            return "The AI command produced more than \(limit) bytes of output and the result was cut off. Increase the output limit or ask for a shorter answer."
         case let .projectNotFound(identifier):
             return "No T3 Code project matches '\(identifier)'. Choose a T3 project id or folder in Settings."
         case let .projectAlreadyExists(path):

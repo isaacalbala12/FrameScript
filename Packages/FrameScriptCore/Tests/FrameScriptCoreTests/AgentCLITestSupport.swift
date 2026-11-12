@@ -176,6 +176,20 @@ struct RecordingRunner: AgentCLIRunner {
     }
 }
 
+/// Returns a fixed T3 thread id so router/thread-map wiring can be asserted.
+struct ThreadReturningRunner: AgentCLIRunner {
+    let kind: AgentCLIKind = .t3
+    let recorder: RunnerRecorder
+    let threadID: String
+
+    func run(_ request: AgentCLIRequest) async throws -> AgentCLIResult {
+        await recorder.record(request)
+        return .completed(
+            AgentCLIReply(provider: .t3, text: "ok", threadID: threadID)
+        )
+    }
+}
+
 struct StubAvailabilityProbe: T3AvailabilityChecking {
     let available: Bool
     func isAvailable() async -> Bool { available }

@@ -156,6 +156,122 @@ struct AgentCLIRouterTests {
         #expect(received.model.modelSlug == fakeModelSlug)
     }
 
+    @Test("an explicit T3 choice is tried without a probe")
+    func explicitT3WithoutProbe() async throws {
+        let t3 = RunnerRecorder()
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: RecordingRunner(kind: .t3, recorder: t3),
+            claude: RecordingRunner(kind: .claude, recorder: RunnerRecorder()),
+            t3Probe: nil
+        )
+
+        let result = try await router.run(makeRequest())
+
+        #expect(result.provider == .t3)
+        #expect(await t3.recordedRequests().count == 1)
+    }
+
+    @Test("the router reuses a stored thread for the same provider and model")
+    func threadMapReuse() async throws {
+        let t3 = RunnerRecorder()
+        let store = T3ThreadMapStore()
+        let router = AgentCLIRouter(
+            t3: ThreadReturningRunner(recorder: t3, threadID: fakeThreadID),
+            t3Probe: StubAvailabilityProbe(available: true),
+            t3ThreadMap: store
+        )
+        let request = makeRequest()
+
+        _ = try await router.run(request)
+        let firstRequests = await t3.recordedRequests()
+        #expect(firstRequests.first?.threadID == nil)
+
+        _ = try await router.run(request)
+        let secondRequests = await t3.recordedRequests()
+        #expect(secondRequests.last?.threadID == fakeThreadID)
+
+        let snapshot = await store.snapshot()
+        #expect(snapshot.threadID(providerInstanceID: fakeProvider, modelSlug: fakeModelSlug) == fakeThreadID)
+    }
+
+    @Test("the router actually starts then reuses the thread")
+    func threadMapDrivesT3Runner() async throws {
+        let fixture = try AgentCLIFixtures.text("t3-thread-start.json")
+        let launcher = FakeProcessLauncher([.json(fixture), .json(fixture)])
+        let router = AgentCLIRouter(
+            t3: makeT3Runner(launcher: launcher),
+            t3Probe: StubAvailabilityProbe(available: true),
+            t3ThreadMap: T3ThreadMapStore()
+        )
+
+        _ = try await router.run(makeRequest())
+        _ = try await router.run(makeRequest())
+
+        let requests = await launcher.recordedRequests()
+        #expect(Array(requests[0].arguments.prefix(2)) == ["thread", "start"])
+        #expect(Array(requests[1].arguments.prefix(3)) == ["thread", "send", fakeThreadID])
+    }
+
+    @Test("a different model starts without a stored thread")
+    func threadMapDifferentModel() async throws {
+        let t3 = RunnerRecorder()
+        let store = T3ThreadMapStore()
+        let router = AgentCLIRouter(
+            t3: ThreadReturningRunner(recorder: t3, threadID: fakeThreadID),
+            t3Probe: StubAvailabilityProbe(available: true),
+            t3ThreadMap: store
+        )
+
+        _ = try await router.run(makeRequest())
+        _ = try await router.run(makeRequest(model: "other/model"))
+
+        let requests = await t3.recordedRequests()
+        #expect(requests.first?.threadID == nil)
+        #expect(requests.last?.threadID == nil)
+
+        let snapshot = await store.snapshot()
+        #expect(snapshot.entries.count == 2)
+    }
+
+    @Test("a Claude task does not select T3 when no T3 model is configured")
+    func claudeTaskSkipsT3WithoutModel() async throws {
+        let claude = RunnerRecorder()
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: RecordingRunner(kind: .t3, recorder: RunnerRecorder()),
+            claude: RecordingRunner(kind: .claude, recorder: claude),
+            t3Probe: nil
+        )
+
+        let result = try await router.run(makeRequest(kind: .claude, provider: nil, model: "sonnet"))
+
+        #expect(result.provider == .claude)
+        #expect(await claude.recordedRequests().count == 1)
+    }
+
+    @Test("a configured T3 model lets a Claude task route to T3")
+    func claudeTaskRoutesToT3WithModel() async throws {
+        let t3 = RunnerRecorder()
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: RecordingRunner(kind: .t3, recorder: t3),
+            claude: RecordingRunner(kind: .claude, recorder: RunnerRecorder()),
+            t3Probe: nil,
+            t3Model: AgentCLIModelSelection(
+                kind: .t3,
+                providerInstanceID: "opencode",
+                modelSlug: "opencode-go/deepseek-v4.1-flash"
+            )
+        )
+
+        let result = try await router.run(makeRequest(kind: .claude, provider: nil, model: "sonnet"))
+
+        #expect(result.provider == .t3)
+        let requests = await t3.recordedRequests()
+        #expect(requests.first?.model.kind == .t3)
+    }
+
     @Test("resolvedProvider reports the winner")
     func resolvedProvider() async {
         let router = AgentCLIRouter(

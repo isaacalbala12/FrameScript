@@ -134,7 +134,7 @@ struct T3RunnerTests {
         let recorded = await launcher.recordedRequests()
         #expect(recorded.count == 2)
         #expect(recorded.last?.arguments == [
-            "thread", "show", fakeThreadID, "--messages", "1", "--json"
+            "thread", "show", fakeThreadID, "--messages", "20", "--json"
         ])
     }
 
@@ -307,6 +307,83 @@ struct T3RunnerTests {
             try await task.value
         }
         #expect(error == .cancelled)
+    }
+
+    @Test("the pending question is the latest assistant message from the pending run")
+    func pendingQuestionUsesAssistant() async throws {
+        let waiting = """
+        {"threadId":"\(fakeThreadID)","runId":"run:1","status":"waiting","reply":null,"error":null}
+        """
+        let show = """
+        {
+          "thread": {"threadId": "\(fakeThreadID)", "link": "https://app.t3.codes/threads/x/y"},
+          "messages": [
+            {"role": "assistant", "runId": "run:0", "text": "An older answer."},
+            {"role": "assistant", "runId": "run:1", "text": "Which title do you prefer?"},
+            {"role": "user", "runId": "run:1", "text": "Write the titles"}
+          ]
+        }
+        """
+        let launcher = FakeProcessLauncher([.json(waiting, exit: 2), .json(show)])
+        let runner = makeT3Runner(launcher: launcher)
+
+        let result = try await runner.run(makeRequest())
+        let pending = try #require(result.pendingQuestion)
+
+        #expect(pending.question == "Which title do you prefer?")
+    }
+
+    @Test("the user's own prompt is never shown as the pending question")
+    func pendingQuestionNeverUsesUserPrompt() async throws {
+        let waiting = """
+        {"threadId":"\(fakeThreadID)","runId":"run:1","status":"waiting","reply":null,"error":null}
+        """
+        let show = """
+        {
+          "thread": {"threadId": "\(fakeThreadID)"},
+          "messages": [
+            {"role": "user", "runId": "run:1", "text": "Write the titles"}
+          ]
+        }
+        """
+        let launcher = FakeProcessLauncher([.json(waiting, exit: 2), .json(show)])
+        let runner = makeT3Runner(launcher: launcher)
+
+        let result = try await runner.run(makeRequest())
+        let pending = try #require(result.pendingQuestion)
+
+        #expect(pending.question.contains("waiting for an answer"))
+        #expect(!pending.question.contains("Write the titles"))
+    }
+
+    @Test("prompt whitespace is sent byte-for-byte")
+    func promptWhitespace() async throws {
+        let fixture = try AgentCLIFixtures.text("t3-thread-start.json")
+        let launcher = FakeProcessLauncher([.json(fixture)])
+        let runner = makeT3Runner(launcher: launcher)
+        let prompt = "  indented first line\nsecond line\n\n"
+
+        _ = try await runner.run(makeRequest(prompt: prompt))
+
+        let recorded = await launcher.recordedRequests()
+        #expect(recorded.first?.standardInput == Data(prompt.utf8))
+    }
+
+    @Test("truncated T3 output is reported as truncation, not malformed JSON")
+    func truncatedOutput() async {
+        let envelope = """
+        {"threadId":"\(fakeThreadID)","runId":"run:1","status":"completed","reply":"OK","error":null}
+        """
+        let launcher = FakeProcessLauncher([.json(envelope, stdoutTruncated: true)])
+        let runner = makeT3Runner(launcher: launcher)
+        var request = makeRequest()
+        request.outputByteLimit = 123
+
+        let error = await captureAgentCLIError {
+            try await runner.run(request)
+        }
+
+        #expect(error == .outputTruncated(limit: 123))
     }
 
     @Test("the pending-question timeout is capped at 20 seconds")
