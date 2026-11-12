@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 import OSLog
 
 @MainActor
@@ -730,14 +731,15 @@ private struct ChatTextPart: Decodable {
 
 struct PromptBuilder {
     func systemPrompt(for task: AITask, language: AppLanguage) -> String {
-        let languageInstruction = "Respond only in \(languageName(for: language))."
+        let languageName = languageName(for: language)
+        let languageInstruction = "Respond only in \(languageName)."
         return switch task {
         case .autocomplete:
             "Continue the same narrator's YouTube script at the caret. Return exactly one short continuation sentence and only the insertable script text. Preserve the same narrator, language, tone, person, punctuation, capitalization, and style. Do not return a second sentence, explanation, alternatives, labels, quotes, lists, or Markdown. Never answer the narrator or start a dialogue. Do not repeat text already before the caret. Account for text after the caret and avoid duplicating it. \(languageInstruction)"
         case .rewrite:
             "Rewrite selected script text while preserving intent and voice. \(languageInstruction)"
         case .analyze:
-            "Review the scene for clarity, retention, pacing, repetition, concrete examples, and weak phrasing. \(languageInstruction) Return exactly one JSON object with string fields title, severity, message, and suggestion. Severity must be note, suggestion, or important. Write complete plain-text sentences; do not use Markdown."
+            "Review the scene for clarity, retention, pacing, repetition, concrete examples, and weak phrasing. \(languageInstruction) Return exactly one JSON object with string fields title, severity, message, and suggestion; the title, message, and suggestion values must be written in \(languageName). Severity must be note, suggestion, or important. Write complete plain-text sentences; do not use Markdown."
         case .bRollGeneration:
             "Generate practical visual or shot ideas that strengthen the meaning of the script. \(languageInstruction)"
         case .editingGeneration:
@@ -745,21 +747,45 @@ struct PromptBuilder {
         }
     }
 
+    /// Detects the script's language among the supported languages with Apple's
+    /// Natural Language recognizer. Only confident Spanish, English, or Russian
+    /// hypotheses are accepted; anything else (French, Catalan, mixed short
+    /// text) falls back to the interface or system language instead of being
+    /// forced into one of the three supported languages.
     func responseLanguage(for text: String, fallback: AppLanguage, preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
-        let cyrillic = text.unicodeScalars.filter { (0x0400...0x052F).contains($0.value) }.count
-        let latin = text.unicodeScalars.filter { (0x0041...0x005A).contains($0.value) || (0x0061...0x007A).contains($0.value) }.count
-        guard cyrillic + latin >= 12 else { return resolvedLanguage(fallback, preferredLanguages: preferredLanguages) }
-        return cyrillic > latin ? .russian : .english
+        let letterCount = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        guard letterCount >= 12 else { return resolvedLanguage(fallback, preferredLanguages: preferredLanguages) }
+
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+
+        let supported: [NLLanguage: AppLanguage] = [
+            .spanish: .spanish,
+            .english: .english,
+            .russian: .russian
+        ]
+        var bestLanguage: AppLanguage?
+        var bestConfidence = 0.0
+        for (detected, confidence) in recognizer.languageHypotheses(withMaximum: 5) where confidence >= Self.minimumLanguageConfidence {
+            guard let appLanguage = supported[detected], confidence > bestConfidence else { continue }
+            bestLanguage = appLanguage
+            bestConfidence = confidence
+        }
+        return bestLanguage ?? resolvedLanguage(fallback, preferredLanguages: preferredLanguages)
     }
 
+    private static let minimumLanguageConfidence = 0.6
+
     func resolvedLanguage(_ language: AppLanguage, preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
-        guard language == .system else { return language }
-        let code = preferredLanguages.first.flatMap { Locale(identifier: $0).language.languageCode?.identifier }
-        return code == "ru" ? .russian : .english
+        L10n.resolve(language, preferredLanguages: preferredLanguages)
     }
 
     private func languageName(for language: AppLanguage) -> String {
-        resolvedLanguage(language) == .russian ? "Russian" : "English"
+        switch resolvedLanguage(language) {
+        case .spanish: "Spanish"
+        case .russian: "Russian"
+        default: "English"
+        }
     }
 }
 

@@ -1165,16 +1165,25 @@ enum BlankProjectStart: String, Codable, CaseIterable, Identifiable {
 enum AppLanguage: String, Codable, CaseIterable, Identifiable {
     case system
     case english
+    case spanish
     case russian
 
     var id: String { rawValue }
 
+    /// Native name of the language. `.system` has no native name and is
+    /// localized through `displayName(in:)` in the language picker.
     var displayName: String {
         switch self {
         case .system: "System"
         case .english: "English"
+        case .spanish: "Español"
         case .russian: "Русский"
         }
+    }
+
+    func displayName(in interfaceLanguage: AppLanguage) -> String {
+        guard self == .system else { return displayName }
+        return L10n.tr("language.system", language: interfaceLanguage)
     }
 }
 

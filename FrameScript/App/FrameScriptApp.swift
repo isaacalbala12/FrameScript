@@ -10,6 +10,10 @@ struct FrameScriptApp: App {
         // Must run before AppState creates its settings and recents stores.
         SandboxDataMigration.migrateIfNeeded()
         _appState = State(initialValue: AppState())
+        // This is a process-wide AppKit setting, so enable automatic spelling
+        // language detection once at launch instead of mutating it from the
+        // script editor's updateNSView (which also owns notes text views).
+        NSSpellChecker.shared.automaticallyIdentifiesLanguages = true
     }
 
     var body: some SwiftUI.Scene {
