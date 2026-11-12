@@ -339,6 +339,29 @@ final class ShortcutRegistryTests: XCTestCase {
         }
     }
 
+    func testEveryShortcutCommandHasExactlyOneRegisteredDefinition() {
+        let registeredCommands = ShortcutRegistry.definitions.map(\.command)
+
+        XCTAssertEqual(registeredCommands.count, ShortcutCommand.allCases.count)
+        XCTAssertEqual(Set(registeredCommands), Set(ShortcutCommand.allCases))
+        for command in ShortcutCommand.allCases {
+            let definition = ShortcutRegistry.definition(for: command)
+            XCTAssertEqual(definition.command, command)
+            XCTAssertNotEqual(definition.order, Int.max, "Fallback definition used for \(command.rawValue)")
+        }
+    }
+
+    func testMissingDefinitionFallbackKeepsTheCommandUsableWithoutCrashing() {
+        let fallback = ShortcutRegistry.fallbackDefinition(for: .save)
+
+        XCTAssertEqual(fallback.command, .save)
+        XCTAssertEqual(fallback.localizationKey, "command.save")
+        XCTAssertEqual(fallback.category, .application)
+        XCTAssertEqual(fallback.order, Int.max)
+        XCTAssertTrue(fallback.factoryDefault.isValid)
+        XCTAssertTrue(ShortcutRegistry.isAssignable(fallback.factoryDefault))
+    }
+
     func testReassignmentActionsAndUnassignedStateAreLocalized() {
         XCTAssertEqual(L10n.tr("shortcuts.reassign", language: .english), "Reassign")
         XCTAssertEqual(L10n.tr("project.unsaved.cancel", language: .english), "Cancel")
