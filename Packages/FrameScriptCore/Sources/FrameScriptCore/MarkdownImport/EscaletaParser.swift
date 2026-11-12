@@ -12,13 +12,16 @@ public enum EscaletaParser {
 
 private struct Parser {
     let lines: [String]
+    let fenceMask: [Bool]
     var warnings: [EscaletaWarning] = []
     var document = EscaletaDocument()
     var sawTimestampScene = false
     var previousSceneStart: Int?
 
     init(markdown: String) {
-        lines = MarkdownParsingSupport.normalizedLines(markdown)
+        let normalized = MarkdownParsingSupport.normalizedLines(markdown)
+        lines = normalized
+        fenceMask = MarkdownParsingSupport.fenceMask(normalized)
     }
 
     mutating func run() -> EscaletaImportResult {
@@ -30,7 +33,7 @@ private struct Parser {
             return result()
         }
 
-        let tree = MarkdownNode.buildTree(lines)
+        let tree = MarkdownNode.buildTree(lines, fenceMask: fenceMask)
         guard let titleNode = tree.first(where: { $0.level == 1 }) else {
             warnings.append(
                 EscaletaWarning(kind: .missingTitle, message: "No se encontró ningún título de nivel 1.")
@@ -41,6 +44,8 @@ private struct Parser {
             return result()
         }
 
+        let preTitle = MarkdownParsingSupport.trimmedBlock(Array(lines[0..<titleNode.lineIndex]))
+        document.preTitleText = preTitle.isEmpty ? nil : preTitle
         document.title = titleNode.heading
         parseIntro(titleNode)
 
@@ -63,7 +68,7 @@ private struct Parser {
             parseFrontMatterSection(child)
         }
 
-        for node in tree where node.lineIndex != titleNode.lineIndex {
+        for node in tree where node.lineIndex > titleNode.lineIndex {
             parseTopLevel(node)
         }
 
@@ -86,6 +91,17 @@ private struct Parser {
             )
         }
 
+        // Section sources precede trailer sources so both export orders produce
+        // the same structural document.
+        document.sources = document.sources.enumerated()
+            .sorted { lhs, rhs in
+                let leftPriority = lhs.element.origin == .section ? 0 : 1
+                let rightPriority = rhs.element.origin == .section ? 0 : 1
+                if leftPriority != rightPriority { return leftPriority < rightPriority }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+
         validate()
         document.kind = detectKind()
         return result()
@@ -99,7 +115,27 @@ private struct Parser {
         let preamble = Array(lines[range])
         let stripped = MarkdownParsingSupport.strippingTrailingRule(preamble)
         document.versionNote = stripped.body.isEmpty ? nil : stripped.body
-        document.separatorAfterIntro = stripped.hadRule
+
+        var separator = stripped.hadRule
+        if separator, titleNode.children.isEmpty,
+           let next = headingAfter(titleNode) {
+            let normalized = MarkdownParsingSupport.normalizedHeading(next.text)
+            // The script/SEO blocks write their own canonical rule. Keeping the
+            // source rule here would duplicate it on export.
+            if next.level == 1, isScriptHeading(normalized) || isSEOHeading(normalized) {
+                separator = false
+            } else if next.level == 2,
+                      isTableSection(normalized) || isVerificationSection(normalized) {
+                separator = false
+            }
+        }
+        document.separatorAfterIntro = separator
+    }
+
+    func headingAfter(_ node: MarkdownNode) -> (level: Int, text: String)? {
+        let index = node.contentRange.upperBound
+        guard index < lines.count else { return nil }
+        return MarkdownParsingSupport.heading(lines[index])
     }
 
     mutating func parseFrontMatterSection(_ node: MarkdownNode) {
@@ -131,7 +167,9 @@ private struct Parser {
         case "seo", "paquete seo":
             parseSEO(node)
         default:
-            if isTableSection(normalized) {
+            if isSEOHeading(normalized) {
+                parseSEO(node)
+            } else if isTableSection(normalized) {
                 parseTableSection(node)
             } else if isVerificationSection(normalized) {
                 parseVerificationSection(node)
@@ -155,6 +193,11 @@ private struct Parser {
                 parseScript(node)
             } else if isSEOHeading(normalized) {
                 parseSEO(node)
+            } else if document.scriptHeading == nil, containsTimestampH2(node) {
+                // §3.2(4): without a recognised script H1, timestamped H2s
+                // anywhere in the document become scenes. The wrapping H1 is
+                // reused as the container so export preserves the source shape.
+                parseScript(node)
             } else {
                 appendUnparsed(node, placement: .document)
             }
@@ -189,6 +232,7 @@ private struct Parser {
     mutating func parseScript(_ node: MarkdownNode) {
         if document.scriptHeading == nil {
             document.scriptHeading = node.heading
+            document.scriptSeparator = hasRuleImmediatelyBefore(node)
         }
 
         let preamble = Array(lines[node.preambleRange()])
@@ -216,11 +260,62 @@ private struct Parser {
         }
     }
 
+    func bodyWithoutTrailingRule(
+        _ raw: [String],
+        startLine: Int
+    ) -> (body: [String], hadRule: Bool) {
+        var end = raw.count
+        while end > 0, MarkdownParsingSupport.isBlank(raw[end - 1]) { end -= 1 }
+        guard end > 0, MarkdownParsingSupport.isHorizontalRule(raw[end - 1]) else {
+            return (raw, false)
+        }
+        if isFenced(lineNumber: startLine + end - 1) {
+            return (raw, false)
+        }
+        end -= 1
+        while end > 0, MarkdownParsingSupport.isBlank(raw[end - 1]) { end -= 1 }
+        return (Array(raw[0..<end]), true)
+    }
+
+    func sectionLines(_ raw: [String], startLine: Int) -> [String] {
+        bodyWithoutTrailingRule(raw, startLine: startLine).body
+    }
+
+    func isFenced(lineNumber: Int) -> Bool {
+        let index = lineNumber - 1
+        return index >= 0 && index < fenceMask.count && fenceMask[index]
+    }
+
+    func hasRuleImmediatelyBefore(_ node: MarkdownNode) -> Bool {
+        var index = node.lineIndex - 1
+        while index >= 0, MarkdownParsingSupport.isBlank(lines[index]) {
+            index -= 1
+        }
+        guard index >= 0 else { return false }
+        return MarkdownParsingSupport.isHorizontalRule(lines[index])
+    }
+
+    func containsTimestampH2(_ node: MarkdownNode) -> Bool {
+        for child in node.children {
+            if child.level == 2,
+               MarkdownParsingSupport.sceneHeading(lines[child.lineIndex]) != nil {
+                return true
+            }
+            if containsTimestampH2(child) { return true }
+        }
+        return false
+    }
+
     mutating func parseScriptPreamble(_ preamble: [String], startLine: Int) {
         var introLines: [String] = []
         var index = 0
         while index < preamble.count {
             let line = preamble[index]
+            if isFenced(lineNumber: startLine + index) {
+                if !MarkdownParsingSupport.isBlank(line) { introLines.append(line) }
+                index += 1
+                continue
+            }
             if MarkdownParsingSupport.isHorizontalRule(line) {
                 index += 1
                 continue
@@ -282,7 +377,10 @@ private struct Parser {
             return nil
         }
 
-        let body = MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange]))
+        let rawBody = Array(lines[node.contentRange])
+        let parts = bodyWithoutTrailingRule(rawBody, startLine: node.lineIndex + 2)
+        let body = parts.body
+        let hadRule = parts.hadRule
         let sceneIndex = document.scenes.count
         let blocks = parseSceneBlocks(
             body,
@@ -295,10 +393,11 @@ private struct Parser {
             timestampText: heading.timestampText,
             title: heading.title,
             blocks: blocks,
-            separator: heading.separator
+            separator: heading.separator,
+            separatorAfter: hadRule && shouldPreserveSceneRule(after: node)
         )
 
-        if let previous = previousSceneStart, heading.seconds < previous {
+        if let previous = previousSceneStart, heading.seconds <= previous {
             warnings.append(
                 EscaletaWarning(
                     kind: .descendingTimestamp,
@@ -323,6 +422,24 @@ private struct Parser {
         return scene
     }
 
+    func shouldPreserveSceneRule(after node: MarkdownNode) -> Bool {
+        let nextIndex = node.contentRange.upperBound
+        guard nextIndex < lines.count,
+              let next = MarkdownParsingSupport.heading(lines[nextIndex]) else {
+            return true
+        }
+        if next.level == 2, MarkdownParsingSupport.sceneHeading(lines[nextIndex]) != nil {
+            return true
+        }
+        let normalized = MarkdownParsingSupport.normalizedHeading(next.text)
+        if next.level == 1 {
+            return !(isScriptHeading(normalized) || isSEOHeading(normalized))
+        }
+        return !(isTableSection(normalized)
+            || isVerificationSection(normalized)
+            || isSEOHeading(normalized))
+    }
+
     mutating func parseSceneBlocks(
         _ body: [String],
         absoluteStartLine: Int,
@@ -336,6 +453,14 @@ private struct Parser {
         while index < body.count {
             let line = body[index]
             let absoluteLine = absoluteStartLine + index
+            let sourceIndex = absoluteStartLine - 1 + index
+
+            if sourceIndex < fenceMask.count, fenceMask[sourceIndex] {
+                if paragraph.isEmpty { paragraphStart = absoluteLine }
+                paragraph.append(line)
+                index += 1
+                continue
+            }
 
             if MarkdownParsingSupport.isBlank(line) {
                 flushParagraph(&paragraph, startLine: paragraphStart, into: &blocks)
@@ -424,7 +549,8 @@ private struct Parser {
         paragraph.removeAll()
         guard !text.isEmpty else { return }
         blocks.append(.paragraph(text))
-        if let label = MarkdownParsingSupport.inlineCue(in: text) {
+        let hasFence = text.contains("```") || text.contains("~~~")
+        if !hasFence, let label = MarkdownParsingSupport.inlineCue(in: text) {
             warnings.append(
                 EscaletaWarning(
                     kind: .inlineCue,
@@ -442,8 +568,9 @@ private struct Parser {
             document.outlineHeading = node.heading
         }
         let items = MarkdownParsingSupport.parseOutlineItems(
-            MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange])),
-            startingAt: node.lineIndex + 2
+            sectionLines(Array(lines[node.contentRange]), startLine: node.lineIndex + 2),
+            startingAt: node.lineIndex + 2,
+            fenceMask: fenceMask
         )
         if items.isEmpty {
             warnings.append(
@@ -541,6 +668,16 @@ private struct Parser {
         var sawLabel = false
 
         while index < content.count {
+            if isFenced(lineNumber: startLine + index) {
+                var next = index
+                while next < content.count, isFenced(lineNumber: startLine + next) {
+                    preambleLines.append(content[next])
+                    next += 1
+                }
+                index = next
+                continue
+            }
+
             guard let bold = MarkdownParsingSupport.boldLabel(content[index]) else {
                 if !sawLabel {
                     preambleLines.append(content[index])
@@ -594,7 +731,7 @@ private struct Parser {
             pack.fieldOrder.append(field)
         }
 
-        let cleanedLines = MarkdownParsingSupport.linesWithoutTrailingRule(fieldLines)
+        let cleanedLines = sectionLines(fieldLines, startLine: lineStart)
         let raw = MarkdownParsingSupport.trimmedBlock(cleanedLines)
         if raw.isEmpty {
             warnings.append(
@@ -673,14 +810,21 @@ private struct Parser {
         }
 
         var insideSources = false
+        var foundTrailerSource = false
         for (offset, line) in fieldLines.enumerated() {
             let normalized = MarkdownParsingSupport.normalizedHeading(line)
             if normalized.hasPrefix("fuentes oficiales y referencias") {
                 insideSources = true
+                foundTrailerSource = false
                 continue
             }
             guard insideSources else { continue }
-            if MarkdownParsingSupport.isBlank(line) || MarkdownParsingSupport.trimmed(line).hasPrefix("#") {
+            if MarkdownParsingSupport.isBlank(line) {
+                // A blank line may separate the label from the first URL.
+                if foundTrailerSource { insideSources = false }
+                continue
+            }
+            if MarkdownParsingSupport.trimmed(line).hasPrefix("#") {
                 insideSources = false
                 continue
             }
@@ -691,7 +835,12 @@ private struct Parser {
             )
             if !entry.links.isEmpty {
                 document.sources.append(entry)
-                document.sourcesPlacement = .descriptionTrailer
+                foundTrailerSource = true
+                if document.sourcesPlacement == .none {
+                    document.sourcesPlacement = .descriptionTrailer
+                }
+            } else if foundTrailerSource {
+                insideSources = false
             }
         }
     }
@@ -702,13 +851,22 @@ private struct Parser {
         if document.tableSectionHeading == nil {
             document.tableSectionHeading = node.heading
         }
-        let sectionLines = MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange]))
+        let sectionLines = self.sectionLines(
+            Array(lines[node.contentRange]),
+            startLine: node.lineIndex + 2
+        )
         var notes: [String] = []
         var index = 0
         var tableCount = 0
 
         while index < sectionLines.count {
             let line = sectionLines[index]
+            let absolute = node.lineIndex + 2 + index
+            if isFenced(lineNumber: absolute) {
+                if !MarkdownParsingSupport.isBlank(line) { notes.append(line) }
+                index += 1
+                continue
+            }
             if MarkdownParsingSupport.isTableRow(line),
                let parsed = MarkdownParsingSupport.parseTable(
                    lines: sectionLines,
@@ -756,7 +914,7 @@ private struct Parser {
             document.verifyHeading = node.heading
         }
         let items = parseVerificationItems(
-            MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange])),
+            sectionLines(Array(lines[node.contentRange]), startLine: node.lineIndex + 2),
             startLine: node.lineIndex + 2
         )
         if items.isEmpty {
@@ -776,7 +934,7 @@ private struct Parser {
             document.sourcesHeading = node.heading
         }
         let entries = parseSourceEntries(
-            MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange])),
+            sectionLines(Array(lines[node.contentRange]), startLine: node.lineIndex + 2),
             origin: .section,
             startLine: node.lineIndex + 2
         )
@@ -802,6 +960,15 @@ private struct Parser {
         for (offset, line) in fieldLines.enumerated() {
             if MarkdownParsingSupport.isBlank(line) { continue }
             let absolute = startLine + offset
+
+            if isFenced(lineNumber: absolute) {
+                if items.isEmpty {
+                    items.append(EscaletaVerificationItem(text: MarkdownParsingSupport.trimmed(line), line: absolute))
+                } else {
+                    items[items.count - 1].text += "\n" + MarkdownParsingSupport.trimmed(line)
+                }
+                continue
+            }
 
             if let item = MarkdownParsingSupport.listItem(line, lineNumber: absolute) {
                 if let bold = MarkdownParsingSupport.boldLabel(item.text),
@@ -839,8 +1006,21 @@ private struct Parser {
         var entries: [EscaletaSourceEntry] = []
         for (offset, line) in fieldLines.enumerated() {
             if MarkdownParsingSupport.isBlank(line) { continue }
+            let absolute = startLine + offset
+            if isFenced(lineNumber: absolute) {
+                entries.append(
+                    EscaletaSourceEntry(
+                        raw: MarkdownParsingSupport.trimmed(line),
+                        bullet: false,
+                        links: [],
+                        origin: origin,
+                        line: absolute
+                    )
+                )
+                continue
+            }
             entries.append(
-                sourceEntry(from: line, origin: origin, lineNumber: startLine + offset)
+                sourceEntry(from: line, origin: origin, lineNumber: absolute)
             )
         }
         return entries
@@ -891,7 +1071,9 @@ private struct Parser {
     // MARK: - Shared helpers
 
     func sectionBody(_ node: MarkdownNode) -> String {
-        MarkdownParsingSupport.strippingTrailingRule(Array(lines[node.contentRange])).body
+        MarkdownParsingSupport.trimmedBlock(
+            sectionLines(Array(lines[node.contentRange]), startLine: node.lineIndex + 2)
+        )
     }
 
     mutating func warnEmptySection(_ node: MarkdownNode) {
@@ -993,7 +1175,11 @@ private struct Parser {
     }
 
     func isSEOHeading(_ normalized: String) -> Bool {
-        normalized == "seo" || normalized.contains("paquete seo")
+        normalized == "seo"
+            || normalized.contains("paquete seo")
+            || normalized.hasPrefix("seo ")
+            || normalized.hasSuffix(" seo")
+            || normalized.contains(" seo y ")
     }
 
     func isTableSection(_ normalized: String) -> Bool {

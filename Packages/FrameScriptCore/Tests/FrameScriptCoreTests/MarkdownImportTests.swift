@@ -14,9 +14,18 @@ enum MarkdownFixture {
         "edge-inline-unknown",
         "edge-empty-sections",
         "edge-dossier",
+        "edge-fenced-scene",
+        "edge-pre-title",
+        "edge-global-h2",
+        "edge-thumbnail-shared-prose",
+        "edge-title-script",
+        "edge-title-script-note",
+        "edge-interior-rule",
+        "edge-scene-only",
+        "edge-seo-miniature",
     ]
 
-    static let allNames = canonicalNames
+    static let allNames = canonicalNames + ["edge-dual-sources"]
 
     static func text(_ name: String) throws -> String {
         let url = try url(for: name)
@@ -545,6 +554,238 @@ func canonicalWhitespace(_ text: String) -> String {
     let result = EscaletaParser.parse(markdown)
     #expect(result.document.kind == .thumbnailConcepts)
     #expect(result.warnings.contains { $0.kind == .thumbnailTextLength })
+}
+
+
+@Test func fencedCodeBlocksAreOpaque() throws {
+    let markdown = try MarkdownFixture.text("edge-fenced-scene")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.scenes.count == 2)
+    #expect(document.scenes.map(\.title) == ["One", "Two"])
+    #expect(document.scenes[0].cues.isEmpty)
+    #expect(document.comparisonTables.isEmpty)
+    #expect(document.scenes[0].bodyParagraphs.contains { $0.contains("## 5:00 — Phantom") })
+    #expect(document.scenes[0].bodyParagraphs.contains { $0.contains("[IMAGEN: fake]") })
+    #expect(document.scenes[0].bodyParagraphs.contains { $0.contains("| A | B |") })
+    #expect(!result.warnings.contains { $0.kind == .unknownCue })
+    #expect(!result.warnings.contains { $0.kind == .inlineCue })
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.contains("## 5:00 — Phantom"))
+    #expect(exported.contains("[IMAGEN: fake]"))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func preTitleTextIsPreserved() throws {
+    let markdown = try MarkdownFixture.text("edge-pre-title")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.preTitleText?.contains("Loose line before the title.") == true)
+    #expect(document.scenes.count == 1)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.hasPrefix("Loose line before the title."))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func dualSourcesSectionAndTrailerCoexist() throws {
+    let markdown = try MarkdownFixture.text("edge-dual-sources")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.sources.count == 2)
+    #expect(document.sources.map(\.origin) == [.section, .descriptionTrailer])
+    #expect(document.sourcesPlacement == .seoSection)
+    #expect(document.sources.first?.links.first?.url == "https://example.com/first")
+    #expect(document.sources.last?.links.first?.url == "https://example.com/trailer")
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.contains("## Fuentes principales"))
+    #expect(exported.contains("https://example.com/first"))
+    #expect(exported.contains("https://example.com/trailer"))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func globalH2TimestampFallbackFindsScenes() throws {
+    let markdown = try MarkdownFixture.text("edge-global-h2")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.scenes.count == 2)
+    #expect(document.scenes.map(\.title) == ["One", "Two"])
+    #expect(document.scriptHeading == "Unrecognised container")
+    #expect(!result.warnings.contains { $0.kind == .noScenes })
+    #expect(EscaletaParser.parse(EscaletaExporter.markdown(from: document)).document == document)
+}
+
+@Test func thumbnailSharedRulesProseIsPreserved() throws {
+    let markdown = try MarkdownFixture.text("edge-thumbnail-shared-prose")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+    let thumbnail = try #require(document.thumbnailConcepts)
+
+    #expect(thumbnail.sharedRulesNotes?.contains("A short prose note.") == true)
+    #expect(thumbnail.sharedRules.count == 2)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.contains("A short prose note."))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func titleAndScriptWithoutFrontMatterRoundTrip() throws {
+    let markdown = try MarkdownFixture.text("edge-title-script")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(!document.separatorAfterIntro)
+    #expect(!document.scriptSeparator)
+    #expect(document.scenes.count == 1)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(!exported.contains("---"))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+
+@Test func titleWithNoteAndScriptRuleRoundTrips() throws {
+    let markdown = try MarkdownFixture.text("edge-title-script-note")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.versionNote == "A version note for the document.")
+    #expect(!document.separatorAfterIntro)
+    #expect(document.scriptSeparator)
+    #expect(document.scenes.count == 1)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.components(separatedBy: "---").count == 2)
+    #expect(!(document.versionNote?.contains("---") ?? false))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func interiorSceneRuleIsPreserved() throws {
+    let markdown = try MarkdownFixture.text("edge-interior-rule")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.scenes.count == 2)
+    #expect(document.scenes[0].separatorAfter)
+    #expect(!document.scenes[1].separatorAfter)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(exported.contains("First.\n\n---\n\n## 0:30"))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func sceneOnlyDocumentKeepsItsShape() throws {
+    let markdown = try MarkdownFixture.text("edge-scene-only")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+
+    #expect(document.scenes.count == 2)
+    #expect(document.scriptHeading == nil)
+
+    let exported = EscaletaExporter.markdown(from: document)
+    #expect(!exported.contains("# Guion completo"))
+    #expect(EscaletaParser.parse(exported).document == document)
+}
+
+@Test func seoAndMiniatureHeadingIsRecognised() throws {
+    let markdown = try MarkdownFixture.text("edge-seo-miniature")
+    let result = EscaletaParser.parse(markdown)
+    let document = result.document
+    let pack = try #require(document.publishing)
+
+    #expect(document.seoLayout == .boldLabels)
+    #expect(pack.titleCandidates.count == 2)
+    #expect(pack.thumbnailBrief == "A simple image.")
+    #expect(pack.description == "A description.")
+    #expect(EscaletaParser.parse(EscaletaExporter.markdown(from: document)).document == document)
+}
+
+@Test func markdownLinksAreNotInlineCues() {
+    let markdown = """
+    # LINK TEST
+
+    # Guion
+
+    ## 0:00 — One
+
+    See [VRC](https://example.com/vrc) for context.
+    """
+
+    let result = EscaletaParser.parse(markdown)
+    #expect(!result.warnings.contains { $0.kind == .inlineCue })
+}
+
+@Test func duplicateSceneTimestampsWarn() {
+    let markdown = """
+    # DUPLICATE TIMES
+
+    # Guion
+
+    ## 0:00 — One
+
+    Text.
+
+    ## 0:00 — Two
+
+    Text.
+    """
+
+    let result = EscaletaParser.parse(markdown)
+    #expect(result.warnings.contains { $0.kind == .descendingTimestamp })
+}
+
+
+@Test func seoH3ContentIsPreservedInPreamble() throws {
+    let markdown = """
+    # H3 SEO
+
+    # Guion
+
+    ## 0:00 — One
+
+    Text.
+
+    ## SEO
+
+    ### Título recomendado
+
+    H3 TITLE
+    """
+
+    let result = EscaletaParser.parse(markdown)
+    let pack = try #require(result.document.publishing)
+    #expect(pack.preamble?.contains("### Título recomendado") == true)
+    #expect(pack.preamble?.contains("H3 TITLE") == true)
+    #expect(pack.primaryTitle == nil)
+
+    let exported = EscaletaExporter.markdown(from: result.document)
+    #expect(exported.contains("### Título recomendado"))
+    #expect(exported.contains("H3 TITLE"))
+    #expect(EscaletaParser.parse(exported).document == result.document)
+}
+
+@Test func blockquoteTextIsNotScannedForInlineCues() {
+    let markdown = """
+    # PACING TEST
+
+    # Guion
+
+    > Pacing note with [CORCHETES] inside.
+
+    ## 0:00 — One
+
+    Text.
+    """
+
+    let result = EscaletaParser.parse(markdown)
+    #expect(result.document.pacingNotes.count == 1)
+    #expect(!result.warnings.contains { $0.kind == .inlineCue })
 }
 
 @Test(arguments: MarkdownFixture.allNames)

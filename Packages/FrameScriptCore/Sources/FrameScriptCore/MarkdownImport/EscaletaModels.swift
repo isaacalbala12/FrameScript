@@ -82,6 +82,8 @@ public enum EscaletaChaptersPlacement: String, Sendable, CaseIterable {
 
 public struct EscaletaDocument: Equatable, Sendable {
     public var kind: EscaletaDocumentKind
+    /// Text before the first H1, preserved verbatim.
+    public var preTitleText: String?
     public var title: String
     public var versionNote: String?
     /// The source had a horizontal rule after the title/version note.
@@ -91,6 +93,8 @@ public struct EscaletaDocument: Equatable, Sendable {
     public var outlineHeading: String?
     public var outline: [EscaletaOutlineItem]
     public var scriptHeading: String?
+    /// Whether the source had a horizontal rule immediately before the script H1.
+    public var scriptSeparator: Bool
     public var scriptIntro: String?
     public var pacingNotes: [String]
     public var scenes: [EscaletaScene]
@@ -114,6 +118,7 @@ public struct EscaletaDocument: Equatable, Sendable {
 
     public init(
         kind: EscaletaDocumentKind = .other,
+        preTitleText: String? = nil,
         title: String = "",
         versionNote: String? = nil,
         separatorAfterIntro: Bool = false,
@@ -122,6 +127,7 @@ public struct EscaletaDocument: Equatable, Sendable {
         outlineHeading: String? = nil,
         outline: [EscaletaOutlineItem] = [],
         scriptHeading: String? = nil,
+        scriptSeparator: Bool = false,
         scriptIntro: String? = nil,
         pacingNotes: [String] = [],
         scenes: [EscaletaScene] = [],
@@ -141,6 +147,7 @@ public struct EscaletaDocument: Equatable, Sendable {
         unparsedSections: [EscaletaUnparsedSection] = []
     ) {
         self.kind = kind
+        self.preTitleText = preTitleText
         self.title = title
         self.versionNote = versionNote
         self.separatorAfterIntro = separatorAfterIntro
@@ -149,6 +156,7 @@ public struct EscaletaDocument: Equatable, Sendable {
         self.outlineHeading = outlineHeading
         self.outline = outline
         self.scriptHeading = scriptHeading
+        self.scriptSeparator = scriptSeparator
         self.scriptIntro = scriptIntro
         self.pacingNotes = pacingNotes
         self.scenes = scenes
@@ -199,6 +207,8 @@ public struct EscaletaScene: Equatable, Sendable {
     public var blocks: [EscaletaSceneBlock]
     /// Original dash between timestamp and title (`—`, `–` or `-`).
     public var separator: String
+    /// A horizontal rule followed this scene before the next scene/unknown section.
+    public var separatorAfter: Bool
     /// Scenes synthesised from `## Escaleta` when the document has no timestamps.
     /// They are not written back as timestamped scenes by the exporter.
     public var isOutlineFallback: Bool
@@ -209,6 +219,7 @@ public struct EscaletaScene: Equatable, Sendable {
         title: String,
         blocks: [EscaletaSceneBlock] = [],
         separator: String = "—",
+        separatorAfter: Bool = false,
         isOutlineFallback: Bool = false
     ) {
         self.startSeconds = startSeconds
@@ -216,6 +227,7 @@ public struct EscaletaScene: Equatable, Sendable {
         self.title = title
         self.blocks = blocks
         self.separator = separator
+        self.separatorAfter = separatorAfter
         self.isOutlineFallback = isOutlineFallback
     }
 
@@ -663,6 +675,8 @@ public struct ThumbnailConceptsDocument: Equatable, Sendable {
     public var separatorAfterIntro: Bool
     public var groups: [ThumbnailGroup]
     public var sharedRulesHeading: String?
+    /// Non-list prose under the shared-rules heading, preserved verbatim.
+    public var sharedRulesNotes: String?
     public var sharedRules: [String]
     public var unparsedSections: [EscaletaUnparsedSection]
 
@@ -671,6 +685,7 @@ public struct ThumbnailConceptsDocument: Equatable, Sendable {
         separatorAfterIntro: Bool = false,
         groups: [ThumbnailGroup] = [],
         sharedRulesHeading: String? = nil,
+        sharedRulesNotes: String? = nil,
         sharedRules: [String] = [],
         unparsedSections: [EscaletaUnparsedSection] = []
     ) {
@@ -678,6 +693,7 @@ public struct ThumbnailConceptsDocument: Equatable, Sendable {
         self.separatorAfterIntro = separatorAfterIntro
         self.groups = groups
         self.sharedRulesHeading = sharedRulesHeading
+        self.sharedRulesNotes = sharedRulesNotes
         self.sharedRules = sharedRules
         self.unparsedSections = unparsedSections
     }

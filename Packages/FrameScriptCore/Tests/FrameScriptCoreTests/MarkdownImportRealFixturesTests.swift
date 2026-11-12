@@ -31,6 +31,22 @@ func realFixturesParseAndRoundTrip() throws {
             "Round-trip estructural falló para \(url.lastPathComponent)"
         )
 
+        let sourceLines = Set(
+            canonicalWhitespaceForCoverage(text)
+                .components(separatedBy: "\n")
+                .filter { !$0.isEmpty }
+        )
+        let exportedLines = Set(
+            canonicalWhitespaceForCoverage(exported)
+                .components(separatedBy: "\n")
+                .filter { !$0.isEmpty }
+        )
+        let missingLines = sourceLines.subtracting(exportedLines)
+        #expect(
+            missingLines.isEmpty,
+            "Líneas de origen no representadas en \(url.lastPathComponent): \(missingLines.count)"
+        )
+
         // The real folder also contains research, thumbnail and technical
         // documents. Only documents recognised as escaletas must have scenes.
         if result.document.kind == .escaleta {
@@ -62,4 +78,18 @@ func realFixturesParseAndRoundTrip() throws {
     }
 
     #expect(escaletaCount >= 3, "Se esperaban al menos tres escaletas en la carpeta real")
+}
+
+
+private func canonicalWhitespaceForCoverage(_ text: String) -> String {
+    text
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+        .components(separatedBy: "\n")
+        .map { line in
+            line.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }

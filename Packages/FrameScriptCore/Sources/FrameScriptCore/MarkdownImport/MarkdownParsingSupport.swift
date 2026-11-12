@@ -76,6 +76,37 @@ enum MarkdownParsingSupport {
         return (trimmedBlock(Array(lines[0..<end])), true)
     }
 
+
+    // MARK: Fenced code
+
+    /// Marks every line that belongs to a fenced code block, including the
+    /// opening and closing fences. Fenced lines are opaque for structural
+    /// Markdown: they may contain headings, cues or tables without creating
+    /// phantom sections.
+    static func fenceMask(_ lines: [String]) -> [Bool] {
+        var mask = Array(repeating: false, count: lines.count)
+        var activeFence: (character: Character, length: Int)?
+
+        for (index, line) in lines.enumerated() {
+            let leadingTrimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+            let fencePrefix = leadingTrimmed.prefix(while: { $0 == "`" || $0 == "~" })
+
+            if let active = activeFence {
+                mask[index] = true
+                if let first = fencePrefix.first,
+                   first == active.character,
+                   fencePrefix.count >= active.length {
+                    activeFence = nil
+                }
+            } else if fencePrefix.count >= 3, let first = fencePrefix.first,
+                      first == "`" || first == "~" {
+                activeFence = (first, fencePrefix.count)
+                mask[index] = true
+            }
+        }
+        return mask
+    }
+
     // MARK: Scene heading
 
     static func sceneHeading(
@@ -151,7 +182,7 @@ enum MarkdownParsingSupport {
     }
 
     static func inlineCue(in line: String) -> String? {
-        guard let match = line.firstMatch(of: #/\[([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ0-9 /-]{1,40})(?::[^\]]*)?\]/#) else {
+        guard let match = line.firstMatch(of: #/\[([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ0-9 /-]{1,40})(?::[^\]]*)?\](?!\()/#) else {
             return nil
         }
         return text(match.1)
@@ -213,11 +244,17 @@ enum MarkdownParsingSupport {
         return items
     }
 
-    static func parseOutlineItems(_ lines: [String], startingAt firstLine: Int) -> [EscaletaOutlineItem] {
+    static func parseOutlineItems(
+        _ lines: [String],
+        startingAt firstLine: Int,
+        fenceMask: [Bool] = []
+    ) -> [EscaletaOutlineItem] {
         var items: [EscaletaOutlineItem] = []
         for (offset, line) in lines.enumerated() {
             if isBlank(line) { continue }
-            if let item = listItem(line, lineNumber: firstLine + offset) {
+            let sourceIndex = firstLine - 1 + offset
+            let isFenced = sourceIndex < fenceMask.count && fenceMask[sourceIndex]
+            if !isFenced, let item = listItem(line, lineNumber: firstLine + offset) {
                 items.append(EscaletaOutlineItem(marker: item.marker, text: item.text, indent: item.indent))
             } else if items.isEmpty {
                 items.append(EscaletaOutlineItem(marker: .plain, text: trimmed(line), indent: 0))
@@ -373,19 +410,22 @@ struct MarkdownNode {
     let contentRange: Range<Int>
     let children: [MarkdownNode]
 
-    static func buildTree(_ lines: [String]) -> [MarkdownNode] {
-        buildNodes(lines, in: 0..<lines.count, parentLevel: 0)
+    static func buildTree(_ lines: [String], fenceMask: [Bool] = []) -> [MarkdownNode] {
+        buildNodes(lines, fenceMask: fenceMask, in: 0..<lines.count, parentLevel: 0)
     }
 
     private static func buildNodes(
         _ lines: [String],
+        fenceMask: [Bool],
         in range: Range<Int>,
         parentLevel: Int
     ) -> [MarkdownNode] {
         var nodes: [MarkdownNode] = []
         var index = range.lowerBound
         while index < range.upperBound {
-            guard let heading = MarkdownParsingSupport.heading(lines[index]),
+            let isFenced = index < fenceMask.count && fenceMask[index]
+            guard !isFenced,
+                  let heading = MarkdownParsingSupport.heading(lines[index]),
                   heading.level > parentLevel,
                   heading.level <= 2 else {
                 index += 1
@@ -394,14 +434,22 @@ struct MarkdownNode {
 
             var end = index + 1
             while end < range.upperBound {
-                if let next = MarkdownParsingSupport.heading(lines[end]), next.level <= heading.level {
+                let nextIsFenced = end < fenceMask.count && fenceMask[end]
+                if !nextIsFenced,
+                   let next = MarkdownParsingSupport.heading(lines[end]),
+                   next.level <= heading.level {
                     break
                 }
                 end += 1
             }
 
             let contentRange = (index + 1)..<end
-            let children = buildNodes(lines, in: contentRange, parentLevel: heading.level)
+            let children = buildNodes(
+                lines,
+                fenceMask: fenceMask,
+                in: contentRange,
+                parentLevel: heading.level
+            )
             nodes.append(
                 MarkdownNode(
                     level: heading.level,

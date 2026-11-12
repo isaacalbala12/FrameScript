@@ -13,6 +13,11 @@ public enum EscaletaExporter {
 
         var writer = Writer()
 
+        if let preTitle = document.preTitleText, !preTitle.isEmpty {
+            writer.raw(preTitle)
+            writer.blank()
+        }
+
         if !document.title.isEmpty {
             writer.line("# \(document.title)")
         }
@@ -57,14 +62,13 @@ public enum EscaletaExporter {
         writeUnparsed(document.unparsedSections, placement: .preamble, to: &writer)
 
         let timestampedScenes = document.scenes.filter { !$0.isOutlineFallback }
-        if document.scriptHeading != nil
-            || !timestampedScenes.isEmpty
-            || document.scriptIntro != nil
-            || !document.pacingNotes.isEmpty {
+        if let scriptHeading = document.scriptHeading {
             writer.blank()
-            writer.line("---")
-            writer.blank()
-            writer.line("# \(document.scriptHeading ?? "Guion completo")")
+            if document.scriptSeparator, !document.separatorAfterIntro {
+                writer.line("---")
+                writer.blank()
+            }
+            writer.line("# \(scriptHeading)")
 
             for note in document.pacingNotes {
                 writer.blank()
@@ -76,6 +80,22 @@ public enum EscaletaExporter {
                 writer.raw(intro)
             }
 
+            for scene in timestampedScenes {
+                writer.blank()
+                writer.scene(scene)
+            }
+        } else if !timestampedScenes.isEmpty
+            || document.scriptIntro != nil
+            || !document.pacingNotes.isEmpty {
+            // Scene-only documents keep their source shape: no synthetic H1.
+            for note in document.pacingNotes {
+                writer.blank()
+                writer.blockquote(note)
+            }
+            if let intro = document.scriptIntro, !intro.isEmpty {
+                writer.blank()
+                writer.raw(intro)
+            }
             for scene in timestampedScenes {
                 writer.blank()
                 writer.scene(scene)
@@ -226,8 +246,9 @@ public enum EscaletaExporter {
     }
 
     private static func writeSources(document: EscaletaDocument, to writer: inout Writer) {
-        guard document.sourcesPlacement == .seoSection else { return }
         let entries = document.sources.filter { $0.origin == .section }
+        // A description trailer does not suppress an explicit sources section:
+        // the two origins coexist.
         guard !entries.isEmpty || document.sourcesHeading != nil else { return }
 
         writer.blank()
@@ -510,6 +531,10 @@ public enum EscaletaExporter {
         if let heading = thumbnail.sharedRulesHeading {
             writer.blank()
             writer.line("# \(heading)")
+            if let notes = thumbnail.sharedRulesNotes, !notes.isEmpty {
+                writer.blank()
+                writer.raw(notes)
+            }
             if !thumbnail.sharedRules.isEmpty {
                 writer.blank()
                 for (index, rule) in thumbnail.sharedRules.enumerated() {
@@ -610,6 +635,11 @@ public enum EscaletaExporter {
                     appendTable(table)
                 }
             }
+
+            if scene.separatorAfter {
+                blank()
+                line("---")
+            }
         }
 
         mutating func table(_ table: ComparisonTable) {
@@ -618,7 +648,7 @@ public enum EscaletaExporter {
 
         mutating func appendTable(_ table: ComparisonTable) {
             if !table.header.isEmpty {
-                lines.append("| " + table.header.joined(separator: " | ") + " |")
+                lines.append(Self.tableRow(table.header))
             }
             let columnCount = max(table.header.count, table.alignments.count)
             var separatorCells: [String] = []
@@ -633,8 +663,12 @@ public enum EscaletaExporter {
             }
             lines.append("|" + separatorCells.joined(separator: "|") + "|")
             for row in table.rows {
-                lines.append("| " + row.joined(separator: " | ") + " |")
+                lines.append(Self.tableRow(row))
             }
+        }
+
+        static func tableRow(_ cells: [String]) -> String {
+            "|" + cells.map { $0.isEmpty ? " |" : " \($0) |" }.joined()
         }
 
         mutating func concept(_ concept: ThumbnailConcept) {

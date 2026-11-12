@@ -237,10 +237,17 @@ struct ThumbnailConceptsParser {
     private mutating func parseSharedRules(_ node: MarkdownNode) {
         document.sharedRulesHeading = node.heading
         let body = MarkdownParsingSupport.linesWithoutTrailingRule(Array(lines[node.contentRange]))
+        var notes: [String] = []
         for line in body {
             if let item = MarkdownParsingSupport.listItem(line, lineNumber: node.lineIndex + 1) {
                 document.sharedRules.append(item.text)
+            } else if !MarkdownParsingSupport.isBlank(line) {
+                notes.append(line)
             }
+        }
+        let noteText = MarkdownParsingSupport.trimmedBlock(notes)
+        if !noteText.isEmpty {
+            document.sharedRulesNotes = noteText
         }
         if document.sharedRules.isEmpty {
             warnings.append(
