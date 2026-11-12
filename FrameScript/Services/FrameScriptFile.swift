@@ -32,7 +32,10 @@ typealias AppClaim = ProjectClaim
 typealias AppComparisonTable = ComparisonTable
 typealias AppGlossaryTerm = GlossaryTerm
 typealias AppShortClip = ShortClip
+typealias AppClipSceneSourceHash = ClipSceneSourceHash
 typealias AppVersionSnapshot = VersionSnapshot
+typealias AppRhythmThresholds = RhythmThresholds
+typealias AppPublishedSceneResult = PublishedSceneResult
 typealias AppPublishedVideoComparison = PublishedVideoComparison
 typealias AppTranscriptSegment = TranscriptSegment
 typealias AppRetentionPoint = RetentionPoint
@@ -84,6 +87,7 @@ extension FrameScriptDocument.Project {
             settingsOverride: project.settingsOverride.map(FrameScriptDocument.ProjectSettingsOverride.init(override:)),
             exportPresets: project.exportPresets.map(FrameScriptDocument.ExportPreset.init(preset:)),
             scenes: project.scenes.sortedByOrder.map(FrameScriptDocument.Scene.init(scene:)),
+            primaryLanguage: project.primaryLanguage,
             topic: project.topic,
             videoType: project.videoType,
             productionStatus: FrameScriptDocument.ProductionStatus(rawValue: project.productionStatus.rawValue) ?? .idea,
@@ -94,6 +98,7 @@ extension FrameScriptDocument.Project {
             assets: project.assets.map(FrameScriptDocument.ProjectAsset.init(asset:)),
             publishingPacks: project.publishingPacks.mapValues(FrameScriptDocument.PublishingPack.init(pack:)),
             checklistTasks: project.checklistTasks.map(FrameScriptDocument.ChecklistTask.init(task:)),
+            rhythmThresholdsOverride: project.rhythmThresholdsOverride.map(FrameScriptDocument.RhythmThresholds.init(thresholds:)),
             sources: project.sources.map(FrameScriptDocument.Source.init(source:)),
             claims: project.claims.map(FrameScriptDocument.Claim.init(claim:)),
             comparisonTables: project.comparisonTables.map(FrameScriptDocument.ComparisonTable.init(table:)),
@@ -119,6 +124,7 @@ extension FrameScriptDocument.Project {
             scenes: scenes.map { $0.makeScene() },
             settingsOverride: settingsOverride.map { $0.makeOverride() },
             exportPresets: exportPresets.map { $0.makePreset() },
+            primaryLanguage: primaryLanguage,
             topic: topic,
             videoType: videoType,
             productionStatus: AppProductionStatus(rawValue: productionStatus.rawValue) ?? .idea,
@@ -129,6 +135,7 @@ extension FrameScriptDocument.Project {
             assets: assets.map { $0.makeAsset() },
             publishingPacks: publishingPacks.mapValues { $0.makePack() },
             checklistTasks: checklistTasks.map { $0.makeTask() },
+            rhythmThresholdsOverride: rhythmThresholdsOverride.map { $0.makeThresholds() },
             sources: sources.map { $0.makeSource() },
             claims: claims.map { $0.makeClaim() },
             comparisonTables: comparisonTables.map { $0.makeTable() },
@@ -356,7 +363,9 @@ extension FrameScriptDocument.Take {
             bookmarkData: take.bookmarkData,
             rating: FrameScriptDocument.TakeRating(rawValue: take.rating.rawValue) ?? .unrated,
             note: take.note,
-            languageCode: take.languageCode
+            languageCode: take.languageCode,
+            readText: take.readText,
+            sceneTextHash: take.sceneTextHash
         )
     }
 
@@ -370,7 +379,9 @@ extension FrameScriptDocument.Take {
             bookmarkData: bookmarkData,
             rating: AppTakeRating(rawValue: rating.rawValue) ?? .unrated,
             note: note,
-            languageCode: languageCode
+            languageCode: languageCode,
+            readText: readText,
+            sceneTextHash: sceneTextHash
         )
     }
 }
@@ -412,7 +423,11 @@ extension FrameScriptDocument.ProjectAsset {
             linkedSceneIDs: asset.linkedSceneIDs,
             linkedBRollItemIDs: asset.linkedBRollItemIDs,
             linkedTakeIDs: asset.linkedTakeIDs,
-            isCopiedIntoProject: asset.isCopiedIntoProject
+            isCopiedIntoProject: asset.isCopiedIntoProject,
+            duration: asset.duration,
+            fileSize: asset.fileSize,
+            modifiedAt: asset.modifiedAt,
+            isLastKnownMissing: asset.isLastKnownMissing
         )
     }
 
@@ -426,7 +441,11 @@ extension FrameScriptDocument.ProjectAsset {
             linkedSceneIDs: linkedSceneIDs,
             linkedBRollItemIDs: linkedBRollItemIDs,
             linkedTakeIDs: linkedTakeIDs,
-            isCopiedIntoProject: isCopiedIntoProject
+            isCopiedIntoProject: isCopiedIntoProject,
+            duration: duration,
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            isLastKnownMissing: isLastKnownMissing
         )
     }
 }
@@ -599,6 +618,10 @@ extension FrameScriptDocument.ShortClip {
             description: clip.description,
             hashtags: clip.hashtags,
             sourceHash: clip.sourceHash,
+            languageCode: clip.languageCode,
+            sceneSourceHashes: clip.sceneSourceHashes.map {
+                FrameScriptDocument.ShortClip.SceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+            },
             status: FrameScriptDocument.ShortClipStatus(rawValue: clip.status.rawValue) ?? .idea
         )
     }
@@ -618,6 +641,10 @@ extension FrameScriptDocument.ShortClip {
             description: description,
             hashtags: hashtags,
             sourceHash: sourceHash,
+            languageCode: languageCode,
+            sceneSourceHashes: sceneSourceHashes.map {
+                AppClipSceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+            },
             status: AppShortClipStatus(rawValue: status.rawValue) ?? .idea
         )
     }
@@ -680,16 +707,28 @@ extension FrameScriptDocument.RetentionPoint {
 extension FrameScriptDocument.PublishedVideoComparison {
     init(comparison: AppPublishedVideoComparison) {
         self.init(
+            videoID: comparison.videoID,
+            url: comparison.url,
+            title: comparison.title,
+            publishedAt: comparison.publishedAt,
             transcriptSegments: comparison.transcriptSegments.map(FrameScriptDocument.TranscriptSegment.init(segment:)),
             retentionPoints: comparison.retentionPoints.map(FrameScriptDocument.RetentionPoint.init(point:)),
+            sceneResults: comparison.sceneResults.map(FrameScriptDocument.PublishedVideoComparison.SceneResult.init(result:)),
+            learnings: comparison.learnings,
             importedAt: comparison.importedAt
         )
     }
 
     func makeComparison() -> AppPublishedVideoComparison {
         AppPublishedVideoComparison(
+            videoID: videoID,
+            url: url,
+            title: title,
+            publishedAt: publishedAt,
             transcriptSegments: transcriptSegments.map { $0.makeSegment() },
             retentionPoints: retentionPoints.map { $0.makePoint() },
+            sceneResults: sceneResults.map { $0.makeResult() },
+            learnings: learnings,
             importedAt: importedAt
         )
     }
@@ -701,22 +740,62 @@ extension FrameScriptDocument.ProjectSettingsOverride {
     init(override: AppProjectSettingsOverride) {
         self.init(
             wordsPerMinute: override.wordsPerMinute,
-            defaultSplitMode: override.defaultSplitMode.flatMap { FrameScriptDocument.SegmentType(rawValue: $0.rawValue) },
-            longSentenceWordLimit: override.longSentenceWordLimit,
-            uncoveredSecondsLimit: override.uncoveredSecondsLimit,
-            sceneLengthRatioLimit: override.sceneLengthRatioLimit,
-            hookSecondsLimit: override.hookSecondsLimit
+            defaultSplitMode: override.defaultSplitMode.flatMap { FrameScriptDocument.SegmentType(rawValue: $0.rawValue) }
         )
     }
 
     func makeOverride() -> AppProjectSettingsOverride {
         AppProjectSettingsOverride(
             wordsPerMinute: wordsPerMinute,
-            defaultSplitMode: defaultSplitMode.flatMap { AppSegmentType(rawValue: $0.rawValue) },
+            defaultSplitMode: defaultSplitMode.flatMap { AppSegmentType(rawValue: $0.rawValue) }
+        )
+    }
+}
+
+extension FrameScriptDocument.RhythmThresholds {
+    init(thresholds: AppRhythmThresholds) {
+        self.init(
+            longSentenceWordLimit: thresholds.longSentenceWordLimit,
+            uncoveredSecondsLimit: thresholds.uncoveredSecondsLimit,
+            sceneLengthRatioLimit: thresholds.sceneLengthRatioLimit,
+            hookSecondsLimit: thresholds.hookSecondsLimit
+        )
+    }
+
+    func makeThresholds() -> AppRhythmThresholds {
+        AppRhythmThresholds(
             longSentenceWordLimit: longSentenceWordLimit,
             uncoveredSecondsLimit: uncoveredSecondsLimit,
             sceneLengthRatioLimit: sceneLengthRatioLimit,
             hookSecondsLimit: hookSecondsLimit
+        )
+    }
+}
+
+extension FrameScriptDocument.PublishedVideoComparison.SceneResult {
+    init(result: AppPublishedSceneResult) {
+        self.init(
+            sceneID: result.sceneID,
+            realStart: result.realStart,
+            realEnd: result.realEnd,
+            addedWords: result.addedWords,
+            removedWords: result.removedWords,
+            coverage: result.coverage,
+            avgRetention: result.avgRetention,
+            dropMagnitude: result.dropMagnitude
+        )
+    }
+
+    func makeResult() -> AppPublishedSceneResult {
+        AppPublishedSceneResult(
+            sceneID: sceneID,
+            realStart: realStart,
+            realEnd: realEnd,
+            addedWords: addedWords,
+            removedWords: removedWords,
+            coverage: coverage,
+            avgRetention: avgRetention,
+            dropMagnitude: dropMagnitude
         )
     }
 }

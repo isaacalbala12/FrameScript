@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class DocumentMappingTests: XCTestCase {
     func testEveryAppModelFieldSurvivesDocumentRoundTrip() throws {
-        let project = try makeFullProject()
+        let project = try Self.makeFullProject()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("DocumentMappingTests-\(UUID().uuidString).fscr")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -20,7 +20,7 @@ final class DocumentMappingTests: XCTestCase {
     }
 
     func testLegacyVersionDocumentMapsToAppModel() throws {
-        let project = try makeFullProject()
+        let project = try Self.makeFullProject()
         var document = FrameScriptFile(project: project)
         document.fileVersion = 1
         let encoder = JSONEncoder()
@@ -43,6 +43,7 @@ final class DocumentMappingTests: XCTestCase {
         XCTAssertEqual(loaded.templateID, project.templateID, file: file, line: line)
         XCTAssertEqual(loaded.settingsOverride, project.settingsOverride, file: file, line: line)
         XCTAssertEqual(loaded.exportPresets, project.exportPresets, file: file, line: line)
+        XCTAssertEqual(loaded.primaryLanguage, project.primaryLanguage, file: file, line: line)
         XCTAssertEqual(loaded.topic, project.topic, file: file, line: line)
         XCTAssertEqual(loaded.videoType, project.videoType, file: file, line: line)
         XCTAssertEqual(loaded.productionStatus, project.productionStatus, file: file, line: line)
@@ -53,6 +54,7 @@ final class DocumentMappingTests: XCTestCase {
         XCTAssertEqual(loaded.assets, project.assets, file: file, line: line)
         XCTAssertEqual(loaded.publishingPacks, project.publishingPacks, file: file, line: line)
         XCTAssertEqual(loaded.checklistTasks, project.checklistTasks, file: file, line: line)
+        XCTAssertEqual(loaded.rhythmThresholdsOverride, project.rhythmThresholdsOverride, file: file, line: line)
         XCTAssertEqual(loaded.sources, project.sources, file: file, line: line)
         XCTAssertEqual(loaded.claims, project.claims, file: file, line: line)
         XCTAssertEqual(loaded.comparisonTables, project.comparisonTables, file: file, line: line)
@@ -135,7 +137,7 @@ final class DocumentMappingTests: XCTestCase {
         }
     }
 
-    private func makeFullProject() throws -> FrameProject {
+    static func makeFullProject() throws -> FrameProject {
         let projectID = UUID()
         let templateID = UUID()
         let sceneID = UUID()
@@ -173,7 +175,9 @@ final class DocumentMappingTests: XCTestCase {
             bookmarkData: Data([0x01, 0x02]),
             rating: .good,
             note: "take note",
-            languageCode: "es"
+            languageCode: "es",
+            readText: "alpha target omega",
+            sceneTextHash: "scene-hash"
         )
         let variantTake = Take(
             id: variantTakeID,
@@ -195,7 +199,11 @@ final class DocumentMappingTests: XCTestCase {
             linkedSceneIDs: [sceneID],
             linkedBRollItemIDs: [visualID],
             linkedTakeIDs: [takeID],
-            isCopiedIntoProject: true
+            isCopiedIntoProject: true,
+            duration: 12.5,
+            fileSize: 1_024,
+            modifiedAt: Date(timeIntervalSince1970: 1_700_000_250),
+            isLastKnownMissing: true
         )
         let chapter = ChapterOverride(
             id: chapterID,
@@ -268,6 +276,8 @@ final class DocumentMappingTests: XCTestCase {
             description: "Clip description",
             hashtags: ["#clip"],
             sourceHash: "hash",
+            languageCode: "en",
+            sceneSourceHashes: [ClipSceneSourceHash(sceneID: sceneID, hash: "scene-hash")],
             status: .ready
         )
         let snapshot = VersionSnapshot(
@@ -279,8 +289,25 @@ final class DocumentMappingTests: XCTestCase {
             compressedPayload: Data([0x1f, 0x8b])
         )
         let comparison = PublishedVideoComparison(
+            videoID: "video-id",
+            url: "https://example.com/video",
+            title: "Published title",
+            publishedAt: Date(timeIntervalSince1970: 1_700_000_450),
             transcriptSegments: [TranscriptSegment(start: 1.5, end: 2, text: "Hello")],
             retentionPoints: [RetentionPoint(time: 5, percent: 100)],
+            sceneResults: [
+                PublishedSceneResult(
+                    sceneID: sceneID,
+                    realStart: 1,
+                    realEnd: 8,
+                    addedWords: 4,
+                    removedWords: 2,
+                    coverage: 0.9,
+                    avgRetention: 0.8,
+                    dropMagnitude: 0.15
+                )
+            ],
+            learnings: "Keep the hook shorter.",
             importedAt: Date(timeIntervalSince1970: 1_700_000_500)
         )
 
@@ -372,13 +399,10 @@ final class DocumentMappingTests: XCTestCase {
             scenes: [scene],
             settingsOverride: ProjectSettingsOverride(
                 wordsPerMinute: 160,
-                defaultSplitMode: .sentence,
-                longSentenceWordLimit: 28,
-                uncoveredSecondsLimit: 5,
-                sceneLengthRatioLimit: 1.8,
-                hookSecondsLimit: 15
+                defaultSplitMode: .sentence
             ),
             exportPresets: [ExportPreset(id: presetID, name: "Preset", format: .csv)],
+            primaryLanguage: "en",
             topic: "AC EVO",
             videoType: "review",
             productionStatus: .published,
@@ -389,6 +413,12 @@ final class DocumentMappingTests: XCTestCase {
             assets: [asset],
             publishingPacks: ["es": pack],
             checklistTasks: [task],
+            rhythmThresholdsOverride: RhythmThresholds(
+                longSentenceWordLimit: 28,
+                uncoveredSecondsLimit: 5,
+                sceneLengthRatioLimit: 1.8,
+                hookSecondsLimit: 15
+            ),
             sources: [source],
             claims: [claim],
             comparisonTables: [table],

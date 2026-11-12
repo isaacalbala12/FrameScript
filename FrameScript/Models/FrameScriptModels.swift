@@ -182,6 +182,10 @@ struct Take: Identifiable, Codable, Hashable, Sendable {
     var note: String
     /// Empty means the scene's original language.
     var languageCode: String
+    /// Text shown in the teleprompter when this take was recorded (F10).
+    var readText: String
+    /// Hash of the scene text used for this take (F10/F11).
+    var sceneTextHash: String
 
     init(
         id: UUID = UUID(),
@@ -192,7 +196,9 @@ struct Take: Identifiable, Codable, Hashable, Sendable {
         bookmarkData: Data? = nil,
         rating: TakeRating = .unrated,
         note: String = "",
-        languageCode: String = ""
+        languageCode: String = "",
+        readText: String = "",
+        sceneTextHash: String = ""
     ) {
         self.id = id
         self.number = number
@@ -203,6 +209,8 @@ struct Take: Identifiable, Codable, Hashable, Sendable {
         self.rating = rating
         self.note = note
         self.languageCode = languageCode
+        self.readText = readText
+        self.sceneTextHash = sceneTextHash
     }
 }
 
@@ -249,6 +257,11 @@ struct ProjectAsset: Identifiable, Codable, Hashable, Sendable {
     var linkedBRollItemIDs: [UUID]
     var linkedTakeIDs: [UUID]
     var isCopiedIntoProject: Bool
+    var duration: TimeInterval?
+    var fileSize: Int64?
+    var modifiedAt: Date?
+    /// True when the last filesystem check could not find the referenced file.
+    var isLastKnownMissing: Bool
 
     init(
         id: UUID = UUID(),
@@ -259,7 +272,11 @@ struct ProjectAsset: Identifiable, Codable, Hashable, Sendable {
         linkedSceneIDs: [UUID] = [],
         linkedBRollItemIDs: [UUID] = [],
         linkedTakeIDs: [UUID] = [],
-        isCopiedIntoProject: Bool = false
+        isCopiedIntoProject: Bool = false,
+        duration: TimeInterval? = nil,
+        fileSize: Int64? = nil,
+        modifiedAt: Date? = nil,
+        isLastKnownMissing: Bool = false
     ) {
         self.id = id
         self.path = path
@@ -270,6 +287,10 @@ struct ProjectAsset: Identifiable, Codable, Hashable, Sendable {
         self.linkedBRollItemIDs = linkedBRollItemIDs
         self.linkedTakeIDs = linkedTakeIDs
         self.isCopiedIntoProject = isCopiedIntoProject
+        self.duration = duration
+        self.fileSize = fileSize
+        self.modifiedAt = modifiedAt
+        self.isLastKnownMissing = isLastKnownMissing
     }
 }
 
@@ -438,6 +459,16 @@ struct GlossaryTerm: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+struct ClipSceneSourceHash: Codable, Hashable, Sendable {
+    var sceneID: UUID
+    var hash: String
+
+    init(sceneID: UUID, hash: String) {
+        self.sceneID = sceneID
+        self.hash = hash
+    }
+}
+
 /// A derived short-form clip (F24).
 struct ShortClip: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
@@ -453,6 +484,8 @@ struct ShortClip: Identifiable, Codable, Hashable, Sendable {
     var description: String
     var hashtags: [String]
     var sourceHash: String
+    var languageCode: String
+    var sceneSourceHashes: [ClipSceneSourceHash]
     var status: ShortClipStatus
 
     init(
@@ -469,6 +502,8 @@ struct ShortClip: Identifiable, Codable, Hashable, Sendable {
         description: String = "",
         hashtags: [String] = [],
         sourceHash: String = "",
+        languageCode: String = "",
+        sceneSourceHashes: [ClipSceneSourceHash] = [],
         status: ShortClipStatus = .idea
     ) {
         self.id = id
@@ -484,6 +519,8 @@ struct ShortClip: Identifiable, Codable, Hashable, Sendable {
         self.description = description
         self.hashtags = hashtags
         self.sourceHash = sourceHash
+        self.languageCode = languageCode
+        self.sceneSourceHashes = sceneSourceHashes
         self.status = status
     }
 
@@ -564,18 +601,67 @@ struct RetentionPoint: Codable, Hashable, Sendable {
     }
 }
 
+struct PublishedSceneResult: Codable, Hashable, Sendable {
+    var sceneID: UUID
+    var realStart: TimeInterval
+    var realEnd: TimeInterval
+    var addedWords: Int
+    var removedWords: Int
+    var coverage: Double
+    var avgRetention: Double
+    var dropMagnitude: Double
+
+    init(
+        sceneID: UUID,
+        realStart: TimeInterval = 0,
+        realEnd: TimeInterval = 0,
+        addedWords: Int = 0,
+        removedWords: Int = 0,
+        coverage: Double = 0,
+        avgRetention: Double = 0,
+        dropMagnitude: Double = 0
+    ) {
+        self.sceneID = sceneID
+        self.realStart = realStart
+        self.realEnd = realEnd
+        self.addedWords = addedWords
+        self.removedWords = removedWords
+        self.coverage = coverage
+        self.avgRetention = avgRetention
+        self.dropMagnitude = dropMagnitude
+    }
+}
+
 struct PublishedVideoComparison: Codable, Hashable, Sendable {
+    var videoID: String
+    var url: String
+    var title: String
+    var publishedAt: Date?
     var transcriptSegments: [TranscriptSegment]
     var retentionPoints: [RetentionPoint]
+    var sceneResults: [PublishedSceneResult]
+    var learnings: String
     var importedAt: Date
 
     init(
+        videoID: String = "",
+        url: String = "",
+        title: String = "",
+        publishedAt: Date? = nil,
         transcriptSegments: [TranscriptSegment] = [],
         retentionPoints: [RetentionPoint] = [],
+        sceneResults: [PublishedSceneResult] = [],
+        learnings: String = "",
         importedAt: Date = Date()
     ) {
+        self.videoID = videoID
+        self.url = url
+        self.title = title
+        self.publishedAt = publishedAt
         self.transcriptSegments = transcriptSegments
         self.retentionPoints = retentionPoints
+        self.sceneResults = sceneResults
+        self.learnings = learnings
         self.importedAt = importedAt
     }
 }
@@ -590,6 +676,8 @@ final class FrameProject: Identifiable {
     var settingsOverride: ProjectSettingsOverride?
     var exportPresets: [ExportPreset]
     var scenes: [Scene]
+    /// Original script language. Everything else is keyed by language code.
+    var primaryLanguage: String
 
     var topic: String
     var videoType: String
@@ -602,6 +690,7 @@ final class FrameProject: Identifiable {
     /// Keyed by language code.
     var publishingPacks: [String: PublishingPack]
     var checklistTasks: [ChecklistTask]
+    var rhythmThresholdsOverride: RhythmThresholds?
     var sources: [ProjectSource]
     var claims: [ProjectClaim]
     var comparisonTables: [ComparisonTable]
@@ -622,6 +711,7 @@ final class FrameProject: Identifiable {
         scenes: [Scene] = [],
         settingsOverride: ProjectSettingsOverride? = nil,
         exportPresets: [ExportPreset] = [],
+        primaryLanguage: String = "es",
         topic: String = "",
         videoType: String = "",
         productionStatus: ProductionStatus = .idea,
@@ -632,6 +722,7 @@ final class FrameProject: Identifiable {
         assets: [ProjectAsset] = [],
         publishingPacks: [String: PublishingPack] = [:],
         checklistTasks: [ChecklistTask] = [],
+        rhythmThresholdsOverride: RhythmThresholds? = nil,
         sources: [ProjectSource] = [],
         claims: [ProjectClaim] = [],
         comparisonTables: [ComparisonTable] = [],
@@ -650,6 +741,7 @@ final class FrameProject: Identifiable {
         self.scenes = scenes
         self.settingsOverride = settingsOverride
         self.exportPresets = exportPresets
+        self.primaryLanguage = primaryLanguage
         self.topic = topic
         self.videoType = videoType
         self.productionStatus = productionStatus
@@ -660,6 +752,7 @@ final class FrameProject: Identifiable {
         self.assets = assets
         self.publishingPacks = publishingPacks
         self.checklistTasks = checklistTasks
+        self.rhythmThresholdsOverride = rhythmThresholdsOverride
         self.sources = sources
         self.claims = claims
         self.comparisonTables = comparisonTables
@@ -905,12 +998,16 @@ struct AppSettings: Codable, Hashable {
     var voicePreferences: VoicePreferences
     var exportPreferences: ExportPreferences
     var windowPreferences: WindowPreferences
+    /// Rhythm-review defaults keyed by video type (F26). App preference, never
+    /// written to project files.
+    var rhythmThresholdsByVideoType: [String: RhythmThresholds] = [:]
     /// User bindings are application preferences and never belong in project files.
     var shortcutOverrides: [ShortcutCommand: ShortcutOverride] = [:]
 
     enum CodingKeys: String, CodingKey {
         case generalPreferences, theme, accentColor, editorPreferences, aiPreferences
-        case voicePreferences, exportPreferences, windowPreferences, shortcutOverrides
+        case voicePreferences, exportPreferences, windowPreferences, rhythmThresholdsByVideoType
+        case shortcutOverrides
     }
 
     init(
@@ -922,6 +1019,7 @@ struct AppSettings: Codable, Hashable {
         voicePreferences: VoicePreferences,
         exportPreferences: ExportPreferences,
         windowPreferences: WindowPreferences,
+        rhythmThresholdsByVideoType: [String: RhythmThresholds] = [:],
         shortcutOverrides: [ShortcutCommand: ShortcutOverride] = [:]
     ) {
         self.generalPreferences = generalPreferences
@@ -932,6 +1030,7 @@ struct AppSettings: Codable, Hashable {
         self.voicePreferences = voicePreferences
         self.exportPreferences = exportPreferences
         self.windowPreferences = windowPreferences
+        self.rhythmThresholdsByVideoType = rhythmThresholdsByVideoType
         self.shortcutOverrides = shortcutOverrides
     }
 
@@ -941,8 +1040,8 @@ struct AppSettings: Codable, Hashable {
         // wiping every preference. Existing keys and raw values are unchanged.
         generalPreferences = try container.decodeIfPresent(GeneralPreferences.self, forKey: .generalPreferences)
             ?? GeneralPreferences.defaults
-        theme = try container.decodeIfPresent(AppearanceTheme.self, forKey: .theme) ?? .system
-        accentColor = try container.decodeIfPresent(AccentPalette.self, forKey: .accentColor) ?? .sage
+        theme = container.decodeSettingsEnum(AppearanceTheme.self, forKey: .theme, default: .system)
+        accentColor = container.decodeSettingsEnum(AccentPalette.self, forKey: .accentColor, default: .sage)
         editorPreferences = try container.decodeIfPresent(EditorPreferences.self, forKey: .editorPreferences)
             ?? EditorPreferences.defaults
         aiPreferences = try container.decodeIfPresent(AIPreferences.self, forKey: .aiPreferences)
@@ -953,9 +1052,20 @@ struct AppSettings: Codable, Hashable {
             ?? ExportPreferences.defaults
         windowPreferences = try container.decodeIfPresent(WindowPreferences.self, forKey: .windowPreferences)
             ?? WindowPreferences.defaults
-        // Existing installations did not encode shortcut preferences.
-        let decodedOverrides = try container.decodeIfPresent([ShortcutCommand: ShortcutOverride].self, forKey: .shortcutOverrides) ?? [:]
+        // Existing installations did not encode shortcut preferences. Unknown
+        // command raw values are dropped instead of failing the whole blob.
+        let rawOverrides = (try? container.decodeIfPresent(ShortcutOverridesPayload.self, forKey: .shortcutOverrides))?.values ?? [:]
+        let decodedOverrides: [ShortcutCommand: ShortcutOverride] = Dictionary(
+            uniqueKeysWithValues: rawOverrides.compactMap { (key: String, value: ShortcutOverride) -> (ShortcutCommand, ShortcutOverride)? in
+                guard let command = ShortcutCommand(rawValue: key) else { return nil }
+                return (command, value)
+            }
+        )
         shortcutOverrides = ShortcutRegistry.normalizedOverrides(decodedOverrides)
+        rhythmThresholdsByVideoType = (try? container.decodeIfPresent(
+            [String: RhythmThresholdsPayload].self,
+            forKey: .rhythmThresholdsByVideoType
+        ))?.mapValues(\.value) ?? [:]
     }
 }
 
@@ -1005,19 +1115,19 @@ struct GeneralPreferences: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let behavior = try container.decodeIfPresent(LaunchBehavior.self, forKey: .launchBehavior) {
+        if let behavior = container.decodeSettingsEnumIfPresent(LaunchBehavior.self, forKey: .launchBehavior) {
             launchBehavior = behavior
         } else {
             let restoreLastProject = try container.decodeIfPresent(Bool.self, forKey: .restoreLastProjectOnLaunch) ?? false
             let showProjectBrowser = try container.decodeIfPresent(Bool.self, forKey: .showProjectBrowserOnLaunch) ?? true
             launchBehavior = restoreLastProject && !showProjectBrowser ? .restoreLastProject : .showProjectBrowser
         }
-        language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .system
+        language = container.decodeSettingsEnum(AppLanguage.self, forKey: .language, default: .system)
         autosaveEnabled = try container.decodeIfPresent(Bool.self, forKey: .autosaveEnabled) ?? true
         autosaveIntervalSeconds = try container.decodeIfPresent(Int.self, forKey: .autosaveIntervalSeconds) ?? 10
         defaultNewProjectTemplate = try container.decodeIfPresent(String.self, forKey: .defaultNewProjectTemplate) ?? "Blank"
-        blankProjectStart = try container.decodeIfPresent(BlankProjectStart.self, forKey: .blankProjectStart) ?? .oneEmptyScene
-        defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode) ?? .paragraph
+        blankProjectStart = container.decodeSettingsEnum(BlankProjectStart.self, forKey: .blankProjectStart, default: .oneEmptyScene)
+        defaultSplitMode = container.decodeSettingsEnum(SegmentType.self, forKey: .defaultSplitMode, default: .paragraph)
         confirmBeforeDeleting = try container.decodeIfPresent(Bool.self, forKey: .confirmBeforeDeleting) ?? true
     }
 
@@ -1071,22 +1181,37 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
 struct ProjectSettingsOverride: Codable, Hashable {
     var wordsPerMinute: Int?
     var defaultSplitMode: SegmentType?
-    /// F26 rhythm-review thresholds. `nil` means "use the app default".
+
+    init(wordsPerMinute: Int? = nil, defaultSplitMode: SegmentType? = nil) {
+        self.wordsPerMinute = wordsPerMinute
+        self.defaultSplitMode = defaultSplitMode
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case wordsPerMinute
+        case defaultSplitMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        wordsPerMinute = try container.decodeIfPresent(Int.self, forKey: .wordsPerMinute)
+        defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode)
+    }
+}
+
+/// Per-project and per-video-type rhythm-review thresholds (F26).
+struct RhythmThresholds: Codable, Hashable, Sendable {
     var longSentenceWordLimit: Int?
     var uncoveredSecondsLimit: TimeInterval?
     var sceneLengthRatioLimit: Double?
     var hookSecondsLimit: TimeInterval?
 
     init(
-        wordsPerMinute: Int? = nil,
-        defaultSplitMode: SegmentType? = nil,
         longSentenceWordLimit: Int? = nil,
         uncoveredSecondsLimit: TimeInterval? = nil,
         sceneLengthRatioLimit: Double? = nil,
         hookSecondsLimit: TimeInterval? = nil
     ) {
-        self.wordsPerMinute = wordsPerMinute
-        self.defaultSplitMode = defaultSplitMode
         self.longSentenceWordLimit = longSentenceWordLimit
         self.uncoveredSecondsLimit = uncoveredSecondsLimit
         self.sceneLengthRatioLimit = sceneLengthRatioLimit
@@ -1094,8 +1219,6 @@ struct ProjectSettingsOverride: Codable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case wordsPerMinute
-        case defaultSplitMode
         case longSentenceWordLimit
         case uncoveredSecondsLimit
         case sceneLengthRatioLimit
@@ -1104,8 +1227,6 @@ struct ProjectSettingsOverride: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        wordsPerMinute = try container.decodeIfPresent(Int.self, forKey: .wordsPerMinute)
-        defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode)
         longSentenceWordLimit = try container.decodeIfPresent(Int.self, forKey: .longSentenceWordLimit)
         uncoveredSecondsLimit = try container.decodeIfPresent(TimeInterval.self, forKey: .uncoveredSecondsLimit)
         sceneLengthRatioLimit = try container.decodeIfPresent(Double.self, forKey: .sceneLengthRatioLimit)
@@ -1163,7 +1284,7 @@ struct EditorPreferences: Codable, Hashable {
         showWordCount = try container.decodeIfPresent(Bool.self, forKey: .showWordCount) ?? true
         showSceneDuration = try container.decodeIfPresent(Bool.self, forKey: .showSceneDuration) ?? true
         showAIReviewPanel = try container.decodeIfPresent(Bool.self, forKey: .showAIReviewPanel) ?? true
-        defaultNotesVisibility = try container.decodeIfPresent(NotesDefaultVisibility.self, forKey: .defaultNotesVisibility) ?? .collapsed
+        defaultNotesVisibility = container.decodeSettingsEnum(NotesDefaultVisibility.self, forKey: .defaultNotesVisibility, default: .collapsed)
     }
 }
 
@@ -1213,7 +1334,7 @@ struct AIPreferences: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        provider = try container.decodeIfPresent(AIProviderKind.self, forKey: .provider) ?? .disabled
+        provider = container.decodeSettingsEnum(AIProviderKind.self, forKey: .provider, default: .disabled)
         model = try container.decodeIfPresent(String.self, forKey: .model) ?? "gpt-4.1-mini"
         baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
@@ -1280,7 +1401,7 @@ struct VoicePreferences: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        provider = try container.decodeIfPresent(VoiceProviderKind.self, forKey: .provider) ?? .system
+        provider = container.decodeSettingsEnum(VoiceProviderKind.self, forKey: .provider, default: .system)
         voiceIdentifier = try container.decodeIfPresent(String.self, forKey: .voiceIdentifier) ?? ""
         speed = try container.decodeIfPresent(Double.self, forKey: .speed) ?? 1
         pitch = try container.decodeIfPresent(Double.self, forKey: .pitch) ?? 1
@@ -1343,7 +1464,7 @@ struct ExportPreferences: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        defaultFormat = try container.decodeIfPresent(ExportFormat.self, forKey: .defaultFormat) ?? .productionOutline
+        defaultFormat = container.decodeSettingsEnum(ExportFormat.self, forKey: .defaultFormat, default: .productionOutline)
         includeTimestamps = try container.decodeIfPresent(Bool.self, forKey: .includeTimestamps) ?? true
         includeSectionNames = try container.decodeIfPresent(Bool.self, forKey: .includeSectionNames) ?? true
         includeBRoll = try container.decodeIfPresent(Bool.self, forKey: .includeBRoll) ?? true
@@ -1376,7 +1497,7 @@ struct WindowPreferences: Codable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sidebarDefaultVisible = try container.decodeIfPresent(Bool.self, forKey: .sidebarDefaultVisible) ?? true
         sidebarWidth = try container.decodeIfPresent(Double.self, forKey: .sidebarWidth) ?? 195
-        focusModeBehavior = try container.decodeIfPresent(FocusModeBehavior.self, forKey: .focusModeBehavior) ?? .hidePanels
+        focusModeBehavior = container.decodeSettingsEnum(FocusModeBehavior.self, forKey: .focusModeBehavior, default: .hidePanels)
     }
 }
 
@@ -1484,4 +1605,64 @@ extension AppSettings {
         exportPreferences: .defaults,
         windowPreferences: .defaults
     )
+}
+
+// Settings must survive an enum case that this build does not know yet. The
+// keys and raw values themselves stay unchanged; only decoding is lossy.
+private extension KeyedDecodingContainer {
+    func decodeSettingsEnum<T>(
+        _ type: T.Type,
+        forKey key: Key,
+        default defaultValue: @autoclosure () -> T
+    ) -> T where T: RawRepresentable, T.RawValue == String {
+        decodeSettingsEnumIfPresent(type, forKey: key) ?? defaultValue()
+    }
+
+    func decodeSettingsEnumIfPresent<T>(
+        _ type: T.Type,
+        forKey key: Key
+    ) -> T? where T: RawRepresentable, T.RawValue == String {
+        guard let raw = try? decodeIfPresent(String.self, forKey: key) else { return nil }
+        return T(rawValue: raw)
+    }
+}
+
+/// Shortcut overrides were historically encoded as an array of alternating
+/// command/value pairs because `ShortcutCommand` is a dictionary key. Accept
+/// both that legacy array and a plain object, dropping unknown commands.
+private struct ShortcutOverridesPayload: Decodable {
+    var values: [String: ShortcutOverride]
+
+    private struct LossyOverride: Decodable {
+        let value: ShortcutOverride
+
+        init(from decoder: Decoder) throws {
+            value = (try? ShortcutOverride(from: decoder)) ?? .unassigned
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        if let object = try? decoder.singleValueContainer().decode([String: LossyOverride].self) {
+            values = object.mapValues(\.value)
+            return
+        }
+
+        var container = try decoder.unkeyedContainer()
+        var result: [String: ShortcutOverride] = [:]
+        while !container.isAtEnd {
+            let key = try container.decode(String.self)
+            let value = try container.decode(LossyOverride.self)
+            result[key] = value.value
+        }
+        values = result
+    }
+}
+
+/// One malformed video-type threshold map entry must not discard the others.
+private struct RhythmThresholdsPayload: Decodable {
+    var value: RhythmThresholds
+
+    init(from decoder: Decoder) throws {
+        value = (try? RhythmThresholds(from: decoder)) ?? RhythmThresholds()
+    }
 }
