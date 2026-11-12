@@ -486,6 +486,7 @@ enum BlankProjectStart: String, Codable, CaseIterable, Identifiable {
 enum AppLanguage: String, Codable, CaseIterable, Identifiable {
     case system
     case english
+    case spanish
     case russian
 
     var id: String { rawValue }
@@ -494,6 +495,7 @@ enum AppLanguage: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .system: "System"
         case .english: "English"
+        case .spanish: "Español"
         case .russian: "Русский"
         }
     }

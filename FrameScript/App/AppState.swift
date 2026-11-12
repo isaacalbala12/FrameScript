@@ -192,6 +192,8 @@ final class AppState {
 #if DEBUG
         if arguments.contains("--framescript-ui-test-language-english") {
             settings.generalPreferences.language = .english
+        } else if arguments.contains("--framescript-ui-test-language-spanish") {
+            settings.generalPreferences.language = .spanish
         } else if arguments.contains("--framescript-ui-test-language-russian") {
             settings.generalPreferences.language = .russian
         }
