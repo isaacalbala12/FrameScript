@@ -94,23 +94,15 @@ public struct PlaneDate: Sendable, Hashable, Comparable, Codable, CustomStringCo
 }
 
 /// The kinds of pending task FrameScript can export.
+///
+/// Raw values are stable identifiers. User-visible names come from
+/// `PlaneExportLabels`, so the core package does not hardcode a language.
 public enum PlaneTaskKind: String, Sendable, Codable, CaseIterable, Hashable {
     case grabar
     case conseguirBroll
     case editar
     case investigar
     case manual
-
-    /// Human-readable label used inside the generated HTML description.
-    public var displayName: String {
-        switch self {
-        case .grabar: return "Grabar"
-        case .conseguirBroll: return "Conseguir B-roll"
-        case .editar: return "Editar"
-        case .investigar: return "Investigar"
-        case .manual: return "Manual"
-        }
-    }
 }
 
 /// A pending task as seen by the exporter. This is deliberately independent
@@ -294,6 +286,46 @@ public struct PlaneWorkItem: Sendable, Equatable, Decodable, Identifiable {
         } else {
             self.targetDate = nil
         }
+    }
+}
+
+/// Plane limits work-item names to 255 characters.
+///
+/// `String.prefix` counts characters (extended grapheme clusters), so composed
+/// sequences and emoji are never split in the middle.
+public enum PlaneWorkItemName {
+    public static let maximumLength = 255
+
+    public static func truncated(_ name: String) -> String {
+        guard name.count > maximumLength else { return name }
+        return String(name.prefix(maximumLength))
+    }
+
+    public static func isTruncated(_ name: String) -> Bool {
+        name.count > maximumLength
+    }
+}
+
+/// Outcome of a single filtered lookup for an existing work item.
+///
+/// The documented v1 list rows do not include `external_id`, and self-hosted
+/// versions may ignore the filter. A single page is therefore not always
+/// enough to prove that a work item does not exist; `cannotVerify` carries the
+/// candidates so the caller can resolve the ambiguity instead of creating a
+/// duplicate.
+public enum PlaneWorkItemLookup: Sendable, Equatable {
+    case found(PlaneWorkItem)
+    case notFound
+    case cannotVerify(candidates: [PlaneWorkItem])
+
+    public var workItem: PlaneWorkItem? {
+        if case .found(let item) = self { return item }
+        return nil
+    }
+
+    public var candidates: [PlaneWorkItem] {
+        if case .cannotVerify(let candidates) = self { return candidates }
+        return []
     }
 }
 

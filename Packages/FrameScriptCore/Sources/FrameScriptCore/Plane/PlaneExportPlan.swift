@@ -10,9 +10,57 @@ public enum PlaneExternalID {
     /// The identifier does not depend on the task title, scene or due date, so
     /// editing those fields and exporting again still maps to the same Plane
     /// work item.
+    ///
+    /// Components are escaped because a literal `:` inside a project or task
+    /// id would otherwise make the identifier ambiguous: `framescript:a:b:c`
+    /// could mean project `a`, task `b:c` or project `a:b`, task `c`.
+    /// `%` is escaped first, then `:` (as `%25` and `%3A`).
     public static func make(projectID: String, taskID: String) -> String {
-        "\(source):\(projectID):\(taskID)"
+        "\(source):\(escapeComponent(projectID)):\(escapeComponent(taskID))"
     }
+
+    private static func escapeComponent(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: ":", with: "%3A")
+    }
+}
+
+/// User-visible strings used in generated work-item descriptions.
+///
+/// The caller supplies these so the core package does not hardcode a
+/// language. Defaults are English; the app can pass localized values from its
+/// own string tables. `scene` and `project` are labels only: the exporter adds
+/// the `": "` separator. Missing kind names fall back to the English defaults.
+public struct PlaneExportLabels: Sendable, Equatable {
+    /// Label placed before the scene title, for example `Scene`.
+    public var scene: String
+    /// Label placed before the project title, for example `Project`.
+    public var project: String
+    /// Display names for task kinds.
+    public var kindNames: [PlaneTaskKind: String]
+
+    public init(
+        scene: String = "Scene",
+        project: String = "Project",
+        kindNames: [PlaneTaskKind: String] = PlaneExportLabels.defaultKindNames
+    ) {
+        self.scene = scene
+        self.project = project
+        self.kindNames = kindNames
+    }
+
+    public func name(for kind: PlaneTaskKind) -> String {
+        kindNames[kind] ?? Self.defaultKindNames[kind] ?? kind.rawValue
+    }
+
+    public static let defaultKindNames: [PlaneTaskKind: String] = [
+        .grabar: "Record",
+        .conseguirBroll: "Get B-roll",
+        .editar: "Edit",
+        .investigar: "Research",
+        .manual: "Manual"
+    ]
 }
 
 /// A pure, network-free description of what a Plane export would create.
@@ -23,12 +71,20 @@ public struct PlaneExportPlan: Sendable, Equatable {
     public struct Entry: Sendable, Equatable, Identifiable {
         public let task: PlanePendingTask
         public let draft: PlaneWorkItemDraft
+        /// True when the task title was longer than Plane's 255-character
+        /// limit and `draft.name` is the truncated form.
+        public let wasNameTruncated: Bool
 
         public var id: String { draft.externalID }
 
-        public init(task: PlanePendingTask, draft: PlaneWorkItemDraft) {
+        public init(
+            task: PlanePendingTask,
+            draft: PlaneWorkItemDraft,
+            wasNameTruncated: Bool = false
+        ) {
             self.task = task
             self.draft = draft
+            self.wasNameTruncated = wasNameTruncated
         }
     }
 
@@ -59,6 +115,7 @@ public struct PlaneExportPlan: Sendable, Equatable {
         public let skippedCount: Int
         public let skippedByReason: [SkippedTask.Reason: Int]
         public let workItemsByKind: [PlaneTaskKind: Int]
+        public let truncatedNameCount: Int
         public let dueDateCount: Int
         public let earliestTargetDate: PlaneDate?
         public let latestTargetDate: PlaneDate?
@@ -71,6 +128,7 @@ public struct PlaneExportPlan: Sendable, Equatable {
             skippedCount: Int,
             skippedByReason: [SkippedTask.Reason: Int],
             workItemsByKind: [PlaneTaskKind: Int],
+            truncatedNameCount: Int,
             dueDateCount: Int,
             earliestTargetDate: PlaneDate?,
             latestTargetDate: PlaneDate?
@@ -80,6 +138,7 @@ public struct PlaneExportPlan: Sendable, Equatable {
             self.skippedCount = skippedCount
             self.skippedByReason = skippedByReason
             self.workItemsByKind = workItemsByKind
+            self.truncatedNameCount = truncatedNameCount
             self.dueDateCount = dueDateCount
             self.earliestTargetDate = earliestTargetDate
             self.latestTargetDate = latestTargetDate
@@ -89,7 +148,7 @@ public struct PlaneExportPlan: Sendable, Equatable {
     public let entries: [Entry]
     public let skipped: [SkippedTask]
 
-    public init(tasks: [PlanePendingTask]) {
+    public init(tasks: [PlanePendingTask], labels: PlaneExportLabels = PlaneExportLabels()) {
         var entries: [Entry] = []
         var skipped: [SkippedTask] = []
         var seenExternalIDs: Set<String> = []
@@ -119,15 +178,22 @@ public struct PlaneExportPlan: Sendable, Equatable {
                 continue
             }
 
+            let name = PlaneWorkItemName.truncated(trimmedTitle)
             let draft = PlaneWorkItemDraft(
-                name: trimmedTitle,
-                descriptionHTML: Self.descriptionHTML(for: task),
+                name: name,
+                descriptionHTML: Self.descriptionHTML(for: task, labels: labels),
                 priority: .none,
                 targetDate: task.dueDate,
                 externalID: externalID,
                 externalSource: PlaneExternalID.source
             )
-            entries.append(Entry(task: task, draft: draft))
+            entries.append(
+                Entry(
+                    task: task,
+                    draft: draft,
+                    wasNameTruncated: name != trimmedTitle
+                )
+            )
         }
 
         self.entries = entries
@@ -146,11 +212,15 @@ public struct PlaneExportPlan: Sendable, Equatable {
         var byKind: [PlaneTaskKind: Int] = [:]
         var skippedByReason: [SkippedTask.Reason: Int] = [:]
         var dueDateCount = 0
+        var truncatedNameCount = 0
         var earliest: PlaneDate?
         var latest: PlaneDate?
 
         for entry in entries {
             byKind[entry.task.kind, default: 0] += 1
+            if entry.wasNameTruncated {
+                truncatedNameCount += 1
+            }
             guard let dueDate = entry.task.dueDate else { continue }
             dueDateCount += 1
             if let currentEarliest = earliest {
@@ -175,6 +245,7 @@ public struct PlaneExportPlan: Sendable, Equatable {
             skippedCount: skipped.count,
             skippedByReason: skippedByReason,
             workItemsByKind: byKind,
+            truncatedNameCount: truncatedNameCount,
             dueDateCount: dueDateCount,
             earliestTargetDate: earliest,
             latestTargetDate: latest
@@ -199,18 +270,21 @@ public struct PlaneExportPlan: Sendable, Equatable {
         return result
     }
 
-    private static func descriptionHTML(for task: PlanePendingTask) -> String {
-        let kind = escapeHTML(task.kind.displayName)
+    private static func descriptionHTML(
+        for task: PlanePendingTask,
+        labels: PlaneExportLabels
+    ) -> String {
+        let kind = escapeHTML(labels.name(for: task.kind))
         var parts = ["<p><strong>\(kind)</strong></p>"]
 
         var context: [String] = []
         let scene = task.sceneTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if !scene.isEmpty {
-            context.append("Escena: \(escapeHTML(scene))")
+            context.append("\(escapeHTML(labels.scene)): \(escapeHTML(scene))")
         }
         let project = task.projectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if !project.isEmpty {
-            context.append("Proyecto: \(escapeHTML(project))")
+            context.append("\(escapeHTML(labels.project)): \(escapeHTML(project))")
         }
         if !context.isEmpty {
             parts.append("<p>\(context.joined(separator: "<br>"))</p>")

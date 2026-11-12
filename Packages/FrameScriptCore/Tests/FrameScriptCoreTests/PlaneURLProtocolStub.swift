@@ -8,6 +8,7 @@ final class PlaneURLProtocolStub: URLProtocol {
         let url: URL?
         let headers: [String: String]
         let body: Data?
+        let cachePolicy: URLRequest.CachePolicy
 
         func header(_ name: String) -> String? {
             headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
@@ -86,7 +87,8 @@ final class PlaneURLProtocolStub: URLProtocol {
             method: request.httpMethod,
             url: request.url,
             headers: request.allHTTPHeaderFields ?? [:],
-            body: Self.bodyData(of: request)
+            body: Self.bodyData(of: request),
+            cachePolicy: request.cachePolicy
         )
         Self.record(recorded)
 

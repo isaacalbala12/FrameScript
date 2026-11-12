@@ -22,7 +22,8 @@ struct PlaneExportPlanTests {
         let plan = PlaneExportPlan(tasks: [task])
 
         #expect(plan.entries.count == 1)
-        let draft = try #require(plan.drafts.first)
+        let entry = try #require(plan.entries.first)
+        let draft = entry.draft
         let expectedDueDate = try date("2026-11-20")
         #expect(draft.name == "Grabar la intro")
         #expect(draft.externalID == "framescript:project-1:task-1")
@@ -31,6 +32,37 @@ struct PlaneExportPlanTests {
         #expect(draft.targetDate == expectedDueDate)
         #expect(draft.stateID == nil)
         #expect(draft.labelIDs == nil)
+        #expect(
+            draft.descriptionHTML
+                == "<p><strong>Record</strong></p><p>Scene: Intro<br>Project: Mi vídeo</p>"
+        )
+        #expect(!entry.wasNameTruncated)
+        #expect(!draft.descriptionHTML.contains("Escena"))
+    }
+
+    @Test func usesInjectedLabelsForDescription() throws {
+        let labels = PlaneExportLabels(
+            scene: "Escena",
+            project: "Proyecto",
+            kindNames: [
+                .grabar: "Grabar",
+                .conseguirBroll: "Conseguir B-roll",
+                .editar: "Editar",
+                .investigar: "Investigar",
+                .manual: "Manual"
+            ]
+        )
+        let task = PlanePendingTask(
+            id: "task-1",
+            projectID: "project-1",
+            title: "Grabar la intro",
+            kind: .grabar,
+            sceneTitle: "Intro",
+            projectTitle: "Mi vídeo"
+        )
+
+        let draft = try #require(PlaneExportPlan(tasks: [task], labels: labels).drafts.first)
+
         #expect(
             draft.descriptionHTML
                 == "<p><strong>Grabar</strong></p><p>Escena: Intro<br>Proyecto: Mi vídeo</p>"
@@ -96,6 +128,79 @@ struct PlaneExportPlanTests {
         #expect(first.descriptionHTML != second.descriptionHTML)
     }
 
+    @Test func externalIDEscapesSeparatorsToAvoidAmbiguity() {
+        let taskColon = PlaneExternalID.make(projectID: "a", taskID: "b:c")
+        let projectColon = PlaneExternalID.make(projectID: "a:b", taskID: "c")
+
+        #expect(taskColon == "framescript:a:b%3Ac")
+        #expect(projectColon == "framescript:a%3Ab:c")
+        #expect(taskColon != projectColon)
+        #expect(
+            PlaneExternalID.make(projectID: "a%3Ab", taskID: "c")
+                == "framescript:a%253Ab:c"
+        )
+
+        let tasks = [
+            PlanePendingTask(
+                id: "b:c",
+                projectID: "a",
+                title: "First",
+                kind: .grabar,
+                sceneTitle: "",
+                projectTitle: ""
+            ),
+            PlanePendingTask(
+                id: "c",
+                projectID: "a:b",
+                title: "Second",
+                kind: .editar,
+                sceneTitle: "",
+                projectTitle: ""
+            )
+        ]
+        let plan = PlaneExportPlan(tasks: tasks)
+        #expect(plan.entries.count == 2)
+        #expect(plan.drafts.map(\.externalID) == ["framescript:a:b%3Ac", "framescript:a%3Ab:c"])
+    }
+
+    @Test func truncatesLongNamesGraphemeSafely() throws {
+        let longTitle = String(repeating: "e\u{301}", count: 300)
+        let task = PlanePendingTask(
+            id: "task-1",
+            projectID: "project-1",
+            title: longTitle,
+            kind: .grabar,
+            sceneTitle: "Intro",
+            projectTitle: "Proyecto"
+        )
+
+        let plan = PlaneExportPlan(tasks: [task])
+        let entry = try #require(plan.entries.first)
+
+        #expect(entry.draft.name.count == 255)
+        #expect(entry.draft.name.unicodeScalars.count == 510)
+        #expect(entry.draft.name == String(longTitle.prefix(255)))
+        #expect(entry.wasNameTruncated)
+        #expect(plan.summary.truncatedNameCount == 1)
+    }
+
+    @Test func doesNotFlagNamesAtTheLimit() throws {
+        let task = PlanePendingTask(
+            id: "task-1",
+            projectID: "project-1",
+            title: String(repeating: "a", count: 255),
+            kind: .grabar,
+            sceneTitle: "Intro",
+            projectTitle: "Proyecto"
+        )
+
+        let plan = PlaneExportPlan(tasks: [task])
+        let entry = try #require(plan.entries.first)
+
+        #expect(!entry.wasNameTruncated)
+        #expect(plan.summary.truncatedNameCount == 0)
+    }
+
     @Test func skipsTasksWithoutATitle() throws {
         let task = PlanePendingTask(
             id: "task-1",
@@ -115,6 +220,7 @@ struct PlaneExportPlanTests {
         #expect(plan.summary.workItemCount == 0)
         #expect(plan.summary.skippedCount == 1)
         #expect(plan.summary.skippedByReason == [.emptyTitle: 1])
+        #expect(plan.summary.truncatedNameCount == 0)
     }
 
     @Test func skipsTasksWithoutStableIdentifiers() throws {
@@ -212,6 +318,7 @@ struct PlaneExportPlanTests {
         #expect(summary.skippedCount == 0)
         #expect(summary.hasWorkItems)
         #expect(summary.workItemsByKind == [.grabar: 1, .editar: 1, .investigar: 1])
+        #expect(summary.truncatedNameCount == 0)
         #expect(summary.dueDateCount == 2)
         let earliest = try date("2026-11-18")
         let latest = try date("2026-11-20")
@@ -228,6 +335,7 @@ struct PlaneExportPlanTests {
         #expect(summary.skippedCount == 0)
         #expect(summary.skippedByReason.isEmpty)
         #expect(summary.workItemsByKind.isEmpty)
+        #expect(summary.truncatedNameCount == 0)
         #expect(summary.dueDateCount == 0)
         #expect(summary.earliestTargetDate == nil)
         #expect(summary.latestTargetDate == nil)
@@ -239,7 +347,7 @@ struct PlaneExportPlanTests {
     }
 }
 
-@Suite("Plane dates and headers")
+@Suite("Plane dates, labels and ledger")
 struct PlaneSupportTests {
     @Test func parsesAndFormatsDates() throws {
         let date = try #require(PlaneDate(iso8601: "2026-11-20"))
@@ -285,6 +393,16 @@ struct PlaneSupportTests {
         #expect(PlaneRetryAfter.parse("Tue, 14 Nov 2023 22:13:40 GMT", now: now) == 20)
     }
 
+    @Test func derivesRetryAfterFromResetHeader() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        #expect(PlaneRetryAfter.fromResetHeader("1700000030", now: now) == 30)
+        #expect(PlaneRetryAfter.fromResetHeader("1700000000", now: now) == 0)
+        #expect(PlaneRetryAfter.fromResetHeader("", now: now) == nil)
+        #expect(PlaneRetryAfter.fromResetHeader(nil, now: now) == nil)
+        #expect(PlaneRetryAfter.fromResetHeader("soon", now: now) == nil)
+    }
+
     @Test func responseHeadersAreCaseInsensitive() {
         let response = PlaneHTTPResponse(
             statusCode: 200,
@@ -296,9 +414,49 @@ struct PlaneSupportTests {
         #expect(response.header("X-RATELIMIT-REMAINING") == "45")
     }
 
-    @Test func taskKindNamesAreStable() {
-        #expect(PlaneTaskKind.conseguirBroll.rawValue == "conseguirBroll")
-        #expect(PlaneTaskKind.conseguirBroll.displayName == "Conseguir B-roll")
-        #expect(PlaneTaskKind.grabar.displayName == "Grabar")
+    @Test func defaultLabelsAreEnglishAndComplete() {
+        let labels = PlaneExportLabels()
+
+        #expect(labels.scene == "Scene")
+        #expect(labels.project == "Project")
+        #expect(Set(labels.kindNames.keys) == Set(PlaneTaskKind.allCases))
+        #expect(labels.name(for: .grabar) == "Record")
+        #expect(labels.name(for: .conseguirBroll) == "Get B-roll")
+
+        let partial = PlaneExportLabels(scene: "Scene", project: "Project", kindNames: [:])
+        #expect(partial.name(for: .grabar) == "Record")
+        #expect(partial.name(for: .investigar) == "Research")
+    }
+
+    @Test func truncatesNamesGraphemeSafely() throws {
+        #expect(PlaneWorkItemName.truncated(String(repeating: "a", count: 300)).count == 255)
+        #expect(!PlaneWorkItemName.isTruncated(String(repeating: "a", count: 255)))
+        #expect(PlaneWorkItemName.isTruncated(String(repeating: "a", count: 256)))
+
+        let composed = String(repeating: "e\u{301}", count: 300)
+        let truncated = PlaneWorkItemName.truncated(composed)
+        #expect(truncated.count == 255)
+        #expect(truncated.unicodeScalars.count == 510)
+        let lastCharacter = try #require(truncated.last)
+        #expect(String(lastCharacter) == "e\u{301}")
+    }
+
+    @Test func ledgerRoundTripsAndMutates() throws {
+        var ledger = PlaneExportLedger()
+        #expect(ledger.isEmpty)
+
+        ledger["framescript:a:b"] = "wi-1"
+        #expect(ledger["framescript:a:b"] == "wi-1")
+
+        ledger.record(workItemID: "wi-2", forTaskExternalID: "framescript:c:d")
+        ledger.remove(taskExternalID: "framescript:a:b")
+        #expect(ledger.workItemIDsByTaskExternalID == ["framescript:c:d": "wi-2"])
+
+        let data = try JSONEncoder().encode(ledger)
+        #expect(
+            try JSONDecoder().decode([String: String].self, from: data)
+                == ["framescript:c:d": "wi-2"]
+        )
+        #expect(try JSONDecoder().decode(PlaneExportLedger.self, from: data) == ledger)
     }
 }

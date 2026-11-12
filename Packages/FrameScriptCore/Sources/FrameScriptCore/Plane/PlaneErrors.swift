@@ -13,10 +13,11 @@ public enum PlaneError: Error, Sendable, Equatable {
     case unauthorized(message: String?)
     case forbidden(message: String?)
     case notFound(message: String?)
-    case rateLimited(retryAfter: TimeInterval?)
+    case rateLimited(retryAfter: TimeInterval?, message: String?)
     case requestFailed(statusCode: Int, message: String?)
     case server(statusCode: Int, message: String?)
     case network(code: Int, message: String)
+    case cancelled
     case encoding(String)
     case decoding(String)
     case paginationLimitExceeded
@@ -40,17 +41,25 @@ extension PlaneError: LocalizedError {
             return "The Plane API key is not allowed to perform this action."
         case .notFound:
             return "The Plane workspace, project or work item was not found."
-        case .rateLimited(let retryAfter):
+        case .rateLimited(let retryAfter, let message):
+            var text: String
             if let retryAfter {
-                return "Plane rate limit reached. Retry in \(Int(retryAfter.rounded(.up))) seconds."
+                text = "Plane rate limit reached. Retry in \(Int(retryAfter.rounded(.up))) seconds."
+            } else {
+                text = "Plane rate limit reached."
             }
-            return "Plane rate limit reached."
+            if let message, !message.isEmpty {
+                text += " \(message)"
+            }
+            return text
         case .requestFailed(let statusCode, let message):
             return Self.describe("Plane rejected the request", statusCode: statusCode, message: message)
         case .server(let statusCode, let message):
             return Self.describe("Plane server error", statusCode: statusCode, message: message)
         case .network(let code, let message):
             return "Network error talking to Plane (\(code)): \(message)"
+        case .cancelled:
+            return "The Plane request was cancelled."
         case .encoding(let detail):
             return "Could not encode the Plane request: \(detail)"
         case .decoding(let detail):
@@ -123,5 +132,17 @@ public enum PlaneRetryAfter {
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         guard let date = formatter.date(from: raw) else { return nil }
         return max(0, date.timeIntervalSince(now))
+    }
+
+    /// Derives the wait from `X-RateLimit-Reset`, documented as UTC epoch
+    /// seconds. Used as a fallback when `Retry-After` is absent.
+    public static func fromResetHeader(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let epochSeconds = TimeInterval(raw)
+        else {
+            return nil
+        }
+        return max(0, Date(timeIntervalSince1970: epochSeconds).timeIntervalSince(now))
     }
 }

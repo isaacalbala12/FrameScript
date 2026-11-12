@@ -7,6 +7,8 @@ private let planeProjectID = "project-uuid-1"
 private let planeAPIKey = "test-api-key"
 private let planeWorkItemsPath = "/api/v1/workspaces/acme/projects/project-uuid-1/work-items/"
 private let planeIssuesPath = "/api/v1/workspaces/acme/projects/project-uuid-1/issues/"
+private let planeWorkItemDetailPath = "/api/v1/workspaces/acme/projects/project-uuid-1/work-items/wi-1/"
+private let planeTaskExternalID = "framescript:project-uuid-1:task-1"
 
 private func planeStub(
     _ json: String,
@@ -35,6 +37,32 @@ private func makePlaneClient(
         configuration: configuration,
         transport: URLSessionPlaneHTTPTransport(session: session)
     )
+}
+
+private func makeExportPlan(title: String = "Grabar intro") -> PlaneExportPlan {
+    PlaneExportPlan(
+        tasks: [
+            PlanePendingTask(
+                id: "task-1",
+                projectID: planeProjectID,
+                title: title,
+                kind: .grabar,
+                sceneTitle: "Intro",
+                projectTitle: "Demo project"
+            )
+        ]
+    )
+}
+
+private func ledger(workItemID: String) -> PlaneExportLedger {
+    PlaneExportLedger(workItemIDsByTaskExternalID: [planeTaskExternalID: workItemID])
+}
+
+private func createdWorkItemJSON(id: String) -> String {
+    """
+    {"id":"\(id)","name":"Grabar intro","sequence_id":7,
+     "external_id":"\(planeTaskExternalID)","external_source":"framescript"}
+    """
 }
 
 @Suite("Plane client", .serialized)
@@ -72,6 +100,18 @@ struct PlaneClientTests {
         #expect(request.header("X-API-Key") == planeAPIKey)
         #expect(request.header("Accept") == "application/json")
         #expect(request.header("Content-Type") == nil)
+    }
+
+    @Test func listProjectsDecodesBareArray() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"[{"id":"project-1","name":"Demo project","identifier":"DEMO"}]"#)
+        }
+
+        let client = try makePlaneClient()
+        let projects = try await client.listProjects()
+
+        #expect(projects.map(\.id) == ["project-1"])
+        #expect(PlaneURLProtocolStub.requests.count == 1)
     }
 
     @Test func listStatesAndLabelsUseProjectEndpoints() async throws {
@@ -163,11 +203,7 @@ struct PlaneClientTests {
         PlaneURLProtocolStub.install { request in
             #expect(request.method == "POST")
             return planeStub(
-                """
-                {"id":"wi-1","name":"Grabar intro","sequence_id":42,
-                 "external_id":"framescript:project-uuid-1:task-1","external_source":"framescript",
-                 "target_date":"2026-11-20"}
-                """,
+                createdWorkItemJSON(id: "wi-1"),
                 status: 201,
                 headers: ["Content-Type": "application/json"]
             )
@@ -182,17 +218,16 @@ struct PlaneClientTests {
             stateID: "state-uuid",
             labelIDs: ["label-1", "label-2"],
             targetDate: targetDate,
-            externalID: "framescript:project-uuid-1:task-1",
+            externalID: planeTaskExternalID,
             externalSource: "framescript"
         )
 
         let created = try await client.createWorkItem(draft)
 
         #expect(created.id == "wi-1")
-        #expect(created.sequenceID == 42)
-        #expect(created.externalID == "framescript:project-uuid-1:task-1")
+        #expect(created.sequenceID == 7)
+        #expect(created.externalID == planeTaskExternalID)
         #expect(created.externalSource == "framescript")
-        #expect(created.targetDate == targetDate)
 
         let request = try #require(PlaneURLProtocolStub.requests.first)
         #expect(request.url?.planePath == planeWorkItemsPath)
@@ -213,18 +248,13 @@ struct PlaneClientTests {
         #expect(body["state"] as? String == "state-uuid")
         #expect(body["labels"] as? [String] == ["label-1", "label-2"])
         #expect(body["target_date"] as? String == "2026-11-20")
-        #expect(body["external_id"] as? String == "framescript:project-uuid-1:task-1")
+        #expect(body["external_id"] as? String == planeTaskExternalID)
         #expect(body["external_source"] as? String == "framescript")
     }
 
     @Test func createWorkItemOmitsUnsetOptionalFields() async throws {
         PlaneURLProtocolStub.install { _ in
-            planeStub(
-                """
-                {"id":"wi-1","name":"Investigar referencia","sequence_id":1}
-                """,
-                status: 201
-            )
+            planeStub(#"{"id":"wi-1","name":"Investigar referencia","sequence_id":1}"#, status: 201)
         }
 
         let client = try makePlaneClient()
@@ -249,57 +279,418 @@ struct PlaneClientTests {
         #expect(body["target_date"] == nil)
     }
 
-    // MARK: - Idempotency
-
-    @Test func findWorkItemFiltersByExternalIDAndPaginates() async throws {
-        PlaneURLProtocolStub.install { request in
-            if request.url?.queryValue("cursor") == nil {
-                return planeStub(
-                    """
-                    {"results":[{"id":"wi-other","name":"Other","external_id":"framescript:other:task",
-                     "external_source":"framescript"}],
-                     "next_cursor":"100:1:0","next_page_results":true}
-                    """
-                )
-            }
-            return planeStub(
-                """
-                {"results":[{"id":"wi-2","name":"Grabar intro",
-                 "external_id":"framescript:project-uuid-1:task-1","external_source":"framescript"}],
-                 "next_cursor":"","next_page_results":false}
-                """
-            )
+    @Test func createWorkItemTruncatesLongNameGraphemeSafely() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"{"id":"wi-1","name":"truncated"}"#, status: 201)
         }
 
         let client = try makePlaneClient()
-        let match = try await client.findWorkItem(byExternalId: "framescript:project-uuid-1:task-1")
+        let longName = String(repeating: "e\u{301}", count: 300)
+        let draft = PlaneWorkItemDraft(
+            name: longName,
+            descriptionHTML: "<p>Grabar</p>",
+            externalID: planeTaskExternalID,
+            externalSource: "framescript"
+        )
 
-        #expect(match?.id == "wi-2")
+        _ = try await client.createWorkItem(draft)
 
-        let requests = PlaneURLProtocolStub.requests
-        #expect(requests.count == 2)
-        #expect(requests[0].url?.queryValue("external_id") == "framescript:project-uuid-1:task-1")
-        #expect(requests[0].url?.queryValue("external_source") == "framescript")
-        #expect(requests[0].url?.queryValue("per_page") == "100")
-        #expect(requests[1].url?.queryValue("cursor") == "100:1:0")
+        let request = try #require(PlaneURLProtocolStub.requests.first)
+        let body = try request.jsonObject()
+        let sentName = try #require(body["name"] as? String)
+        #expect(sentName.count == 255)
+        #expect(sentName.unicodeScalars.count == 510)
+        #expect(sentName == String(longName.prefix(255)))
     }
 
-    @Test func findWorkItemReturnsNilWhenNoMatchExists() async throws {
+    // MARK: - Idempotent lookup
+
+    @Test func findWorkItemAcceptsEchoedExternalIDAndUsesUncachedRequest() async throws {
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 """
-                {"results":[{"id":"wi-other","name":"Other","external_id":"framescript:other:task",
-                 "external_source":"framescript"}],
-                 "next_cursor":"","next_page_results":false}
+                {"results":[
+                  {"id":"wi-other","name":"Other","external_id":"framescript:other:task",
+                   "external_source":"framescript"},
+                  {"id":"wi-1","name":"Grabar intro","external_id":"framescript:project-uuid-1:task-1",
+                   "external_source":"framescript"}
+                ],"next_cursor":"","next_page_results":false}
                 """
             )
         }
 
         let client = try makePlaneClient()
-        let match = try await client.findWorkItem(byExternalId: "framescript:project-uuid-1:task-9")
+        let lookup = try await client.findWorkItem(byExternalId: planeTaskExternalID)
 
-        #expect(match == nil)
+        guard case .found(let item) = lookup else {
+            Issue.record("Expected a found lookup, got \(lookup)")
+            return
+        }
+        #expect(item.id == "wi-1")
+
+        let request = try #require(PlaneURLProtocolStub.requests.first)
+        #expect(request.method == "GET")
+        #expect(request.url?.planePath == planeWorkItemsPath)
+        #expect(request.url?.queryValue("external_id") == planeTaskExternalID)
+        #expect(request.url?.queryValue("external_source") == "framescript")
+        #expect(request.url?.queryValue("per_page") == "100")
+        #expect(request.url?.queryValue("cursor") == nil)
+        #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
         #expect(PlaneURLProtocolStub.requests.count == 1)
+    }
+
+    @Test func findWorkItemMakesOneRequestEvenWhenMorePagesExist() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                #"{"results":[],"next_cursor":"100:1:0","next_page_results":true}"#
+            )
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .cannotVerify(let candidates) = lookup else {
+            Issue.record("Expected cannotVerify, got \(lookup)")
+            return
+        }
+        #expect(candidates.isEmpty)
+        #expect(PlaneURLProtocolStub.requests.count == 1)
+        #expect(PlaneURLProtocolStub.requests.first?.url?.queryValue("cursor") == nil)
+    }
+
+    @Test func findWorkItemAcceptsSingleDocumentedRowMatchingName() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                """
+                {"results":[{"id":"wi-1","name":"Grabar intro","sequence_id":9}],
+                 "next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .found(let item) = lookup else {
+            Issue.record("Expected a found lookup, got \(lookup)")
+            return
+        }
+        #expect(item.id == "wi-1")
+        #expect(item.externalID == nil)
+    }
+
+    @Test func findWorkItemCannotVerifySingleDocumentedRowWithMismatchedName() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                """
+                {"results":[{"id":"wi-1","name":"Otra cosa"}],
+                 "next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .cannotVerify(let candidates) = lookup else {
+            Issue.record("Expected cannotVerify, got \(lookup)")
+            return
+        }
+        #expect(candidates.map(\.id) == ["wi-1"])
+    }
+
+    @Test func findWorkItemAcceptsUniqueNameMatchAmongDocumentedRows() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                """
+                {"results":[
+                  {"id":"wi-a","name":"Otra cosa"},
+                  {"id":"wi-b","name":"Grabar intro"}
+                ],"next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .found(let item) = lookup else {
+            Issue.record("Expected a found lookup, got \(lookup)")
+            return
+        }
+        #expect(item.id == "wi-b")
+    }
+
+    @Test func findWorkItemCannotVerifyAmbiguousNameMatches() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                """
+                {"results":[
+                  {"id":"wi-a","name":"Grabar intro"},
+                  {"id":"wi-b","name":"Grabar intro"}
+                ],"next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .cannotVerify(let candidates) = lookup else {
+            Issue.record("Expected cannotVerify, got \(lookup)")
+            return
+        }
+        #expect(candidates.map(\.id) == ["wi-a", "wi-b"])
+    }
+
+    @Test func findWorkItemReturnsNotFoundOnFinalEmptyPage() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"{"results":[],"next_cursor":"","next_page_results":false}"#)
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(byExternalId: planeTaskExternalID)
+
+        guard case .notFound = lookup else {
+            Issue.record("Expected notFound, got \(lookup)")
+            return
+        }
+    }
+
+    @Test func findWorkItemDecodesBareArray() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"[{"id":"wi-1","name":"Grabar intro"}]"#)
+        }
+
+        let client = try makePlaneClient()
+        let lookup = try await client.findWorkItem(
+            byExternalId: planeTaskExternalID,
+            expectedName: "Grabar intro"
+        )
+
+        guard case .found(let item) = lookup else {
+            Issue.record("Expected a found lookup, got \(lookup)")
+            return
+        }
+        #expect(item.id == "wi-1")
+    }
+
+    @Test func getWorkItemFetchesByIDWithUncachedRequest() async throws {
+        PlaneURLProtocolStub.install { request in
+            #expect(request.url?.planePath == planeWorkItemDetailPath)
+            return planeStub(#"{"id":"wi-1","name":"Grabar intro","sequence_id":3}"#)
+        }
+
+        let client = try makePlaneClient()
+        let item = try await client.getWorkItem(id: "wi-1")
+
+        #expect(item.id == "wi-1")
+        let request = try #require(PlaneURLProtocolStub.requests.first)
+        #expect(request.method == "GET")
+        #expect(request.url?.planePath == planeWorkItemDetailPath)
+        #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
+        #expect(request.header("X-API-Key") == planeAPIKey)
+    }
+
+    // MARK: - Export and ledger
+
+    @Test func exportUsesLedgerAndDoesNotList() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"{"id":"wi-1","name":"Grabar intro"}"#)
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(
+            plan: makeExportPlan(),
+            ledger: ledger(workItemID: "wi-1")
+        )
+
+        #expect(
+            report.outcomes == [
+                .verified(taskExternalID: planeTaskExternalID, workItemID: "wi-1")
+            ]
+        )
+        #expect(report.workItemIDsByTaskExternalID == [planeTaskExternalID: "wi-1"])
+        #expect(report.ledger[planeTaskExternalID] == "wi-1")
+        #expect(PlaneURLProtocolStub.requests.count == 1)
+        #expect(PlaneURLProtocolStub.requests.first?.url?.planePath == planeWorkItemDetailPath)
+        #expect(PlaneURLProtocolStub.requests.first?.cachePolicy == .reloadIgnoringLocalCacheData)
+    }
+
+    @Test func exportCreatesAndReturnsWorkItemID() async throws {
+        PlaneURLProtocolStub.install { request in
+            switch (request.method ?? "", request.url?.planePath ?? "") {
+            case ("GET", planeWorkItemsPath):
+                return planeStub(#"{"results":[],"next_cursor":"","next_page_results":false}"#)
+            case ("POST", planeWorkItemsPath):
+                return planeStub(createdWorkItemJSON(id: "wi-new"), status: 201)
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(plan: makeExportPlan())
+
+        #expect(
+            report.outcomes == [
+                .created(taskExternalID: planeTaskExternalID, workItemID: "wi-new")
+            ]
+        )
+        #expect(report.workItemIDsByTaskExternalID == [planeTaskExternalID: "wi-new"])
+        #expect(report.ledger[planeTaskExternalID] == "wi-new")
+
+        let requests = PlaneURLProtocolStub.requests
+        #expect(requests.count == 2)
+        #expect(requests[0].method == "GET")
+        #expect(requests[0].cachePolicy == .reloadIgnoringLocalCacheData)
+        #expect(requests[0].url?.queryValue("external_id") == planeTaskExternalID)
+        #expect(requests[0].url?.queryValue("cursor") == nil)
+        #expect(requests[1].method == "POST")
+    }
+
+    @Test func exportMatchesSingleDocumentedRowByName() async throws {
+        PlaneURLProtocolStub.install { request in
+            #expect(request.method == "GET")
+            return planeStub(
+                """
+                {"results":[{"id":"wi-existing","name":"Grabar intro"}],
+                 "next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(plan: makeExportPlan())
+
+        #expect(
+            report.outcomes == [
+                .verified(taskExternalID: planeTaskExternalID, workItemID: "wi-existing")
+            ]
+        )
+        #expect(report.ledger[planeTaskExternalID] == "wi-existing")
+        #expect(PlaneURLProtocolStub.requests.count == 1)
+    }
+
+    @Test func exportDoesNotCreateWhenLookupCannotVerify() async throws {
+        PlaneURLProtocolStub.install { request in
+            #expect(request.method == "GET")
+            return planeStub(
+                """
+                {"results":[
+                  {"id":"wi-a","name":"Grabar intro"},
+                  {"id":"wi-b","name":"Grabar intro"}
+                ],"next_page_results":false}
+                """
+            )
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(plan: makeExportPlan())
+
+        let outcome = try #require(report.outcomes.first)
+        guard case .cannotVerify(let taskExternalID, let candidates) = outcome else {
+            Issue.record("Expected cannotVerify, got \(outcome)")
+            return
+        }
+        #expect(taskExternalID == planeTaskExternalID)
+        #expect(candidates.map(\.id) == ["wi-a", "wi-b"])
+        #expect(report.ledger.isEmpty)
+        #expect(PlaneURLProtocolStub.requests.count == 1)
+    }
+
+    @Test func exportKeepsDeletedLedgerEntryWithoutRecreate() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"{"detail":"Work item not found"}"#, status: 404)
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let plan = makeExportPlan()
+        let first = try await client.export(
+            plan: plan,
+            ledger: ledger(workItemID: "wi-gone")
+        )
+
+        #expect(first.outcomes == [.deleted(taskExternalID: planeTaskExternalID)])
+        #expect(first.workItemIDsByTaskExternalID.isEmpty)
+        #expect(first.ledger[planeTaskExternalID] == "wi-gone")
+        #expect(PlaneURLProtocolStub.requests.count == 1)
+
+        let second = try await client.export(plan: plan, ledger: first.ledger)
+        #expect(second.outcomes == [.deleted(taskExternalID: planeTaskExternalID)])
+        #expect(PlaneURLProtocolStub.requests.count == 2)
+    }
+
+    @Test func exportRecreatesDeletedLedgerEntryWhenAllowed() async throws {
+        let deletedDetailPath = "/api/v1/workspaces/acme/projects/project-uuid-1/work-items/wi-gone/"
+        PlaneURLProtocolStub.install { request in
+            switch (request.method ?? "", request.url?.planePath ?? "") {
+            case ("GET", deletedDetailPath):
+                return planeStub(#"{"detail":"Work item not found"}"#, status: 404)
+            case ("POST", planeWorkItemsPath):
+                return planeStub(createdWorkItemJSON(id: "wi-new"), status: 201)
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(
+            plan: makeExportPlan(),
+            ledger: ledger(workItemID: "wi-gone"),
+            policy: PlaneExportPolicy(recreateDeletedWorkItems: true)
+        )
+
+        #expect(
+            report.outcomes == [
+                .recreated(taskExternalID: planeTaskExternalID, workItemID: "wi-new")
+            ]
+        )
+        #expect(report.ledger[planeTaskExternalID] == "wi-new")
+        #expect(PlaneURLProtocolStub.requests.count == 2)
+    }
+
+    @Test func exportReportsTruncatedNames() async throws {
+        PlaneURLProtocolStub.install { _ in
+            planeStub(#"{"id":"wi-1","name":"Grabar intro"}"#)
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(
+            plan: makeExportPlan(title: String(repeating: "a", count: 300)),
+            ledger: ledger(workItemID: "wi-1")
+        )
+
+        #expect(report.truncatedNameTaskExternalIDs == [planeTaskExternalID])
+    }
+
+    @Test func exportPropagatesCancellationInsteadOfRecordingFailure() async throws {
+        PlaneURLProtocolStub.install { _ in
+            throw URLError(.cancelled)
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        do {
+            _ = try await client.export(plan: makeExportPlan())
+            Issue.record("Expected cancellation")
+        } catch let error as PlaneError {
+            #expect(error == .cancelled)
+        }
     }
 
     // MARK: - Legacy route fallback
@@ -323,11 +714,11 @@ struct PlaneClientTests {
         }
 
         let client = try makePlaneClient(workItemRoute: .automatic)
-        let first = try await client.findWorkItem(byExternalId: "framescript:project-uuid-1:task-1")
-        let second = try await client.findWorkItem(byExternalId: "framescript:project-uuid-1:task-1")
+        let first = try await client.findWorkItem(byExternalId: planeTaskExternalID)
+        let second = try await client.findWorkItem(byExternalId: planeTaskExternalID)
 
-        #expect(first?.id == "wi-legacy")
-        #expect(second?.id == "wi-legacy")
+        #expect(first.workItem?.id == "wi-legacy")
+        #expect(second.workItem?.id == "wi-legacy")
 
         let paths = PlaneURLProtocolStub.requests.compactMap { $0.url?.planePath }
         #expect(paths == [planeWorkItemsPath, planeIssuesPath, planeIssuesPath])
@@ -339,10 +730,7 @@ struct PlaneClientTests {
             case planeWorkItemsPath:
                 return planeStub(#"{"error":"Not found"}"#, status: 404)
             case planeIssuesPath:
-                return planeStub(
-                    #"{"id":"wi-legacy","name":"Grabar intro","sequence_id":7}"#,
-                    status: 201
-                )
+                return planeStub(#"{"id":"wi-legacy","name":"Grabar intro","sequence_id":7}"#, status: 201)
             default:
                 throw URLError(.badURL)
             }
@@ -352,7 +740,7 @@ struct PlaneClientTests {
         let draft = PlaneWorkItemDraft(
             name: "Grabar intro",
             descriptionHTML: "<p>Grabar</p>",
-            externalID: "framescript:project-uuid-1:task-1",
+            externalID: planeTaskExternalID,
             externalSource: "framescript"
         )
 
@@ -374,7 +762,7 @@ struct PlaneClientTests {
         let client = try makePlaneClient(workItemRoute: .workItems)
 
         do {
-            _ = try await client.findWorkItem(byExternalId: "framescript:project-uuid-1:task-1")
+            _ = try await client.findWorkItem(byExternalId: planeTaskExternalID)
             Issue.record("Expected notFound")
         } catch let error as PlaneError {
             #expect(error == .notFound(message: "Not found"))
@@ -396,7 +784,7 @@ struct PlaneClientTests {
                 PlaneWorkItemDraft(
                     name: "Grabar",
                     descriptionHTML: "<p>Grabar</p>",
-                    externalID: "framescript:project-uuid-1:task-1",
+                    externalID: planeTaskExternalID,
                     externalSource: "framescript"
                 )
             )
@@ -453,12 +841,16 @@ struct PlaneClientTests {
         }
     }
 
-    @Test func mapsRateLimitedWithRetryAfter() async throws {
+    @Test func mapsRateLimitedWithRetryAfterAndMessage() async throws {
+        let reset = Int(Date().timeIntervalSince1970) + 300
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 #"{"detail":"Rate limit exceeded"}"#,
                 status: 429,
-                headers: ["Retry-After": "17"]
+                headers: [
+                    "Retry-After": "17",
+                    "X-RateLimit-Reset": "\(reset)"
+                ]
             )
         }
 
@@ -467,7 +859,33 @@ struct PlaneClientTests {
             _ = try await client.listProjects()
             Issue.record("Expected rateLimited")
         } catch let error as PlaneError {
-            #expect(error == .rateLimited(retryAfter: 17))
+            #expect(error == .rateLimited(retryAfter: 17, message: "Rate limit exceeded"))
+        }
+    }
+
+    @Test func mapsRateLimitedFromResetHeader() async throws {
+        let reset = Int(Date().timeIntervalSince1970) + 600
+        PlaneURLProtocolStub.install { _ in
+            planeStub(
+                #"{"detail":"Slow down"}"#,
+                status: 429,
+                headers: ["X-RateLimit-Reset": "\(reset)"]
+            )
+        }
+
+        let client = try makePlaneClient()
+        do {
+            _ = try await client.listProjects()
+            Issue.record("Expected rateLimited")
+        } catch let error as PlaneError {
+            guard case let .rateLimited(retryAfter, message) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            let delay = try #require(retryAfter)
+            #expect(delay > 500)
+            #expect(delay <= 601)
+            #expect(message == "Slow down")
         }
     }
 
@@ -518,6 +936,20 @@ struct PlaneClientTests {
             }
             #expect(code == NSURLErrorNotConnectedToInternet)
             #expect(!message.isEmpty)
+        }
+    }
+
+    @Test func mapsCancellation() async throws {
+        PlaneURLProtocolStub.install { _ in
+            throw URLError(.cancelled)
+        }
+
+        let client = try makePlaneClient()
+        do {
+            _ = try await client.listProjects()
+            Issue.record("Expected cancellation")
+        } catch let error as PlaneError {
+            #expect(error == .cancelled)
         }
     }
 

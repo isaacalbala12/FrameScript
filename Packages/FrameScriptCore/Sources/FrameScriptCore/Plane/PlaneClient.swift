@@ -106,62 +106,72 @@ public actor PlaneClient {
         try await listAll(path: "\(projectPath)/labels/")
     }
 
-    /// Looks up an existing work item by the stable FrameScript external id.
+    /// Looks up an existing work item with ONE filtered list request.
     ///
-    /// The list endpoint documents `external_id` and `external_source` as
-    /// filters. Results are still checked locally before being returned, and
-    /// pagination is followed so an item that moved to a later page is found.
-    public func findWorkItem(byExternalId externalID: String) async throws -> PlaneWorkItem? {
+    /// The documented v1 list row does not include `external_id`, and some
+    /// self-hosted versions may ignore the filter. A match is accepted only
+    /// when a row echoes the exact `external_id`, or when the response has
+    /// exactly one result whose name equals `expectedName`. Anything else is
+    /// reported as `.cannotVerify` so the caller does not create a duplicate.
+    /// Pagination is never followed here.
+    public func findWorkItem(
+        byExternalId externalID: String,
+        expectedName: String? = nil
+    ) async throws -> PlaneWorkItemLookup {
         let identifier = externalID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !identifier.isEmpty else { return nil }
+        guard !identifier.isEmpty else { return .notFound }
 
         return try await withWorkItemRoute { route in
-            var cursor: String?
-            var pageIndex = 0
+            let queryItems = [
+                URLQueryItem(name: "external_id", value: identifier),
+                URLQueryItem(name: "external_source", value: PlaneExternalID.source),
+                URLQueryItem(name: "per_page", value: String(Self.pageSize))
+            ]
+            let request = try self.makeRequest(
+                method: "GET",
+                path: self.workItemCollectionPath(route: route),
+                queryItems: queryItems,
+                cachePolicy: .reloadIgnoringLocalCacheData
+            )
+            let response = try await self.perform(request)
+            let payload = try self.decodeList(PlaneWorkItem.self, from: response.data)
+            return Self.lookup(
+                in: payload.results,
+                externalID: identifier,
+                expectedName: expectedName,
+                hasMorePages: payload.hasMore
+            )
+        }
+    }
 
-            while true {
-                guard pageIndex < Self.maximumPages else {
-                    throw PlaneError.paginationLimitExceeded
-                }
+    /// `GET /api/v1/workspaces/{workspace_slug}/projects/{project_id}/work-items/{work_item_id}/`
+    public func getWorkItem(id: String) async throws -> PlaneWorkItem {
+        let identifier = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else {
+            throw PlaneError.invalidConfiguration("work item id must not be empty")
+        }
 
-                var queryItems = [
-                    URLQueryItem(name: "external_id", value: identifier),
-                    URLQueryItem(name: "external_source", value: PlaneExternalID.source),
-                    URLQueryItem(name: "per_page", value: String(Self.pageSize))
-                ]
-                if let cursor {
-                    queryItems.append(URLQueryItem(name: "cursor", value: cursor))
-                }
-
-                let request = try self.makeRequest(
-                    method: "GET",
-                    path: self.workItemCollectionPath(route: route),
-                    queryItems: queryItems
-                )
-                let response = try await self.perform(request)
-                let page = try self.decode(PlanePage<PlaneWorkItem>.self, from: response.data)
-
-                if let match = page.results.first(where: { $0.externalID == identifier }) {
-                    return match
-                }
-
-                guard let next = Self.nextCursor(after: page) else {
-                    return nil
-                }
-                guard next != cursor else {
-                    return nil
-                }
-                cursor = next
-                pageIndex += 1
-            }
+        return try await withWorkItemRoute { route in
+            let request = try self.makeRequest(
+                method: "GET",
+                path: self.workItemDetailPath(route: route, id: identifier),
+                cachePolicy: .reloadIgnoringLocalCacheData
+            )
+            let response = try await self.perform(request)
+            return try self.decode(PlaneWorkItem.self, from: response.data)
         }
     }
 
     // MARK: - Writes
 
     /// `POST /api/v1/workspaces/{workspace_slug}/projects/{project_id}/work-items/`
+    ///
+    /// Plane limits `name` to 255 characters. The name is grapheme-safely
+    /// shortened before encoding if a caller supplies a longer draft.
     public func createWorkItem(_ draft: PlaneWorkItemDraft) async throws -> PlaneWorkItem {
-        let body = try encode(draft)
+        var sanitizedDraft = draft
+        sanitizedDraft.name = PlaneWorkItemName.truncated(draft.name)
+        let body = try encode(sanitizedDraft)
 
         return try await withWorkItemRoute { route in
             let request = try self.makeRequest(
@@ -172,6 +182,82 @@ public actor PlaneClient {
             let response = try await self.perform(request)
             return try self.decode(PlaneWorkItem.self, from: response.data)
         }
+    }
+
+    // MARK: - Export
+
+    /// Creates or verifies one Plane work item per plan entry.
+    ///
+    /// The ledger is caller-owned; this method returns an updated copy. A
+    /// ledger id is verified with a fresh `GET`. When there is no ledger entry,
+    /// exactly one filtered list page is checked before creating. A
+    /// `cannotVerify` outcome never creates anything. Per-task failures are
+    /// reported as `.failed`; cancellation aborts the whole export.
+    public func export(
+        plan: PlaneExportPlan,
+        ledger: PlaneExportLedger = PlaneExportLedger(),
+        policy: PlaneExportPolicy = PlaneExportPolicy()
+    ) async throws -> PlaneExportReport {
+        var updatedLedger = ledger
+        var outcomes: [PlaneExportOutcome] = []
+
+        for entry in plan.entries {
+            if Task.isCancelled {
+                throw PlaneError.cancelled
+            }
+
+            let externalID = entry.draft.externalID
+            do {
+                if let ledgerID = updatedLedger[externalID] {
+                    do {
+                        _ = try await getWorkItem(id: ledgerID)
+                        outcomes.append(.verified(taskExternalID: externalID, workItemID: ledgerID))
+                    } catch let error as PlaneError where error.isNotFound {
+                        if policy.recreateDeletedWorkItems {
+                            let created = try await createWorkItem(entry.draft)
+                            updatedLedger.record(workItemID: created.id, forTaskExternalID: externalID)
+                            outcomes.append(.recreated(taskExternalID: externalID, workItemID: created.id))
+                        } else {
+                            // Keep the stale id. Removing it would make the next
+                            // export take the "never exported" path and create
+                            // without the caller explicitly allowing recreation.
+                            outcomes.append(.deleted(taskExternalID: externalID))
+                        }
+                    }
+                } else {
+                    let lookup = try await findWorkItem(
+                        byExternalId: externalID,
+                        expectedName: entry.draft.name
+                    )
+                    switch lookup {
+                    case .found(let workItem):
+                        updatedLedger.record(workItemID: workItem.id, forTaskExternalID: externalID)
+                        outcomes.append(.verified(taskExternalID: externalID, workItemID: workItem.id))
+                    case .notFound:
+                        let created = try await createWorkItem(entry.draft)
+                        updatedLedger.record(workItemID: created.id, forTaskExternalID: externalID)
+                        outcomes.append(.created(taskExternalID: externalID, workItemID: created.id))
+                    case .cannotVerify(let candidates):
+                        outcomes.append(
+                            .cannotVerify(taskExternalID: externalID, candidates: candidates)
+                        )
+                    }
+                }
+            } catch PlaneError.cancelled {
+                throw PlaneError.cancelled
+            } catch let error as PlaneError {
+                outcomes.append(.failed(taskExternalID: externalID, error: error))
+            }
+        }
+
+        let truncatedIDs = plan.entries
+            .filter(\.wasNameTruncated)
+            .map(\.draft.externalID)
+        return PlaneExportReport(
+            outcomes: outcomes,
+            ledger: updatedLedger,
+            truncatedNameTaskExternalIDs: truncatedIDs
+        )
     }
 
     // MARK: - Requests
@@ -187,6 +273,10 @@ public actor PlaneClient {
         case .workItems, .automatic: collection = "work-items"
         }
         return "\(projectPath)/\(collection)/"
+    }
+
+    private func workItemDetailPath(route: PlaneWorkItemRoute, id: String) -> String {
+        "\(workItemCollectionPath(route: route))\(id)/"
     }
 
     private func withWorkItemRoute<Value: Sendable>(
@@ -230,10 +320,10 @@ public actor PlaneClient {
 
             let request = try makeRequest(method: "GET", path: path, queryItems: queryItems)
             let response = try await perform(request)
-            let page = try decode(PlanePage<Item>.self, from: response.data)
+            let payload = try decodeList(Item.self, from: response.data)
 
-            guard let next = Self.nextCursor(after: page) else {
-                collected.append(contentsOf: page.results)
+            guard let next = payload.next else {
+                collected.append(contentsOf: payload.results)
                 return collected
             }
             guard next != cursor else {
@@ -242,7 +332,7 @@ public actor PlaneClient {
                 return collected
             }
 
-            collected.append(contentsOf: page.results)
+            collected.append(contentsOf: payload.results)
             cursor = next
             pageIndex += 1
         }
@@ -252,7 +342,8 @@ public actor PlaneClient {
         method: String,
         path: String,
         queryItems: [URLQueryItem] = [],
-        body: Data? = nil
+        body: Data? = nil,
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) throws -> URLRequest {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw PlaneError.invalidConfiguration("baseURL could not be decomposed")
@@ -271,9 +362,8 @@ public actor PlaneClient {
             throw PlaneError.invalidConfiguration("Could not build a valid Plane request URL")
         }
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, cachePolicy: cachePolicy, timeoutInterval: 30)
         request.httpMethod = method
-        request.timeoutInterval = 30
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
@@ -287,9 +377,14 @@ public actor PlaneClient {
         let response: PlaneHTTPResponse
         do {
             response = try await transport.perform(request)
+        } catch is CancellationError {
+            throw PlaneError.cancelled
         } catch let error as PlaneError {
             throw error
         } catch let error as URLError {
+            if error.code == .cancelled {
+                throw PlaneError.cancelled
+            }
             throw PlaneError.network(code: error.errorCode, message: error.localizedDescription)
         } catch {
             throw PlaneError.network(code: NSURLErrorUnknown, message: error.localizedDescription)
@@ -332,20 +427,55 @@ public actor PlaneClient {
         }
     }
 
+    /// Accepts the documented `results` envelope and, defensively, a bare array.
+    private func decodeList<Item: Decodable>(
+        _ type: Item.Type,
+        from data: Data
+    ) throws -> PlaneListPayload<Item> {
+        if let page = try? decoder.decode(PlanePage<Item>.self, from: data) {
+            return PlaneListPayload(
+                results: page.results,
+                nextCursor: page.nextCursor,
+                nextPageResults: page.nextPageResults
+            )
+        }
+
+        do {
+            let results = try decoder.decode([Item].self, from: data)
+            return PlaneListPayload(results: results, nextCursor: nil, nextPageResults: false)
+        } catch {
+            throw PlaneError.decoding(String(describing: error))
+        }
+    }
+
     // MARK: - Helpers
 
-    private static func nextCursor<Item>(
-        after page: PlanePage<Item>
-    ) -> String? {
-        guard let next = page.nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !next.isEmpty
-        else {
-            return nil
+    private static func lookup(
+        in results: [PlaneWorkItem],
+        externalID: String,
+        expectedName: String?,
+        hasMorePages: Bool
+    ) -> PlaneWorkItemLookup {
+        if let exact = results.first(where: { $0.externalID == externalID }) {
+            return .found(exact)
         }
-        if page.nextPageResults == false {
-            return nil
+
+        if let expectedName {
+            let expected = PlaneWorkItemName.truncated(
+                expectedName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            let nameMatches = results.filter {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == expected
+            }
+            if nameMatches.count == 1, let only = nameMatches.first {
+                return .found(only)
+            }
         }
-        return next
+
+        if results.isEmpty && !hasMorePages {
+            return .notFound
+        }
+        return .cannotVerify(candidates: results)
     }
 
     private static func normalizedBaseURL(_ url: URL) throws -> URL {
@@ -393,7 +523,9 @@ public actor PlaneClient {
         case 404:
             return .notFound(message: message)
         case 429:
-            return .rateLimited(retryAfter: PlaneRetryAfter.parse(response.header("Retry-After")))
+            let retryAfter = PlaneRetryAfter.parse(response.header("Retry-After"))
+                ?? PlaneRetryAfter.fromResetHeader(response.header("X-RateLimit-Reset"))
+            return .rateLimited(retryAfter: retryAfter, message: message)
         case 400..<500:
             return .requestFailed(statusCode: response.statusCode, message: message)
         default:
@@ -416,6 +548,26 @@ public actor PlaneClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let text, !text.isEmpty else { return nil }
         return text
+    }
+}
+
+private struct PlaneListPayload<Item> {
+    let results: [Item]
+    let nextCursor: String?
+    let nextPageResults: Bool?
+
+    var next: String? {
+        guard let cursor = nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !cursor.isEmpty,
+              nextPageResults != false
+        else {
+            return nil
+        }
+        return cursor
+    }
+
+    var hasMore: Bool {
+        next != nil
     }
 }
 
