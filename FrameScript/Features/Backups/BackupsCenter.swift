@@ -29,7 +29,25 @@ final class BackupHealth {
 /// light in-memory throttle that keeps autosave off the backup folder.
 @MainActor
 enum BackupsCenter {
-    static let store = BackupStore(rootDirectory: BackupStore.defaultRootDirectory)
+    static let store = BackupStore(rootDirectory: rootDirectory)
+
+    /// The app unit tests host the real app, so they must never touch the
+    /// user's real backup folder. Production keeps the documented location.
+    static var rootDirectory: URL {
+        if isRunningTests {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "FrameScriptAppTestBackups-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true
+                )
+        }
+        return BackupStore.defaultRootDirectory
+    }
+
+    private static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
 
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
