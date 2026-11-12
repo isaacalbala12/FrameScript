@@ -77,8 +77,6 @@ public enum PlaneExportOutcome: Sendable, Equatable {
     /// The ledger id returned `404` and recreation was not allowed. The ledger
     /// entry is kept so the caller decides when to clear it.
     case deleted(taskExternalID: String)
-    /// The lookup was inconclusive; nothing was created.
-    case cannotVerify(taskExternalID: String, candidates: [PlaneWorkItem])
     /// The task failed without aborting the rest of the export.
     case failed(taskExternalID: String, error: PlaneError)
 
@@ -88,7 +86,6 @@ public enum PlaneExportOutcome: Sendable, Equatable {
              .verified(let id, _),
              .recreated(let id, _),
              .deleted(let id),
-             .cannotVerify(let id, _),
              .failed(let id, _):
             return id
         }
@@ -100,9 +97,29 @@ public enum PlaneExportOutcome: Sendable, Equatable {
              .verified(_, let id),
              .recreated(_, let id):
             return id
-        case .deleted, .cannotVerify, .failed:
+        case .deleted, .failed:
             return nil
         }
+    }
+}
+
+/// A non-blocking observation from an export.
+public struct PlaneExportWarning: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable {
+        /// The filtered list returned rows with the planned name but no exact
+        /// `external_id` echo. The export creates a new work item because the
+        /// caller-owned ledger is authoritative.
+        case possibleDuplicateByName
+    }
+
+    public let taskExternalID: String
+    public let kind: Kind
+    public let candidates: [PlaneWorkItem]
+
+    public init(taskExternalID: String, kind: Kind, candidates: [PlaneWorkItem]) {
+        self.taskExternalID = taskExternalID
+        self.kind = kind
+        self.candidates = candidates
     }
 }
 
@@ -110,6 +127,9 @@ public enum PlaneExportOutcome: Sendable, Equatable {
 /// persist and any names that had to be shortened.
 public struct PlaneExportReport: Sendable, Equatable {
     public let outcomes: [PlaneExportOutcome]
+    /// Non-blocking warnings about possible duplicates. They never prevent a
+    /// create; only an exact echoed `external_id` reuses an existing item.
+    public let warnings: [PlaneExportWarning]
     /// Ledger the caller should persist. It may retain a stale id when a
     /// `deleted` outcome was returned, so a later export cannot bypass the
     /// recreation policy.
@@ -119,10 +139,12 @@ public struct PlaneExportReport: Sendable, Equatable {
 
     public init(
         outcomes: [PlaneExportOutcome],
+        warnings: [PlaneExportWarning] = [],
         ledger: PlaneExportLedger,
         truncatedNameTaskExternalIDs: [String]
     ) {
         self.outcomes = outcomes
+        self.warnings = warnings
         self.ledger = ledger
         self.truncatedNameTaskExternalIDs = truncatedNameTaskExternalIDs
     }

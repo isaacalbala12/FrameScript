@@ -108,11 +108,11 @@ public actor PlaneClient {
 
     /// Looks up an existing work item with ONE filtered list request.
     ///
-    /// The documented v1 list row does not include `external_id`, and some
-    /// self-hosted versions may ignore the filter. A match is accepted only
-    /// when a row echoes the exact `external_id`, or when the response has
-    /// exactly one result whose name equals `expectedName`. Anything else is
-    /// reported as `.cannotVerify` so the caller does not create a duplicate.
+    /// Only a row that echoes the exact `external_id` is a verified match.
+    /// The documented v1 row does not include `external_id`, and some
+    /// self-hosted versions may ignore the filter, so rows with the expected
+    /// name are returned as `.possibleDuplicate` candidates rather than
+    /// blocking a create. The caller-owned ledger is authoritative.
     /// Pagination is never followed here.
     public func findWorkItem(
         byExternalId externalID: String,
@@ -138,8 +138,7 @@ public actor PlaneClient {
             return Self.lookup(
                 in: payload.results,
                 externalID: identifier,
-                expectedName: expectedName,
-                hasMorePages: payload.hasMore
+                expectedName: expectedName
             )
         }
     }
@@ -190,9 +189,10 @@ public actor PlaneClient {
     ///
     /// The ledger is caller-owned; this method returns an updated copy. A
     /// ledger id is verified with a fresh `GET`. When there is no ledger entry,
-    /// exactly one filtered list page is checked before creating. A
-    /// `cannotVerify` outcome never creates anything. Per-task failures are
-    /// reported as `.failed`; cancellation aborts the whole export.
+    /// exactly one filtered list page is checked: an exact echoed `external_id`
+    /// is reused; otherwise a work item is created. Name-only matches are
+    /// reported as warnings, never as blockers. Per-task failures are reported
+    /// as `.failed`; cancellation aborts the whole export.
     public func export(
         plan: PlaneExportPlan,
         ledger: PlaneExportLedger = PlaneExportLedger(),
@@ -200,6 +200,7 @@ public actor PlaneClient {
     ) async throws -> PlaneExportReport {
         var updatedLedger = ledger
         var outcomes: [PlaneExportOutcome] = []
+        var warnings: [PlaneExportWarning] = []
 
         for entry in plan.entries {
             if Task.isCancelled {
@@ -237,10 +238,17 @@ public actor PlaneClient {
                         let created = try await createWorkItem(entry.draft)
                         updatedLedger.record(workItemID: created.id, forTaskExternalID: externalID)
                         outcomes.append(.created(taskExternalID: externalID, workItemID: created.id))
-                    case .cannotVerify(let candidates):
-                        outcomes.append(
-                            .cannotVerify(taskExternalID: externalID, candidates: candidates)
+                    case .possibleDuplicate(let candidates):
+                        warnings.append(
+                            PlaneExportWarning(
+                                taskExternalID: externalID,
+                                kind: .possibleDuplicateByName,
+                                candidates: candidates
+                            )
                         )
+                        let created = try await createWorkItem(entry.draft)
+                        updatedLedger.record(workItemID: created.id, forTaskExternalID: externalID)
+                        outcomes.append(.created(taskExternalID: externalID, workItemID: created.id))
                     }
                 }
             } catch PlaneError.cancelled {
@@ -255,6 +263,7 @@ public actor PlaneClient {
             .map(\.draft.externalID)
         return PlaneExportReport(
             outcomes: outcomes,
+            warnings: warnings,
             ledger: updatedLedger,
             truncatedNameTaskExternalIDs: truncatedIDs
         )
@@ -453,8 +462,7 @@ public actor PlaneClient {
     private static func lookup(
         in results: [PlaneWorkItem],
         externalID: String,
-        expectedName: String?,
-        hasMorePages: Bool
+        expectedName: String?
     ) -> PlaneWorkItemLookup {
         if let exact = results.first(where: { $0.externalID == externalID }) {
             return .found(exact)
@@ -467,15 +475,12 @@ public actor PlaneClient {
             let nameMatches = results.filter {
                 $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == expected
             }
-            if nameMatches.count == 1, let only = nameMatches.first {
-                return .found(only)
+            if !nameMatches.isEmpty {
+                return .possibleDuplicate(candidates: nameMatches)
             }
         }
 
-        if results.isEmpty && !hasMorePages {
-            return .notFound
-        }
-        return .cannotVerify(candidates: results)
+        return .notFound
     }
 
     private static func normalizedBaseURL(_ url: URL) throws -> URL {
@@ -564,10 +569,6 @@ private struct PlaneListPayload<Item> {
             return nil
         }
         return cursor
-    }
-
-    var hasMore: Bool {
-        next != nil
     }
 }
 

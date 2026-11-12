@@ -309,14 +309,19 @@ public enum PlaneWorkItemName {
 /// Outcome of a single filtered lookup for an existing work item.
 ///
 /// The documented v1 list rows do not include `external_id`, and self-hosted
-/// versions may ignore the filter. A single page is therefore not always
-/// enough to prove that a work item does not exist; `cannotVerify` carries the
-/// candidates so the caller can resolve the ambiguity instead of creating a
-/// duplicate.
+/// versions may ignore the filter. Only an exact echoed `external_id` is
+/// treated as a verified match. Rows with the same name are returned as
+/// `possibleDuplicate` candidates so the caller can warn, but they must not
+/// block creating a new work item: the caller-owned ledger is authoritative.
 public enum PlaneWorkItemLookup: Sendable, Equatable {
+    /// A row echoed the exact `external_id`.
     case found(PlaneWorkItem)
+    /// No row echoed the exact `external_id`; the ledger design treats this as
+    /// "not exported through this external id", so the caller may create.
     case notFound
-    case cannotVerify(candidates: [PlaneWorkItem])
+    /// Rows matched the expected name but none echoed the external id. The
+    /// caller may warn about them, but must not treat them as verified matches.
+    case possibleDuplicate(candidates: [PlaneWorkItem])
 
     public var workItem: PlaneWorkItem? {
         if case .found(let item) = self { return item }
@@ -324,7 +329,7 @@ public enum PlaneWorkItemLookup: Sendable, Equatable {
     }
 
     public var candidates: [PlaneWorkItem] {
-        if case .cannotVerify(let candidates) = self { return candidates }
+        if case .possibleDuplicate(let candidates) = self { return candidates }
         return []
     }
 }

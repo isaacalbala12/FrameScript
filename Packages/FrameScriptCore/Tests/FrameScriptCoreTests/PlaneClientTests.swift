@@ -352,16 +352,15 @@ struct PlaneClientTests {
             expectedName: "Grabar intro"
         )
 
-        guard case .cannotVerify(let candidates) = lookup else {
-            Issue.record("Expected cannotVerify, got \(lookup)")
+        guard case .notFound = lookup else {
+            Issue.record("Expected notFound, got \(lookup)")
             return
         }
-        #expect(candidates.isEmpty)
         #expect(PlaneURLProtocolStub.requests.count == 1)
         #expect(PlaneURLProtocolStub.requests.first?.url?.queryValue("cursor") == nil)
     }
 
-    @Test func findWorkItemAcceptsSingleDocumentedRowMatchingName() async throws {
+    @Test func findWorkItemReportsDocumentedNameMatchAsPossibleDuplicate() async throws {
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 """
@@ -377,15 +376,16 @@ struct PlaneClientTests {
             expectedName: "Grabar intro"
         )
 
-        guard case .found(let item) = lookup else {
-            Issue.record("Expected a found lookup, got \(lookup)")
+        guard case .possibleDuplicate(let candidates) = lookup else {
+            Issue.record("Expected possibleDuplicate, got \(lookup)")
             return
         }
-        #expect(item.id == "wi-1")
-        #expect(item.externalID == nil)
+        #expect(candidates.map(\.id) == ["wi-1"])
+        #expect(candidates.first?.externalID == nil)
+        #expect(lookup.workItem == nil)
     }
 
-    @Test func findWorkItemCannotVerifySingleDocumentedRowWithMismatchedName() async throws {
+    @Test func findWorkItemReturnsNotFoundWhenDocumentedRowNameDiffers() async throws {
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 """
@@ -401,14 +401,13 @@ struct PlaneClientTests {
             expectedName: "Grabar intro"
         )
 
-        guard case .cannotVerify(let candidates) = lookup else {
-            Issue.record("Expected cannotVerify, got \(lookup)")
+        guard case .notFound = lookup else {
+            Issue.record("Expected notFound, got \(lookup)")
             return
         }
-        #expect(candidates.map(\.id) == ["wi-1"])
     }
 
-    @Test func findWorkItemAcceptsUniqueNameMatchAmongDocumentedRows() async throws {
+    @Test func findWorkItemReportsUniqueNameMatchAsPossibleDuplicate() async throws {
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 """
@@ -426,14 +425,14 @@ struct PlaneClientTests {
             expectedName: "Grabar intro"
         )
 
-        guard case .found(let item) = lookup else {
-            Issue.record("Expected a found lookup, got \(lookup)")
+        guard case .possibleDuplicate(let candidates) = lookup else {
+            Issue.record("Expected possibleDuplicate, got \(lookup)")
             return
         }
-        #expect(item.id == "wi-b")
+        #expect(candidates.map(\.id) == ["wi-b"])
     }
 
-    @Test func findWorkItemCannotVerifyAmbiguousNameMatches() async throws {
+    @Test func findWorkItemReportsAmbiguousNameMatchesAsPossibleDuplicates() async throws {
         PlaneURLProtocolStub.install { _ in
             planeStub(
                 """
@@ -451,8 +450,8 @@ struct PlaneClientTests {
             expectedName: "Grabar intro"
         )
 
-        guard case .cannotVerify(let candidates) = lookup else {
-            Issue.record("Expected cannotVerify, got \(lookup)")
+        guard case .possibleDuplicate(let candidates) = lookup else {
+            Issue.record("Expected possibleDuplicate, got \(lookup)")
             return
         }
         #expect(candidates.map(\.id) == ["wi-a", "wi-b"])
@@ -474,7 +473,9 @@ struct PlaneClientTests {
 
     @Test func findWorkItemDecodesBareArray() async throws {
         PlaneURLProtocolStub.install { _ in
-            planeStub(#"[{"id":"wi-1","name":"Grabar intro"}]"#)
+            planeStub(
+                #"[{"id":"wi-1","name":"Grabar intro","external_id":"framescript:project-uuid-1:task-1"}]"#
+            )
         }
 
         let client = try makePlaneClient()
@@ -554,6 +555,7 @@ struct PlaneClientTests {
         )
         #expect(report.workItemIDsByTaskExternalID == [planeTaskExternalID: "wi-new"])
         #expect(report.ledger[planeTaskExternalID] == "wi-new")
+        #expect(report.warnings.isEmpty)
 
         let requests = PlaneURLProtocolStub.requests
         #expect(requests.count == 2)
@@ -564,12 +566,46 @@ struct PlaneClientTests {
         #expect(requests[1].method == "POST")
     }
 
-    @Test func exportMatchesSingleDocumentedRowByName() async throws {
+    @Test func exportCreatesAndWarnsWhenOnlyNameMatches() async throws {
+        PlaneURLProtocolStub.install { request in
+            switch (request.method ?? "", request.url?.planePath ?? "") {
+            case ("GET", planeWorkItemsPath):
+                return planeStub(
+                    """
+                    {"results":[{"id":"wi-existing","name":"Grabar intro"}],
+                     "next_page_results":false}
+                    """
+                )
+            case ("POST", planeWorkItemsPath):
+                return planeStub(createdWorkItemJSON(id: "wi-new"), status: 201)
+            default:
+                throw URLError(.badURL)
+            }
+        }
+
+        let client = try makePlaneClient(workItemRoute: .workItems)
+        let report = try await client.export(plan: makeExportPlan())
+
+        #expect(
+            report.outcomes == [
+                .created(taskExternalID: planeTaskExternalID, workItemID: "wi-new")
+            ]
+        )
+        #expect(report.ledger[planeTaskExternalID] == "wi-new")
+        #expect(report.warnings.count == 1)
+        #expect(report.warnings.first?.kind == .possibleDuplicateByName)
+        #expect(report.warnings.first?.candidates.map(\.id) == ["wi-existing"])
+        #expect(PlaneURLProtocolStub.requests.count == 2)
+    }
+
+    @Test func exportReusesExactEchoedExternalIDWithoutCreating() async throws {
         PlaneURLProtocolStub.install { request in
             #expect(request.method == "GET")
             return planeStub(
                 """
-                {"results":[{"id":"wi-existing","name":"Grabar intro"}],
+                {"results":[{"id":"wi-existing","name":"Grabar intro",
+                 "external_id":"framescript:project-uuid-1:task-1",
+                 "external_source":"framescript"}],
                  "next_page_results":false}
                 """
             )
@@ -584,34 +620,61 @@ struct PlaneClientTests {
             ]
         )
         #expect(report.ledger[planeTaskExternalID] == "wi-existing")
+        #expect(report.warnings.isEmpty)
         #expect(PlaneURLProtocolStub.requests.count == 1)
     }
 
-    @Test func exportDoesNotCreateWhenLookupCannotVerify() async throws {
+    @Test func exportCreatesOnceWhenFilterIsIgnoredAndSecondRunUsesLedger() async throws {
+        let createdDetailPath = "/api/v1/workspaces/acme/projects/project-uuid-1/work-items/wi-new/"
         PlaneURLProtocolStub.install { request in
-            #expect(request.method == "GET")
-            return planeStub(
-                """
-                {"results":[
-                  {"id":"wi-a","name":"Grabar intro"},
-                  {"id":"wi-b","name":"Grabar intro"}
-                ],"next_page_results":false}
-                """
-            )
+            switch (request.method ?? "", request.url?.planePath ?? "") {
+            case ("GET", planeWorkItemsPath):
+                // The server ignored external_id and returned an unrelated page.
+                return planeStub(
+                    """
+                    {"results":[
+                      {"id":"wi-existing","name":"Grabar intro"},
+                      {"id":"wi-other","name":"Otra cosa"}
+                    ],"next_page_results":false}
+                    """
+                )
+            case ("POST", planeWorkItemsPath):
+                return planeStub(createdWorkItemJSON(id: "wi-new"), status: 201)
+            case ("GET", createdDetailPath):
+                return planeStub(#"{"id":"wi-new","name":"Grabar intro"}"#)
+            default:
+                throw URLError(.badURL)
+            }
         }
 
         let client = try makePlaneClient(workItemRoute: .workItems)
-        let report = try await client.export(plan: makeExportPlan())
+        let plan = makeExportPlan()
 
-        let outcome = try #require(report.outcomes.first)
-        guard case .cannotVerify(let taskExternalID, let candidates) = outcome else {
-            Issue.record("Expected cannotVerify, got \(outcome)")
-            return
-        }
-        #expect(taskExternalID == planeTaskExternalID)
-        #expect(candidates.map(\.id) == ["wi-a", "wi-b"])
-        #expect(report.ledger.isEmpty)
-        #expect(PlaneURLProtocolStub.requests.count == 1)
+        let first = try await client.export(plan: plan)
+        #expect(
+            first.outcomes == [
+                .created(taskExternalID: planeTaskExternalID, workItemID: "wi-new")
+            ]
+        )
+        #expect(first.ledger[planeTaskExternalID] == "wi-new")
+        #expect(first.warnings.count == 1)
+        #expect(first.warnings.first?.kind == .possibleDuplicateByName)
+        #expect(first.warnings.first?.candidates.map(\.id) == ["wi-existing"])
+        #expect(PlaneURLProtocolStub.requests.filter { $0.method == "POST" }.count == 1)
+
+        let second = try await client.export(plan: plan, ledger: first.ledger)
+        #expect(
+            second.outcomes == [
+                .verified(taskExternalID: planeTaskExternalID, workItemID: "wi-new")
+            ]
+        )
+        #expect(second.warnings.isEmpty)
+
+        let requests = PlaneURLProtocolStub.requests
+        #expect(requests.map(\.method) == ["GET", "POST", "GET"])
+        #expect(requests.filter { $0.method == "POST" }.count == 1)
+        #expect(requests.filter { $0.url?.planePath == planeWorkItemsPath && $0.method == "GET" }.count == 1)
+        #expect(requests.last?.url?.planePath == createdDetailPath)
     }
 
     @Test func exportKeepsDeletedLedgerEntryWithoutRecreate() async throws {
