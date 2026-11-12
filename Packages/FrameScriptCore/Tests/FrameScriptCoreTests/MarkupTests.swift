@@ -41,6 +41,11 @@ private enum MarkupTestSupport {
     static func utf16Length(_ text: String) -> Int {
         (text as NSString).length
     }
+
+    static func milliseconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) * 1_000
+            + Double(duration.components.attoseconds) / 1e15
+    }
 }
 
 // MARK: - Slash pauses
@@ -158,8 +163,59 @@ struct ScriptMarkupSlashPauseTests {
 
     @Test func negativeDefaultsAreClampedToZero() {
         let defaults = PauseDefaults(short: -1, long: -2)
+        #expect(defaults.short == 0)
+        #expect(defaults.long == 0)
         #expect(MarkupTestSupport.pauses("a / b", defaults: defaults).first?.seconds == 0)
         #expect(MarkupTestSupport.pauses("a // b", defaults: defaults).first?.seconds == 0)
+    }
+
+    @Test func durationsClampToSaneMaximum() {
+        let defaults = PauseDefaults(short: 999, long: 61)
+        #expect(PauseDefaults.maximumDuration == 60)
+        #expect(defaults.short == 60)
+        #expect(defaults.long == 60)
+        #expect(MarkupTestSupport.pauses("a / b", defaults: defaults).first?.seconds == 60)
+        #expect(MarkupTestSupport.pauses("a // b", defaults: defaults).first?.seconds == 60)
+    }
+
+    @Test func nonFiniteDurationsFallBackToStandardValues() {
+        let defaults = PauseDefaults(short: .nan, long: .infinity)
+        #expect(defaults.short == 0.5)
+        #expect(defaults.long == 1.0)
+        let mixed = PauseDefaults(short: -Double.infinity, long: Double.nan)
+        #expect(mixed.short == 0.5)
+        #expect(mixed.long == 1.0)
+    }
+
+    @Test func mutationIsSanitised() {
+        var defaults = PauseDefaults()
+        defaults.short = 999
+        defaults.long = .nan
+        #expect(defaults.short == 60)
+        #expect(defaults.long == 1.0)
+
+        defaults.short = -3
+        defaults.long = 100
+        #expect(defaults.short == 0)
+        #expect(defaults.long == 60)
+    }
+
+    @Test func decodedDurationsAreSanitised() throws {
+        let clamped = try JSONDecoder().decode(
+            PauseDefaults.self,
+            from: Data(#"{"short":-5,"long":1000}"#.utf8)
+        )
+        #expect(clamped.short == 0)
+        #expect(clamped.long == 60)
+
+        let missing = try JSONDecoder().decode(PauseDefaults.self, from: Data("{}".utf8))
+        #expect(missing == .standard)
+    }
+
+    @Test func explicitPauseDurationsAreNotCapped() {
+        // The 60 s cap applies to configurable defaults, not to a writer who
+        // explicitly asks for a longer pause in the script.
+        #expect(MarkupTestSupport.pauses("[pausa 120s]").first?.seconds == 120)
     }
 
     @Test func slashPauseBetweenAccentedWords() throws {
@@ -445,6 +501,19 @@ struct ScriptMarkupEmphasisTests {
         #expect(ScriptMarkup.parse("***triple***").count == 1)
     }
 
+    @Test func doubleAsterisksInsideSingleEmphasisAreLiteral() throws {
+        // The `**` run cannot close a single-star span, so it stays inside the
+        // outer emphasis as literal content.
+        let text = "*a**b*"
+        let emphases = MarkupTestSupport.emphases(text)
+        #expect(emphases.count == 1)
+        let emphasis = try #require(emphases.first)
+        #expect(emphasis.level == .emphasis)
+        #expect(emphasis.text == "a**b")
+        #expect(emphasis.token.range == NSRange(location: 0, length: 6))
+        #expect(emphasis.token.markerRanges.map { MarkupTestSupport.raw(text, $0) } == ["*", "*"])
+    }
+
     @Test func emptyEmphasisIsLiteral() {
         #expect(MarkupTestSupport.emphases("**").isEmpty)
         #expect(MarkupTestSupport.emphases("* *").isEmpty)
@@ -528,6 +597,151 @@ struct ScriptMarkupEmphasisTests {
     }
 }
 
+// MARK: - Emphasis with inner markers
+
+@Suite("ScriptMarkup emphasis with inner markers")
+struct ScriptMarkupEmphasisInnerMarkerTests {
+    @Test func pauseInsideEmphasisIsEmittedAndSplitsTheSpan() throws {
+        let text = "*Hola [pausa] mundo*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+
+        let first = try #require(tokens.first)
+        #expect(first.kind == .emphasis(.emphasis))
+        #expect(first.text == "Hola ")
+        #expect(first.range == NSRange(location: 0, length: 6))
+        #expect(first.markerRanges.map { MarkupTestSupport.raw(text, $0) } == ["*"])
+        #expect(first.escapeRanges.isEmpty)
+
+        let pause = try #require(tokens.dropFirst().first)
+        #expect(pause.kind == .pause(seconds: 1.0, explicit: true))
+        #expect(pause.range == NSRange(location: 6, length: 7))
+
+        let last = try #require(tokens.last)
+        #expect(last.kind == .emphasis(.emphasis))
+        #expect(last.text == " mundo")
+        #expect(last.range == NSRange(location: 13, length: 7))
+        #expect(last.markerRanges.map { MarkupTestSupport.raw(text, $0) } == ["*"])
+
+        #expect(ScriptMarkup.spokenText(text) == "Hola mundo")
+        #expect(ScriptMarkup.spokenWordCount(text) == 2)
+        #expect(abs(ScriptMarkup.estimateDuration(text, wordsPerMinute: 60) - 3) < 0.0001)
+    }
+
+    @Test func slashPauseInsideEmphasisIsEmitted() {
+        let text = "*Hola / mundo*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+        #expect(tokens.dropFirst().first?.kind == .pause(seconds: 0.5, explicit: false))
+        #expect(ScriptMarkup.spokenText(text) == "Hola mundo")
+        #expect(ScriptMarkup.spokenWordCount(text) == 2)
+        #expect(abs(ScriptMarkup.estimateDuration(text, wordsPerMinute: 60) - 2.5) < 0.0001)
+        #expect(ScriptMarkup.runs(text) == [
+            .emphasis("Hola ", level: .emphasis),
+            .pause(0.5),
+            .emphasis(" mundo", level: .emphasis),
+        ])
+    }
+
+    @Test func cueInsideEmphasisIsEmitted() throws {
+        let text = "*Hola [IMAGEN: coche] mundo*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+
+        let cue = try #require(tokens.dropFirst().first)
+        #expect(cue.kind == .cue(label: "IMAGEN", payload: "coche"))
+
+        #expect(ScriptMarkup.spokenText(text) == "Hola mundo")
+        #expect(ScriptMarkup.spokenWordCount(text) == 2)
+        #expect(abs(ScriptMarkup.estimateDuration(text, wordsPerMinute: 60) - 2) < 0.0001)
+        #expect(ScriptMarkup.runs(text) == [
+            .emphasis("Hola ", level: .emphasis),
+            .cue("IMAGEN"),
+            .emphasis(" mundo", level: .emphasis),
+        ])
+    }
+
+    @Test func cueWithoutSpacesInsideEmphasisKeepsWordsApart() {
+        let text = "*Hola[IMAGEN]mundo*"
+        #expect(ScriptMarkup.spokenText(text) == "Hola mundo")
+        #expect(ScriptMarkup.spokenWordCount(text) == 2)
+    }
+
+    @Test func punctuationAfterInnerMarkerIsTightened() {
+        #expect(ScriptMarkup.spokenText("*Hola [pausa], mundo*") == "Hola, mundo")
+        #expect(ScriptMarkup.spokenText("*Hola [IMAGEN: x]. Adiós.*") == "Hola. Adiós.")
+        #expect(ScriptMarkup.spokenText("¡Hola [pausa]!") == "¡Hola!")
+        #expect(ScriptMarkup.spokenText("Hola [pausa] [IMAGEN: x], mundo") == "Hola, mundo")
+        #expect(ScriptMarkup.spokenText("*Hola [pausa]*, mundo") == "Hola, mundo")
+    }
+
+    @Test func strongEmphasisSplitsAroundAnInnerCue() {
+        let text = "**Hola [IMAGEN: coche] mundo**"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+        #expect(tokens.first?.kind == .emphasis(.strong))
+        #expect(tokens.first?.text == "Hola ")
+        #expect(tokens.last?.kind == .emphasis(.strong))
+        #expect(tokens.last?.text == " mundo")
+        #expect(ScriptMarkup.spokenText(text) == "Hola mundo")
+    }
+
+    @Test func pauseDirectlyInsideEmphasisProducesEmptySegments() {
+        let text = "*[pausa]*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+        #expect(tokens.first?.kind == .emphasis(.emphasis))
+        #expect(tokens.first?.text == "")
+        #expect(tokens.last?.kind == .emphasis(.emphasis))
+        #expect(tokens.last?.text == "")
+        #expect(ScriptMarkup.spokenText(text) == "")
+        #expect(ScriptMarkup.spokenWordCount(text) == 0)
+        #expect(ScriptMarkup.runs(text) == [.pause(1.0)])
+        #expect(abs(ScriptMarkup.estimateDuration(text, wordsPerMinute: 60) - 1) < 0.0001)
+    }
+
+    @Test func emphasisWithInnerMarkersKeepsSurroundingText() {
+        let text = "Antes *Hola [pausa] mundo* después"
+        #expect(ScriptMarkup.spokenText(text) == "Antes Hola mundo después")
+        #expect(ScriptMarkup.spokenWordCount(text) == 4)
+    }
+
+    @Test func consecutiveInnerPausesSplitEmphasisIntoSegments() {
+        let text = "*a[pausa]b[pausa]c*"
+        let tokens = ScriptMarkup.parse(text)
+        let pauses = tokens.compactMap { token -> TimeInterval? in
+            guard case .pause(let seconds, _) = token.kind else { return nil }
+            return seconds
+        }
+        #expect(pauses.count == 2)
+        let emphasisTexts = tokens.compactMap { token -> String? in
+            guard case .emphasis = token.kind else { return nil }
+            return token.text
+        }
+        #expect(emphasisTexts == ["a", "b", "c"])
+        #expect(ScriptMarkup.spokenText(text) == "a b c")
+    }
+
+    @Test func adjacentInnerMarkersDoNotEmitEmptyMiddleSegments() {
+        let text = "*a[pausa][pausa]b*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.allSatisfy { $0.range.length > 0 })
+
+        let emphasisTexts = tokens.compactMap { token -> String? in
+            guard case .emphasis = token.kind else { return nil }
+            return token.text
+        }
+        #expect(emphasisTexts == ["a", "b"])
+        #expect(ScriptMarkup.spokenText(text) == "a b")
+        #expect(ScriptMarkup.runs(text) == [
+            .emphasis("a", level: .emphasis),
+            .pause(1.0),
+            .pause(1.0),
+            .emphasis("b", level: .emphasis),
+        ])
+    }
+}
+
 // MARK: - Escapes
 
 @Suite("ScriptMarkup escapes")
@@ -538,6 +752,46 @@ struct ScriptMarkupEscapeTests {
         #expect(MarkupTestSupport.emphases(text).isEmpty)
         #expect(ScriptMarkup.parse(text).count == 1)
         #expect(ScriptMarkup.parse(text).first?.text == "Hola * mundo / fin")
+    }
+
+    @Test func textTokenExposesEscapeBackslashRanges() throws {
+        let text = "Hola \\* mundo \\/ fin"
+        let token = try #require(ScriptMarkup.parse(text).first)
+        #expect(token.kind == .text)
+        #expect(token.escapeRanges == [
+            NSRange(location: 5, length: 1),
+            NSRange(location: 14, length: 1),
+        ])
+        #expect(token.escapeRanges.map { MarkupTestSupport.raw(text, $0) } == ["\\", "\\"])
+        #expect(token.markerRanges.isEmpty)
+        #expect(token.text == "Hola * mundo / fin")
+    }
+
+    @Test func emphasisTokenExposesEscapeBackslashRanges() throws {
+        let text = "*a \\* b*"
+        let emphasis = try #require(MarkupTestSupport.emphases(text).first)
+        #expect(emphasis.text == "a * b")
+        #expect(emphasis.token.escapeRanges == [NSRange(location: 3, length: 1)])
+        #expect(emphasis.token.escapeRanges.map { MarkupTestSupport.raw(text, $0) } == ["\\"])
+    }
+
+    @Test func splitEmphasisSegmentExposesItsOwnEscapes() {
+        let text = "*a \\* [pausa] b*"
+        let tokens = ScriptMarkup.parse(text)
+        #expect(tokens.count == 3)
+        #expect(tokens.first?.escapeRanges == [NSRange(location: 3, length: 1)])
+        #expect(tokens.last?.escapeRanges.isEmpty == true)
+    }
+
+    @Test func escapeRangesNeverOverlapMarkerRanges() {
+        let text = "A \\* *b \\/ c* [IMAGEN: d]"
+        for token in ScriptMarkup.parse(text) {
+            for escape in token.escapeRanges {
+                for marker in token.markerRanges {
+                    #expect(NSIntersectionRange(escape, marker).length == 0)
+                }
+            }
+        }
     }
 
     @Test func backslashesBeforeOtherCharactersArePreserved() {
@@ -592,6 +846,31 @@ struct ScriptMarkupSpokenTextTests {
     @Test func cueBetweenWordsLeavesAWordBreak() {
         #expect(ScriptMarkup.spokenText("Hola[IMAGEN]mundo") == "Hola mundo")
         #expect(ScriptMarkup.spokenText("Hola[pausa]mundo") == "Hola mundo")
+    }
+
+    @Test func removedMarkersDoNotLeaveSpaceBeforeTightPunctuation() {
+        #expect(ScriptMarkup.spokenText("Hola [pausa], mundo") == "Hola, mundo")
+        #expect(ScriptMarkup.spokenText("Hola [IMAGEN: x]. Adiós.") == "Hola. Adiós.")
+        #expect(ScriptMarkup.spokenText("Hola [pausa]?") == "Hola?")
+        #expect(ScriptMarkup.spokenText("Hola [pausa] ; mundo") == "Hola; mundo")
+        #expect(ScriptMarkup.spokenText("(Hola [pausa])") == "(Hola)")
+        #expect(ScriptMarkup.spokenText("«Hola [pausa]»") == "«Hola»")
+        #expect(ScriptMarkup.spokenText("Hola [pausa] : mundo") == "Hola: mundo")
+    }
+
+    @Test func openingPunctuationKeepsItsSpace() {
+        #expect(ScriptMarkup.spokenText("Hola [pausa] ¿qué tal?") == "Hola ¿qué tal?")
+        #expect(ScriptMarkup.spokenText("Hola [pausa] —adios") == "Hola —adios")
+    }
+
+    @Test func emphasisRemovalKeepsDirectPunctuationAttached() {
+        #expect(ScriptMarkup.spokenText("*Hola*, mundo") == "Hola, mundo")
+        #expect(ScriptMarkup.spokenText("*Hola*. Adiós.") == "Hola. Adiós.")
+        #expect(ScriptMarkup.spokenText("*Hola*-mundo") == "Hola-mundo")
+    }
+
+    @Test func markerFreePunctuationSpacingIsPreserved() {
+        #expect(ScriptMarkup.spokenText("Hola , mundo") == "Hola , mundo")
     }
 
     @Test func emptyAndMarkerOnlyScriptsBecomeEmpty() {
@@ -810,6 +1089,17 @@ struct ScriptMarkupRangeTests {
         #expect(cursor == MarkupTestSupport.utf16Length(text))
     }
 
+    @Test func tokensCoverTextWithInnerMarkersInsideEmphasis() {
+        let text = "A *Hola / mundo [IMAGEN: coche] fin* B"
+        let tokens = ScriptMarkup.parse(text)
+        var cursor = 0
+        for token in tokens {
+            #expect(token.range.location == cursor)
+            cursor += token.range.length
+        }
+        #expect(cursor == MarkupTestSupport.utf16Length(text))
+    }
+
     @Test func everyMarkerRangeIsInsideItsToken() {
         let text = "A / B *c* **d** [pausa] [E: f]"
         for token in ScriptMarkup.parse(text) {
@@ -902,7 +1192,7 @@ struct ScriptMarkupDefaultsTests {
 
 // MARK: - Performance
 
-@Suite("ScriptMarkup performance")
+@Suite("ScriptMarkup performance", .serialized)
 struct ScriptMarkupPerformanceTests {
     @Test func twentyThousandWordsParseUnderFiftyMilliseconds() {
         let vocabulary = [
@@ -929,12 +1219,45 @@ struct ScriptMarkupPerformanceTests {
             best = min(best, elapsed)
         }
 
-        let milliseconds = Double(best.components.seconds) * 1_000
-            + Double(best.components.attoseconds) / 1e15
+        let milliseconds = MarkupTestSupport.milliseconds(best)
         print("parse 20k words: \(String(format: "%.2f", milliseconds)) ms, \(tokenCount) tokens")
 
         #expect(tokenCount > 500)
         #expect(ScriptMarkup.spokenWordCount(script) == 20_000)
         #expect(best < .milliseconds(50))
+    }
+
+    @Test func twentyThousandUnmatchedEmphasisOpenersStayLinear() {
+        // The previous implementation rescanned to the end of the paragraph for
+        // every opener, which was quadratic on this input.
+        let script = (0 ..< 20_000).map { "*palabra\($0)" }.joined(separator: " ")
+
+        let clock = ContinuousClock()
+        var best = Duration.seconds(60)
+        var tokenCount = 0
+        for _ in 0 ..< 3 {
+            let start = clock.now
+            tokenCount = ScriptMarkup.parse(script).count
+            let elapsed = clock.now - start
+            best = min(best, elapsed)
+        }
+
+        #if DEBUG
+        let configuration = "debug"
+        let limit = Duration.milliseconds(250)
+        #else
+        let configuration = "release"
+        let limit = Duration.milliseconds(50)
+        #endif
+
+        let milliseconds = MarkupTestSupport.milliseconds(best)
+        print(
+            "parse 20k unmatched openers (\(configuration)): "
+                + "\(String(format: "%.2f", milliseconds)) ms, \(tokenCount) tokens"
+        )
+
+        #expect(tokenCount == 1) // every opener is literal and merges into one text token
+        #expect(ScriptMarkup.spokenWordCount(script) == 20_000)
+        #expect(best < limit)
     }
 }

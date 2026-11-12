@@ -18,9 +18,11 @@ import Foundation
 ///
 /// Slashes inside tokens (`km/h`, `1/4`, `and/or`, `https://…`, `12/11`) stay
 /// literal, runs of three or more slashes stay literal, and `\*` / `\/` escape
-/// their marker. Emphasis delimiters must hug their content, cannot cross a
-/// blank line and do not nest (a pause or cue written inside an emphasis span
-/// is literal text).
+/// their marker. Emphasis delimiters must hug their content and may span a
+/// single line break, but cannot cross a blank line. Inline emphasis does not
+/// nest, but pauses and cues inside an emphasis span are still parsed: the span
+/// is split into `.emphasis` segments around them, with the opening delimiter
+/// on the first segment and the closing delimiter on the last.
 ///
 /// Every range returned by ``parse(_:defaults:)`` is a UTF-16 `NSRange` into the
 /// original string, ready for TextKit.
@@ -42,9 +44,11 @@ public enum ScriptMarkup {
     ///
     /// Escapes are resolved, pauses and cues disappear (leaving a word break
     /// where needed), line endings are normalised to `\n`, horizontal
-    /// whitespace is collapsed, at most one blank line is kept between
-    /// paragraphs and leading/trailing whitespace is trimmed. For marker-free
-    /// text this is the original text modulo whitespace.
+    /// whitespace is collapsed, whitespace left before tight punctuation
+    /// (`, . ; : ! ? ) ] } » ”`) by a removed marker is dropped, at most one
+    /// blank line is kept between paragraphs and leading/trailing whitespace is
+    /// trimmed. For marker-free text this is the original text modulo
+    /// whitespace.
     public static func spokenText(_ text: String) -> String {
         spokenText(from: parse(text))
     }
@@ -92,7 +96,8 @@ public enum ScriptMarkup {
     ///
     /// Adjacent plain-text tokens are merged. Emphasis keeps its visible text
     /// and level, pauses keep their duration in seconds, and cues keep only
-    /// their canonical label.
+    /// their canonical label. Empty emphasis segments (produced when a pause
+    /// sits directly inside the delimiters, e.g. `*[pausa]*`) are skipped.
     ///
     /// - Parameters:
     ///   - text: The script text, markers included.
@@ -110,6 +115,7 @@ public enum ScriptMarkup {
                     result.append(.text(token.text))
                 }
             case .emphasis(let level):
+                guard !token.text.isEmpty else { continue }
                 result.append(.emphasis(token.text, level: level))
             case .pause(let seconds, _):
                 result.append(.pause(seconds))
@@ -123,19 +129,62 @@ public enum ScriptMarkup {
     // MARK: - Shared text processing
 
     /// Builds the untidied spoken string from already-parsed tokens.
+    ///
+    /// When a marker is removed between a word and punctuation, the whitespace
+    /// that surrounded it is dropped (`Hola [pausa], mundo` becomes
+    /// `Hola, mundo`). Without markers, text spacing is left untouched.
     static func spokenText(from tokens: [MarkupToken]) -> String {
         var raw = String()
         raw.reserveCapacity(64)
-        for token in tokens {
-            switch token.kind {
-            case .text, .emphasis:
-                raw.append(token.text)
-            case .pause, .cue:
-                if let last = raw.last, !last.isWhitespace {
-                    raw.append(" ")
+        var pendingMarkerRemoval = false
+
+        func appendAfterRemovedMarker(_ segment: String) {
+            var dropped = 0
+            for character in segment {
+                if character.isWhitespace, !character.isNewline {
+                    dropped += 1
+                } else {
+                    break
                 }
             }
+            let remainder = segment.dropFirst(dropped)
+
+            if let first = remainder.first, isTightPunctuation(first) {
+                while let last = raw.last, last.isWhitespace, !last.isNewline {
+                    raw.removeLast()
+                }
+                raw.append(contentsOf: remainder)
+            } else {
+                if let last = raw.last, !last.isWhitespace,
+                   let first = segment.first, !first.isWhitespace {
+                    raw.append(" ")
+                }
+                raw.append(segment)
+            }
         }
+
+        for token in tokens {
+            switch token.kind {
+            case .text:
+                if pendingMarkerRemoval {
+                    pendingMarkerRemoval = false
+                    appendAfterRemovedMarker(token.text)
+                } else {
+                    raw.append(token.text)
+                }
+            case .emphasis:
+                guard !token.text.isEmpty else { break }
+                if pendingMarkerRemoval {
+                    pendingMarkerRemoval = false
+                    appendAfterRemovedMarker(token.text)
+                } else {
+                    raw.append(token.text)
+                }
+            case .pause, .cue:
+                pendingMarkerRemoval = true
+            }
+        }
+
         return tidyWhitespace(raw)
     }
 
@@ -179,6 +228,19 @@ public enum ScriptMarkup {
             }
         }
         return result
+    }
+
+    /// Punctuation that must not be preceded by a space in clean output. When
+    /// a marker is removed between a word and one of these characters, the
+    /// surrounding whitespace would otherwise leave `Hola , mundo` or
+    /// `Hola . Adiós.`.
+    private static func isTightPunctuation(_ character: Character) -> Bool {
+        switch character {
+        case ",", ".", ";", ":", "!", "?", ")", "]", "}", "»", "”":
+            return true
+        default:
+            return false
+        }
     }
 
     /// Counts whitespace-separated runs that contain at least one letter or

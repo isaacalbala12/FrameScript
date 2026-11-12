@@ -22,102 +22,116 @@ struct MarkupParser {
 
     init(text: String, defaults: PauseDefaults) {
         self.units = Array(text.utf16)
-        self.defaults = defaults.sanitized
+        self.defaults = defaults
         self.blankLineStarts = Self.computeBlankLineStarts(in: units)
     }
 
-    /// Scans the whole script, producing contiguous, non-overlapping tokens.
+    /// Scans the whole script into tokens.
+    ///
+    /// The work is done in three linear passes: atomisation (text, asterisk
+    /// runs, pauses and cues), emphasis matching (one active opener at a time)
+    /// and token assembly (splitting emphasis around inner pauses/cues).
     func parse() -> [MarkupToken] {
-        var tokens: [MarkupToken] = []
-        tokens.reserveCapacity(16)
-        var buffer: [UInt16] = []
-        var segmentStart = 0
+        let atoms = atomize()
+        let matches = matchEmphasis(in: atoms)
+        return buildTokens(from: atoms, matches: matches)
+    }
+
+    // MARK: - Atomisation
+
+    private enum Atom {
+        case text(NSRange)
+        case asterisks(range: NSRange, canOpen: Bool, canClose: Bool)
+        case token(MarkupToken)
+
+        var range: NSRange {
+            switch self {
+            case .text(let range), .asterisks(let range, _, _):
+                return range
+            case .token(let token):
+                return token.range
+            }
+        }
+
+        var token: MarkupToken? {
+            if case .token(let token) = self { return token }
+            return nil
+        }
+    }
+
+    private func atomize() -> [Atom] {
+        var atoms: [Atom] = []
+        atoms.reserveCapacity(16)
+        var textStart = 0
         var index = 0
         let count = units.count
+
+        func flushText(upTo end: Int) {
+            if end > textStart {
+                atoms.append(.text(NSRange(location: textStart, length: end - textStart)))
+            }
+            textStart = end
+        }
 
         while index < count {
             let unit = units[index]
 
-            // Escapes are resolved into the text buffer, so they never become markers.
             if unit == Unit.backslash, index + 1 < count, isEscapable(units[index + 1]) {
-                buffer.append(units[index + 1])
-                index += 2
+                index += 2 // stays inside the current text span
                 continue
             }
 
             if unit == Unit.asterisk {
-                if let result = emphasis(at: index) {
-                    appendText(upTo: index, from: segmentStart, buffer: &buffer, into: &tokens)
-                    tokens.append(result.token)
-                    index = result.end
-                    segmentStart = index
-                    continue
-                }
-                // Consume the whole asterisk run so `***` or `**unclosed` can
-                // never be re-read as a smaller, valid marker.
                 let run = runLength(of: Unit.asterisk, from: index)
-                for _ in 0 ..< run { buffer.append(unit) }
+                flushText(upTo: index)
+
+                let isDelimiterRun = run == 1 || run == 2
+                let canOpen = isDelimiterRun
+                    && isOpeningBoundary(at: index)
+                    && index + run < count
+                    && !Self.isWhitespaceUnit(units[index + run])
+                let canClose = isDelimiterRun
+                    && index > 0
+                    && !Self.isWhitespaceUnit(units[index - 1])
+                    && isClosingBoundary(at: index + run)
+
+                atoms.append(
+                    .asterisks(
+                        range: NSRange(location: index, length: run),
+                        canOpen: canOpen,
+                        canClose: canClose
+                    )
+                )
                 index += run
+                textStart = index
                 continue
             }
 
             if unit == Unit.slash {
                 if let result = pause(at: index) {
-                    appendText(upTo: index, from: segmentStart, buffer: &buffer, into: &tokens)
-                    tokens.append(result.token)
+                    flushText(upTo: index)
+                    atoms.append(.token(result.token))
                     index = result.end
-                    segmentStart = index
+                    textStart = index
                     continue
                 }
-                let run = runLength(of: Unit.slash, from: index)
-                for _ in 0 ..< run { buffer.append(unit) }
-                index += run
+                index += runLength(of: Unit.slash, from: index)
                 continue
             }
 
-            if unit == Unit.openBracket {
-                if let result = bracket(at: index) {
-                    appendText(upTo: index, from: segmentStart, buffer: &buffer, into: &tokens)
-                    tokens.append(result.token)
-                    index = result.end
-                    segmentStart = index
-                    continue
-                }
-                buffer.append(unit)
-                index += 1
+            if unit == Unit.openBracket, let result = bracket(at: index) {
+                flushText(upTo: index)
+                atoms.append(.token(result.token))
+                index = result.end
+                textStart = index
                 continue
             }
 
-            buffer.append(unit)
             index += 1
         }
 
-        appendText(upTo: count, from: segmentStart, buffer: &buffer, into: &tokens)
-        return tokens
-    }
-
-    // MARK: - Text
-
-    private func appendText(
-        upTo end: Int,
-        from start: Int,
-        buffer: inout [UInt16],
-        into tokens: inout [MarkupToken]
-    ) {
-        guard end > start else {
-            buffer.removeAll(keepingCapacity: true)
-            return
-        }
-        let content = String(decoding: buffer, as: UTF16.self)
-        tokens.append(
-            MarkupToken(
-                kind: .text,
-                range: NSRange(location: start, length: end - start),
-                markerRanges: [],
-                text: content
-            )
-        )
-        buffer.removeAll(keepingCapacity: true)
+        flushText(upTo: count)
+        return atoms
     }
 
     // MARK: - Pause shorthand
@@ -142,56 +156,180 @@ struct MarkupParser {
         )
     }
 
-    // MARK: - Emphasis
+    // MARK: - Emphasis matching
 
-    private func emphasis(at start: Int) -> (token: MarkupToken, end: Int)? {
-        let markerLength = runLength(of: Unit.asterisk, from: start)
-        guard markerLength == 1 || markerLength == 2 else { return nil }
+    private struct EmphasisMatch {
+        let closeIndex: Int
+        let level: EmphasisLevel
+    }
 
-        let contentStart = start + markerLength
-        guard contentStart < units.count else { return nil }
-        guard !Self.isWhitespaceUnit(units[contentStart]) else { return nil }
-        guard isOpeningBoundary(at: start) else { return nil }
+    /// Matches at most one emphasis span at a time.
+    ///
+    /// Inline markup does not nest, so a single active opener is enough. Each
+    /// asterisk run is examined once and an unmatched opener never triggers a
+    /// rescan, which keeps this pass linear even for scripts full of unclosed
+    /// `*word` markers.
+    private func matchEmphasis(in atoms: [Atom]) -> [Int: EmphasisMatch] {
+        var matches: [Int: EmphasisMatch] = [:]
+        var active: (index: Int, range: NSRange, limit: Int)?
 
-        let limit = firstBlankLineStart(atOrAfter: contentStart) ?? units.count
-        var cursor = contentStart
+        for (atomIndex, atom) in atoms.enumerated() {
+            guard case .asterisks(let range, let canOpen, let canClose) = atom else { continue }
 
-        while cursor < limit {
-            let unit = units[cursor]
+            if let opener = active, range.location >= opener.limit {
+                active = nil // paragraph break: the opener stays literal
+            }
 
-            if unit == Unit.backslash, cursor + 1 < limit, isEscapable(units[cursor + 1]) {
-                cursor += 2
+            guard let opener = active else {
+                if canOpen {
+                    let limit = firstBlankLineStart(atOrAfter: NSMaxRange(range)) ?? units.count
+                    active = (atomIndex, range, limit)
+                }
                 continue
             }
 
-            if unit == Unit.asterisk {
-                let run = runLength(of: Unit.asterisk, from: cursor, limit: limit)
-                if run == markerLength,
-                   cursor > contentStart,
-                   !Self.isWhitespaceUnit(units[cursor - 1]),
-                   isClosingBoundary(at: cursor + run) {
-                    let level: EmphasisLevel = markerLength == 1 ? .emphasis : .strong
-                    let content = decodeEscapes(from: contentStart, to: cursor)
-                    return (
-                        MarkupToken(
-                            kind: .emphasis(level),
-                            range: NSRange(location: start, length: cursor + run - start),
-                            markerRanges: [
-                                NSRange(location: start, length: markerLength),
-                                NSRange(location: cursor, length: run),
-                            ],
-                            text: content
-                        ),
-                        cursor + run
-                    )
-                }
-                cursor += run
-            } else {
-                cursor += 1
+            if range.length == opener.range.length, canClose {
+                matches[opener.index] = EmphasisMatch(
+                    closeIndex: atomIndex,
+                    level: opener.range.length == 1 ? .emphasis : .strong
+                )
+                active = nil
             }
         }
 
-        return nil
+        return matches
+    }
+
+    // MARK: - Token assembly
+
+    private func buildTokens(from atoms: [Atom], matches: [Int: EmphasisMatch]) -> [MarkupToken] {
+        var tokens: [MarkupToken] = []
+        tokens.reserveCapacity(atoms.count)
+        var pendingTextStart: Int?
+        var pendingTextEnd = 0
+
+        func flushText() {
+            guard let start = pendingTextStart else { return }
+            if pendingTextEnd > start {
+                let range = NSRange(location: start, length: pendingTextEnd - start)
+                tokens.append(
+                    MarkupToken(
+                        kind: .text,
+                        range: range,
+                        markerRanges: [],
+                        escapeRanges: escapeRanges(in: range),
+                        text: decodeEscapes(from: range.location, to: NSMaxRange(range))
+                    )
+                )
+            }
+            pendingTextStart = nil
+        }
+
+        func appendLiteral(_ range: NSRange) {
+            if pendingTextStart == nil {
+                pendingTextStart = range.location
+                pendingTextEnd = NSMaxRange(range)
+            } else if range.location == pendingTextEnd {
+                pendingTextEnd = NSMaxRange(range)
+            } else {
+                flushText()
+                pendingTextStart = range.location
+                pendingTextEnd = NSMaxRange(range)
+            }
+        }
+
+        var index = 0
+        while index < atoms.count {
+            if let match = matches[index] {
+                flushText()
+
+                let openRange = atoms[index].range
+                let closeRange = atoms[match.closeIndex].range
+                var cursor = openRange.location
+                var contentStart = NSMaxRange(openRange)
+                var ownsOpening = true
+
+                var innerIndex = index + 1
+                while innerIndex < match.closeIndex {
+                    if let innerToken = atoms[innerIndex].token {
+                        // Skip an empty segment between two adjacent inner
+                        // markers: it carries no text and owns no delimiter.
+                        if innerToken.range.location > cursor {
+                            tokens.append(
+                                emphasisToken(
+                                    level: match.level,
+                                    rangeStart: cursor,
+                                    contentStart: contentStart,
+                                    contentEnd: innerToken.range.location,
+                                    rangeEnd: innerToken.range.location,
+                                    openingMarker: ownsOpening ? openRange : nil,
+                                    closingMarker: nil
+                                )
+                            )
+                        }
+                        tokens.append(innerToken)
+                        cursor = NSMaxRange(innerToken.range)
+                        contentStart = cursor
+                        ownsOpening = false
+                    }
+                    innerIndex += 1
+                }
+
+                tokens.append(
+                    emphasisToken(
+                        level: match.level,
+                        rangeStart: cursor,
+                        contentStart: contentStart,
+                        contentEnd: closeRange.location,
+                        rangeEnd: NSMaxRange(closeRange),
+                        openingMarker: ownsOpening ? openRange : nil,
+                        closingMarker: closeRange
+                    )
+                )
+
+                index = match.closeIndex + 1
+                continue
+            }
+
+            switch atoms[index] {
+            case .text(let range), .asterisks(let range, _, _):
+                appendLiteral(range)
+            case .token(let token):
+                flushText()
+                tokens.append(token)
+            }
+            index += 1
+        }
+
+        flushText()
+        return tokens
+    }
+
+    /// Builds one emphasis segment. `rangeStart...rangeEnd` is the segment's
+    /// full extent (delimiters included when owned); the spoken content is
+    /// `contentStart..<contentEnd`.
+    private func emphasisToken(
+        level: EmphasisLevel,
+        rangeStart: Int,
+        contentStart: Int,
+        contentEnd: Int,
+        rangeEnd: Int,
+        openingMarker: NSRange?,
+        closingMarker: NSRange?
+    ) -> MarkupToken {
+        var markers: [NSRange] = []
+        if let openingMarker { markers.append(openingMarker) }
+        if let closingMarker { markers.append(closingMarker) }
+
+        let safeContentEnd = max(contentStart, contentEnd)
+        let contentRange = NSRange(location: contentStart, length: safeContentEnd - contentStart)
+        return MarkupToken(
+            kind: .emphasis(level),
+            range: NSRange(location: rangeStart, length: max(0, rangeEnd - rangeStart)),
+            markerRanges: markers,
+            escapeRanges: escapeRanges(in: contentRange),
+            text: decodeEscapes(from: contentStart, to: safeContentEnd)
+        )
     }
 
     // MARK: - Brackets
@@ -355,10 +493,9 @@ struct MarkupParser {
         return Self.isWhitespaceUnit(unit) || Self.isPunctuation(unit)
     }
 
-    private func runLength(of unit: UInt16, from start: Int, limit: Int? = nil) -> Int {
-        let end = min(limit ?? units.count, units.count)
+    private func runLength(of unit: UInt16, from start: Int) -> Int {
         var cursor = start
-        while cursor < end, units[cursor] == unit { cursor += 1 }
+        while cursor < units.count, units[cursor] == unit { cursor += 1 }
         return cursor - start
     }
 
@@ -378,6 +515,25 @@ struct MarkupParser {
             }
         }
         return String(decoding: output, as: UTF16.self)
+    }
+
+    /// The backslash positions of `\*` / `\/` escapes inside `range`. The
+    /// escaped character itself is normal content and is not included.
+    private func escapeRanges(in range: NSRange) -> [NSRange] {
+        var result: [NSRange] = []
+        var cursor = range.location
+        let end = NSMaxRange(range)
+        while cursor < end {
+            if units[cursor] == Unit.backslash,
+               cursor + 1 < end,
+               isEscapable(units[cursor + 1]) {
+                result.append(NSRange(location: cursor, length: 1))
+                cursor += 2
+            } else {
+                cursor += 1
+            }
+        }
+        return result
     }
 
     // MARK: - Paragraph limits
