@@ -83,6 +83,7 @@ struct AppShellView: View {
     var body: some View {
         @Bindable var windowState = appState.windowState
         @Bindable var settingsStore = appState.settingsStore
+        @Bindable var hookPresenter = HookSheetPresenter.shared
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
             && appState.settings.windowPreferences.focusModeBehavior == .hidePanels
@@ -128,12 +129,14 @@ struct AppShellView: View {
                 .environment(appState)
                 .environment(\.frameTheme, theme)
         }
+        .hookGeneratorSheets(presenter: hookPresenter)
         .onDisappear {
             appState.flushActiveEditorBoundary()
         }
     }
 
     private func performPendingPaletteAction() {
+        HookSheetPresenter.shared.presentPendingRequest()
         guard let tab = appState.windowState.pendingSettingsTab else { return }
         let key = appState.windowState.pendingSettingsHighlightKey
         appState.windowState.pendingSettingsTab = nil

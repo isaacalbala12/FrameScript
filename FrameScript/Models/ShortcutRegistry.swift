@@ -197,6 +197,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
+    case generateHook, suggestRehooks
 
     var id: String { rawValue }
 
@@ -269,6 +270,8 @@ enum ShortcutRegistry {
         .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 5),
         .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 6),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
+        .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
+        .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),
         .init(command: .openSettings, localizationKey: "command.openSettings", category: .application, factoryDefault: .init(",", modifiers: [.command]), order: 0),
         .init(command: .showShortcuts, localizationKey: "command.showShortcuts", category: .application, factoryDefault: .init("/", modifiers: [.command, .shift]), order: 1)
     ]

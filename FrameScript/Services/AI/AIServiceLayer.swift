@@ -179,6 +179,8 @@ enum AITask: String, Codable, Hashable {
     case analyze
     case bRollGeneration
     case editingGeneration
+    case hook
+    case rehook
 }
 
 @MainActor
@@ -202,6 +204,14 @@ struct MockLLMProvider: LLMProviderProtocol {
             return LLMResponse(text: russian
                 ? #"{"description":"Сохраните прямые склейки и легкие приближения.","notes":"Оставьте в субтитрах только ключевые слова."}"#
                 : #"{"description":"Keep hard cuts and subtle punch-ins.","notes":"Use keyword-only captions."}"#)
+        case .hook:
+            return LLMResponse(text: russian
+                ? #"{"hooks":[{"angle":"контраст","text":"Новый патч обещает больше, чем даёт. Проблема в одном изменении, о котором никто не говорит.","onScreenText":"Что изменилось?"}]}"#
+                : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
+        case .rehook:
+            return LLMResponse(text: russian
+                ? #"{"bridges":[{"text":"Но есть вторая деталь, которая меняет весь расклад.","anchor":""}]}"#
+                : #"{"bridges":[{"text":"Pero hay una segunda pieza que cambia todo el planteamiento.","anchor":""}]}"#)
         }
     }
 }
@@ -252,13 +262,7 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
             ],
             temperature: request.temperature,
             maxTokens: request.maxTokens,
-            responseFormat: request.task == .analyze
-                ? AnalysisStructuredOutputCapability.resolve(
-                    provider: request.provider,
-                    model: request.model,
-                    baseURL: request.baseURL
-                ).responseFormat
-                : nil
+            responseFormat: Self.responseFormat(for: request)
         ))
 
         let (data, response) = try await send(urlRequest)
@@ -369,6 +373,25 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
             throw LLMProviderError.invalidBaseURL
         }
         return url
+    }
+
+    /// Analysis asks for a strict schema when the provider supports one.
+    /// Hooks and re-hooks only need a JSON object; they are parsed tolerantly,
+    /// so a provider that cannot enforce JSON gets plain prompt-only output.
+    private static func responseFormat(for request: LLMRequest) -> ChatResponseFormat? {
+        let capability = AnalysisStructuredOutputCapability.resolve(
+            provider: request.provider,
+            model: request.model,
+            baseURL: request.baseURL
+        )
+        switch request.task {
+        case .analyze:
+            return capability.responseFormat
+        case .hook, .rehook:
+            return capability == .promptOnly ? nil : .jsonObject
+        default:
+            return nil
+        }
     }
 
     static func googleModelURL(model: String) throws -> URL {
@@ -744,6 +767,44 @@ struct PromptBuilder {
             "Generate practical visual or shot ideas that strengthen the meaning of the script. \(languageInstruction)"
         case .editingGeneration:
             "Generate restrained YouTube editing notes. Avoid timeline complexity. \(languageInstruction)"
+        case .hook:
+            """
+            You write opening hooks for a Spanish simracing and motorsport YouTube channel. Write in the creator's voice: direct, colloquial Spanish from Spain, tuteo for the viewer, vosotros in any CTA, 8–18 word sentences, dry humour, thesis early, zero corporate filler. When the script language is not Spanish, keep the same direct, dry, concise voice in that language; the Spanish examples are style references, not text to copy. This is the first 15 seconds of the video; every second counts.
+
+            Return exactly one JSON object:
+            {"hooks":[{"angle":"pregunta","text":"spoken hook","onScreenText":"optional short overlay"}]}
+
+            Produce 3 to 5 alternatives, each with a different angle from this set: pregunta, contraste, dato, promesa, polémica. Write the angle label in \(languageName).
+            Rules for every hook:
+            - About 35 to 50 spoken words for a 150–180 wpm delivery, but never more than the 15-second budget supplied by the user.
+            - The first sentence has 15 words or fewer.
+            - No greeting. Never start with "en el vídeo de hoy", "hoy vamos a", "en el mundo del simracing", "no olvides suscribirte" or the equivalent generic YouTube intro in any language.
+            - Banned filler in Spanish: "en conclusión", "en resumen", "sumérgete", "descubre", "sin lugar a dudas", "hoy en día", "el mundo del simracing", "no te lo pierdas", "como todos sabemos", "es importante destacar". Apply the same ban in any other language.
+            - Start with the thesis, the conflict, the number or the promise. Do not warm up.
+            - Use a concrete number or fact only when it appears in the supplied material. Never invent data, sources, dates, prices or first-hand experiences.
+            - Never claim the creator tested, played, measured or bought something unless the supplied material explicitly says so. If a fact is not confirmed, do not present it as confirmed.
+            - No clickbait lies: do not promise anything the supplied video material does not support.
+            - End with a question or a promise the video can keep.
+            - Keep the creator's units when the script is Spanish: km/h, CV, Nm, kg, litros, €; decimal comma.
+            - "text" is spoken narration only: plain text, no Markdown, no quotes, no labels, no line breaks. "onScreenText" is optional, 2 to 4 words, or an empty string.
+            Respond only in \(languageName).
+            """
+        case .rehook:
+            """
+            You write re-engagement bridges for a Spanish simracing and motorsport YouTube channel. Voice: direct, colloquial, tuteo, short sentences, dry humour, no corporate filler. When the script language is not Spanish, keep the same voice in that language; the Spanish turns below are style references, not text to copy. A bridge must create curiosity about what comes next, not summarise what just ended.
+
+            Return exactly one JSON object:
+            {"bridges":[{"text":"spoken bridge","anchor":"exact sentence from the scene where it is inserted"}]}
+
+            Produce 1 or 2 bridges for each supplied anchor.
+            Rules:
+            - 6 seconds maximum at the supplied speaking rate (roughly 12 to 18 spoken words in Spanish).
+            - Do not start with "además", "también", "por otro lado" or their equivalent in another language.
+            - Do not repeat the anchor, do not summarise the previous block, and do not add facts, numbers or experiences that are not in the supplied material.
+            - Connect the end of the previous idea with the concrete promise of the next one. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza..." are welcome only when they fit; never as filler.
+            - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
+            Respond only in \(languageName).
+            """
         }
     }
 

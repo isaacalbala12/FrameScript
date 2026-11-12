@@ -193,6 +193,18 @@ struct FrameScriptApp: App {
                 Task { await appState.analyzeFullScript() }
             }
             .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("menu.generateHook")) {
+                HookSheetPresenter.shared.present(.hook)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .generateHook))
+            .disabled(!appState.hasOpenProject)
+            Button(appState.localized("menu.suggestRehooks")) {
+                HookSheetPresenter.shared.present(.rehook)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .suggestRehooks))
+            .disabled(!appState.hasOpenProject)
+            Divider()
             Button(appState.localized("menu.generateBRoll")) { appState.generateBRollForSelectedScene() }
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
