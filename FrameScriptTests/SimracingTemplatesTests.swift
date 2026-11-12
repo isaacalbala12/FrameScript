@@ -44,7 +44,7 @@ final class SimracingTemplatesTests: XCTestCase {
             XCTAssertTrue(definition.scenes.flatMap { $0.captures }.contains { $0.source == .screenshot })
             XCTAssertTrue(definition.scenes.flatMap { $0.captures }.contains { $0.source == .web })
 
-            for scene in definition.scenes where scene.canonicalTitle != "CTA" {
+            for scene in definition.scenes {
                 XCTAssertNotEqual(scene.localizedTitle(.spanish), scene.localizedTitle(.english))
             }
         }
@@ -85,9 +85,12 @@ final class SimracingTemplatesTests: XCTestCase {
 
             for (scene, blueprint) in zip(scenes, definition.scenes) {
                 XCTAssertTrue(scene.notes.contains("Objetivo:"))
-                XCTAssertTrue(scene.notes.contains("Captura:"))
-                XCTAssertTrue(scene.notes.contains("Montaje:"))
+                XCTAssertTrue(scene.notes.contains("Visuales:"))
+                XCTAssertTrue(scene.notes.contains("Edición:"))
                 XCTAssertTrue(scene.notes.contains("Duración objetivo:"))
+                if blueprint.reHook != nil {
+                    XCTAssertTrue(scene.notes.contains("Gancho intermedio:"))
+                }
                 XCTAssertTrue(scene.notes.contains(blueprint.prompt.text(for: .spanish)))
                 XCTAssertEqual(scene.bRollItems.count, blueprint.captures.count)
                 XCTAssertEqual(scene.bRollItems.map(\.sourceType), blueprint.captures.map { $0.source.brollSource })
@@ -111,8 +114,30 @@ final class SimracingTemplatesTests: XCTestCase {
 
             XCTAssertEqual(scenes.map(\.title), definition.scenes.map { $0.localizedTitle(.english) })
             XCTAssertEqual(scenes.first?.title, definition.scenes.first?.localizedTitle(.english))
-            XCTAssertTrue(scenes.allSatisfy { $0.notes.contains("Goal:") && $0.notes.contains("Target duration:") })
+            XCTAssertTrue(scenes.allSatisfy { $0.notes.contains("Goal:") && $0.notes.contains("Visuals:") && $0.notes.contains("Editing:") && $0.notes.contains("Target duration:") })
             XCTAssertTrue(scenes.allSatisfy { $0.editingItems.first?.cutStyle == "Template note" })
+        }
+    }
+
+    func testRussianTemplateProjectsUseEnglishGuidanceConsistently() {
+        for definition in SimracingTemplates.all {
+            let project = SampleData.project(
+                named: "Тест",
+                template: definition.frameTemplate,
+                language: .russian
+            )
+            for scene in project.scenes.sortedByOrder {
+                XCTAssertTrue(scene.notes.contains("Goal:"))
+                XCTAssertTrue(scene.notes.contains("Visuals:"))
+                XCTAssertTrue(scene.notes.contains("Editing:"))
+                XCTAssertTrue(scene.notes.contains("Target duration:"))
+                XCTAssertFalse(scene.notes.contains("Цель:"))
+                XCTAssertFalse(scene.notes.contains("Съёмка:"))
+                XCTAssertFalse(scene.notes.contains("Монтаж:"))
+                XCTAssertFalse(scene.notes.contains("Gancho intermedio:"))
+                XCTAssertTrue(scene.bRollItems.allSatisfy { $0.notes != "Скриншот" })
+                XCTAssertTrue(scene.editingItems.allSatisfy { $0.cutStyle == "Template note" })
+            }
         }
     }
 

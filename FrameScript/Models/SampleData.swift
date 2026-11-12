@@ -47,7 +47,7 @@ enum SampleData {
     }
 
     static func demoProject(language: AppLanguage) -> FrameProject {
-        switch language {
+        switch SimracingCopy.resolvedLanguage(language) {
         case .spanish: spanishDemoProject
         case .russian: russianDemoProject
         case .english, .system: englishDemoProject

@@ -61,36 +61,27 @@ enum SimracingTemplates {
         }
 
         func guidance(_ language: AppLanguage) -> String {
-            let requested = SimracingCopy.resolvedLanguage(language)
-            let resolved: AppLanguage = requested == .russian && !hasRussianGuidance ? .english : requested
+            // Russian template guidance is intentionally not translated yet; it falls
+            // back to English as a whole instead of mixing Russian labels with English copy.
+            let resolved = SimracingCopy.guidanceLanguage(language)
             var lines: [String] = []
-            lines.append("\(Self.label("Objetivo", "Goal", "Цель", resolved)): \(prompt.text(for: resolved))")
+            lines.append("\(Self.label("Objetivo", "Goal", resolved)): \(prompt.text(for: resolved))")
             if let reHook {
-                lines.append("\(Self.label("Re-hook", "Re-hook", "Ре-хук", resolved)): \(reHook.text(for: resolved))")
+                lines.append("\(Self.label("Gancho intermedio", "Re-hook", resolved)): \(reHook.text(for: resolved))")
             }
             lines.append("")
-            lines.append("\(Self.label("Captura", "Capture", "Съёмка", resolved)):")
+            lines.append("\(Self.label("Visuales", "Visuals", resolved)):")
             for capture in captures {
                 lines.append("• \(capture.source.label(resolved)): \(capture.description.text(for: resolved))")
             }
             lines.append("")
-            lines.append("\(Self.label("Montaje", "Editing", "Монтаж", resolved)): \(editingNote.text(for: resolved))")
-            lines.append("\(Self.label("Duración objetivo", "Target duration", "Целевая длительность", resolved)): \(DurationEstimator.formatted(targetDuration))")
+            lines.append("\(Self.label("Edición", "Editing", resolved)): \(editingNote.text(for: resolved))")
+            lines.append("\(Self.label("Duración objetivo", "Target duration", resolved)): \(DurationEstimator.formatted(targetDuration))")
             return lines.joined(separator: "\n")
         }
 
-        private var hasRussianGuidance: Bool {
-            prompt.russian != nil
-                && editingNote.russian != nil
-                && captures.allSatisfy { $0.description.russian != nil }
-        }
-
-        private static func label(_ spanish: String, _ english: String, _ russian: String, _ language: AppLanguage) -> String {
-            switch language {
-            case .spanish: spanish
-            case .russian: russian
-            default: english
-            }
+        private static func label(_ spanish: String, _ english: String, _ language: AppLanguage) -> String {
+            language == .spanish ? spanish : english
         }
     }
 
@@ -124,6 +115,7 @@ enum SimracingTemplates {
         }
 
         func makeProject(named title: String, template: FrameTemplate, language: AppLanguage, exportPresetName: String) -> FrameProject {
+            let contentLanguage = SimracingCopy.guidanceLanguage(language)
             let builtScenes = scenes.enumerated().map { index, blueprint in
                 let sceneID = UUID()
                 let segment = TextSegment(
@@ -144,18 +136,18 @@ enum SimracingTemplates {
                         BRollItem(
                             templateType: "Simracing",
                             sourceType: idea.source.brollSource,
-                            descriptionText: idea.description.text(for: language),
-                            notes: idea.source.label(language),
+                            descriptionText: idea.description.text(for: contentLanguage),
+                            notes: idea.source.label(contentLanguage),
                             status: .idea
                         )
                     },
                     editingItems: [
                         EditingItem(
                             templateType: "Simracing",
-                            cutStyle: SimracingTemplates.templateNoteLabel.text(for: language),
+                            cutStyle: SimracingTemplates.templateNoteLabel.text(for: contentLanguage),
                             transition: "",
                             subtitleStyle: "",
-                            notes: blueprint.editingNote.text(for: language)
+                            notes: blueprint.editingNote.text(for: contentLanguage)
                         )
                     ]
                 )
@@ -257,7 +249,7 @@ enum SimracingTemplates {
         scenes: [
             scene("Hook", .hook, 15,
                 prompt: copy(
-                    "Abre con el conflicto y la promesa en 10–15 s: qué cambia, por qué importa ahora y qué pregunta responde el vídeo. No leas el changelog.",
+                    "Abre con el conflicto y la promesa en 10–15 s: qué cambia, por qué importa ahora y qué pregunta responde el vídeo. No leas la lista de cambios.",
                     "Open with the conflict and the promise in 10–15 s: what changed, why it matters now and which question the video answers. Do not read the changelog."
                 ),
                 captures: [
@@ -327,7 +319,7 @@ enum SimracingTemplates {
             scene("Physics and performance", .example, 75,
                 prompt: copy(
                     "Cuenta qué probaste, con qué coche y en qué condiciones. Separa sensación de dato: FFB, neumáticos, frametime.",
-                    "Say what you tested, in which car and under which conditions. Separate feel from data: FFB, tyres, frametime."
+                    "Say what you tested, in which car and under which conditions. Separate feel from data: FFB, tires, frametime."
                 ),
                 captures: [
                     obs("Gameplay a bordo con tres curvas representativas.", "Cockpit gameplay through three representative corners."),
@@ -360,13 +352,13 @@ enum SimracingTemplates {
             ),
             scene("What is missing", .problem, 60,
                 prompt: copy(
-                    "Lo que la actualización no trae: roadmap, funciones canceladas y fechas. Distingue hecho, rumor y deseo.",
-                    "What the update does not bring: roadmap, cancelled features and dates. Separate fact, rumour and wish."
+                    "Lo que la actualización no trae: hoja de ruta, funciones canceladas y fechas. Distingue hecho, rumor y deseo.",
+                    "What the update does not bring: roadmap, canceled features and dates. Separate fact, rumor and wish."
                 ),
                 captures: [
                     web("Hoja de ruta con las fechas anteriores y las nuevas.", "Roadmap with the old dates and the new ones."),
                     cam("Plano a cámara con tono calmado; no conviertas la ausencia en un sketch.", "Talking head with a calm tone; do not turn the absence into a sketch."),
-                    shot("Rótulo de «confirmado», «rumor» o «sin fecha» sobre la captura.", "“Confirmed”, “rumour” or “no date” label over the capture.")
+                    shot("Rótulo de «confirmado», «rumor» o «sin fecha» sobre la captura.", "“Confirmed”, “rumor” or “no date” label over the capture.")
                 ],
                 editing: copy(
                     "Marca cada ausencia con un rótulo corto y una fuente visible.",
@@ -434,7 +426,7 @@ enum SimracingTemplates {
         scenes: [
             scene("Hook", .hook, 15,
                 prompt: copy(
-                    "Un dato o una contradicción en 10–15 s y la promesa de si merece la pena. Deja claro que no es para todo el mundo.",
+                    "Un dato o una contradicción en 10–15 s y la promesa de responder si merece la pena. Deja claro que no es para todo el mundo.",
                     "A fact or contradiction in 10–15 s and the promise of whether it is worth it. Make clear it is not for everyone."
                 ),
                 captures: [
@@ -450,10 +442,10 @@ enum SimracingTemplates {
             scene("What it is and who makes it", .whyThisMatters, 45,
                 prompt: copy(
                     "Estudio, licencia, precio y reputación. Lo justo para entender quién está detrás.",
-                    "Studio, licence, price and reputation. Just enough to understand who is behind it."
+                    "Studio, license, price and reputation. Just enough to understand who is behind it."
                 ),
                 captures: [
-                    web("Página del estudio o del mod con la licencia visible.", "Studio or mod page with the licence visible."),
+                    web("Página del estudio o del mod con la licencia visible.", "Studio or mod page with the license visible."),
                     shot("Captura de la ficha con precio y requisitos.", "Capture of the listing with price and requirements."),
                     obs("Un plano del coche o del mod en el garaje.", "A shot of the car or mod in the garage.")
                 ],
@@ -534,7 +526,7 @@ enum SimracingTemplates {
                 captures: [
                     obs("Pantalla dividida con la misma curva en dos versiones.", "Split screen with the same corner in two versions."),
                     shot("Tabla de dos columnas con tres diferencias objetivas.", "Two-column table with three objective differences."),
-                    web("Fuente de precio, licencia o compatibilidad para la comparación.", "Price, licence or compatibility source for the comparison.")
+                    web("Fuente de precio, licencia o compatibilidad para la comparación.", "Price, license or compatibility source for the comparison.")
                 ],
                 editing: copy(
                     "Mantén el mismo encuadre y la misma hora del día; si cambias uno, avísalo.",
@@ -543,7 +535,7 @@ enum SimracingTemplates {
             ),
             scene("Gripes and who should skip it", .problem, 45,
                 prompt: copy(
-                    "IA, complejidad, requisitos y precio. Sé explícito con quien no debería comprarlo.",
+                    "IA, complejidad, requisitos y precio. Sé explícito sobre quién no debería comprarlo.",
                     "AI, complexity, requirements and price. Be explicit about who should not buy it."
                 ),
                 captures: [
@@ -602,8 +594,8 @@ enum SimracingTemplates {
             ),
             scene("Criteria", .whyThisMatters, 45,
                 prompt: copy(
-                    "Qué se compara y por qué esos criterios importan. Define el marco antes de defender nada.",
-                    "What is being compared and why those criteria matter. Define the frame before arguing for anything."
+                    "Qué se compara y por qué esos criterios importan. Fija el protocolo: mismo circuito, misma hora, mismos ajustes y mismas vueltas. Define el marco antes de defender nada.",
+                    "What is being compared and why those criteria matter. Fix the protocol: same track, same time of day, same settings and same number of laps. Define the frame before arguing for anything."
                 ),
                 captures: [
                     shot("Tabla de criterios con tres o cuatro filas, legible en móvil.", "Criteria table with three or four rows, readable on mobile."),
@@ -627,12 +619,12 @@ enum SimracingTemplates {
                 ],
                 editing: copy(
                     "Usa el mismo color de acento para el candidato A en todo el vídeo.",
-                    "Use the same accent colour for contender A throughout the video."
+                    "Use the same accent color for contender A throughout the video."
                 )
             ),
             scene("Competitor B", .explanation, 60,
                 prompt: copy(
-                    "Mismo orden y mismo nivel de exigencia para el segundo. Evita cambiar de vara.",
+                    "Mismo orden y mismo nivel de exigencia para el segundo. No cambies la vara de medir.",
                     "Same order and same level of scrutiny for the second. Avoid moving the goalposts."
                 ),
                 captures: [
@@ -642,7 +634,7 @@ enum SimracingTemplates {
                 ],
                 editing: copy(
                     "Reutiliza los mismos planos y rótulos; solo cambia el color y el nombre.",
-                    "Reuse the same shots and labels; only the colour and name change."
+                    "Reuse the same shots and labels; only the color and name change."
                 )
             ),
             scene("On-screen table", .example, 45,
@@ -658,6 +650,10 @@ enum SimracingTemplates {
                 editing: copy(
                     "Aguanta la tabla al menos cinco segundos; si necesitas más, divídela en dos.",
                     "Hold the table for at least five seconds; if you need more, split it in two."
+                ),
+                reHook: copy(
+                    "«Pero los números no siempre cuentan la misma historia que las manos».",
+                    "“But the numbers do not always tell the same story as your hands”."
                 )
             ),
             scene("Winner by profile", .takeaway, 45,
@@ -682,10 +678,10 @@ enum SimracingTemplates {
             scene("What cannot be compared", .problem, 45,
                 prompt: copy(
                     "Precio, plataforma, licencia y matices. Lo que la tabla deja fuera también decide.",
-                    "Price, platform, licence and nuance. What the table leaves out also decides."
+                    "Price, platform, license and nuance. What the table leaves out also decides."
                 ),
                 captures: [
-                    web("Captura de precio, plataforma o licencia de cada opción.", "Capture of price, platform or licence for each option."),
+                    web("Captura de precio, plataforma o licencia de cada opción.", "Capture of price, platform or license for each option."),
                     shot("Rótulo de «fuera de la tabla» con el criterio que falta.", "“Outside the table” label with the missing criterion."),
                     cam("Plano a cámara para el matiz que no cabe en una fila.", "Talking-head shot for the nuance that does not fit in a row.")
                 ],
@@ -696,7 +692,7 @@ enum SimracingTemplates {
             ),
             scene("CTA", .cta, 20,
                 prompt: copy(
-                    "Pregunta por el caso concreto del espectador y una sola acción.",
+                    "Pregunta al espectador por su caso concreto y propón una sola acción.",
                     "Ask about the viewer's specific case and one action."
                 ),
                 captures: [
@@ -722,7 +718,7 @@ enum SimracingTemplates {
             scene("Hook", .hook, 15,
                 prompt: copy(
                     "Qué ha pasado y por qué importa en 10–15 s. Si es un rumor, dilo en la primera frase.",
-                    "What happened and why it matters in 10–15 s. If it is a rumour, say so in the first sentence."
+                    "What happened and why it matters in 10–15 s. If it is a rumor, say so in the first sentence."
                 ),
                 captures: [
                     cam("Plano medio a cámara, reacción breve y mirada directa.", "Medium talking-head shot, brief reaction and direct eye contact."),
@@ -762,25 +758,25 @@ enum SimracingTemplates {
                 editing: copy(
                     "No repitas los hechos: empieza directamente por la consecuencia.",
                     "Do not repeat the facts: start directly with the consequence."
-                ),
-                reHook: copy(
-                    "«Y aquí es donde la noticia deja de ser solo un titular».",
-                    "“And this is where the news stops being just a headline”."
                 )
             ),
             scene("What is not confirmed", .problem, 45,
                 prompt: copy(
                     "Rumores y especulación, con su origen y su nivel de confianza.",
-                    "Rumours and speculation, with their origin and confidence level."
+                    "Rumors and speculation, with their origin and confidence level."
                 ),
                 captures: [
-                    web("Captura del rumor y de su autor original.", "Capture of the rumour and its original author."),
+                    web("Captura del rumor y de su autor original.", "Capture of the rumor and its original author."),
                     shot("Rótulo de «no confirmado» o «sin fecha».", "“Unconfirmed” or “no date” label."),
                     cam("Plano a cámara para marcar el límite entre dato y deseo.", "Talking-head shot to mark the line between fact and wish.")
                 ],
                 editing: copy(
                     "Usa un tono visual distinto para lo no confirmado; que se note sin leer el rótulo.",
                     "Use a different visual tone for the unconfirmed part; make it visible without reading the label."
+                ),
+                reHook: copy(
+                    "«Y aquí es donde la noticia deja de ser solo un titular».",
+                    "“And this is where the news stops being just a headline”."
                 )
             ),
             scene("Community", .whyThisMatters, 30,
@@ -858,13 +854,13 @@ enum SimracingTemplates {
                     "Championship, car, track and goal. Only what is needed to understand the race."
                 ),
                 captures: [
-                    obs("Plano del campeonato o de la clasificación antes de la carrera.", "Championship or standings shot before the race."),
+                    shot("Captura de la clasificación antes de la carrera.", "Standings capture before the race."),
                     web("Fuente del calendario, las reglas o la clasificación.", "Source for the calendar, rules or standings."),
                     shot("Rótulo con coche, pista y objetivo.", "Title card with car, track and goal.")
                 ],
                 editing: copy(
-                    "Máximo veinte segundos de contexto; si necesitas más, repártelo en dos escenas.",
-                    "Twenty seconds of context at most; if you need more, split it into two scenes."
+                    "No pases de cuarenta y cinco segundos de contexto; si necesitas más, repártelo en dos escenas.",
+                    "Do not spend more than forty-five seconds on context; if you need more, split it into two scenes."
                 )
             ),
             scene("Preparation", .example, 45,
@@ -895,6 +891,10 @@ enum SimracingTemplates {
                 editing: copy(
                     "Alterna repetición y cámara; si una vuelta no cambia la historia, resúmela en un rótulo.",
                     "Alternate replay and camera; if a lap does not change the story, sum it up in a card."
+                ),
+                reHook: copy(
+                    "«Todo lo que probé en la preparación se juega ahora».",
+                    "“Everything I tested in practice is decided now”."
                 )
             ),
             scene("Data", .example, 45,
@@ -971,6 +971,13 @@ struct SimracingCopy: Sendable {
         if preferred.hasPrefix("es") { return .spanish }
         if preferred.hasPrefix("ru") { return .russian }
         return .english
+    }
+
+    /// Guidance, capture suggestions and editing notes have no Russian translation
+    /// yet. Russian projects use the complete English guidance instead of a mix.
+    static func guidanceLanguage(_ language: AppLanguage) -> AppLanguage {
+        let resolved = resolvedLanguage(language)
+        return resolved == .russian ? .english : resolved
     }
 }
 

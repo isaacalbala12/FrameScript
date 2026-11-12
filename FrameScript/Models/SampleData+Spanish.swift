@@ -4,9 +4,9 @@ extension SampleData {
     /// Spanish built-in demo. It is a self-contained anchor-first showcase set in a
     /// fictional simracing game so the app can be evaluated without real titles.
     static var spanishDemoProject: FrameProject {
-        let hook = "La actualización 3.0 de Apexia promete arreglar el online y recuperar la categoría que todos pedían. También llega cuatro meses tarde.\n\n¿Devuelve la razón para volver o es otra promesa?"
-        let problem = "El problema nunca fue la conducción. El modelo de neumáticos sigue siendo uno de los más legibles del mercado: notas el apoyo, entiendes la pérdida de agarre y puedes corregir sin adivinar.\n\nLo que fallaba era todo lo demás. El online abría salas vacías, el emparejamiento mezclaba niveles sin avisar y la progresión dependía de repetir la misma prueba hasta el cansancio. La 3.0 dice atacar esas tres cosas a la vez."
-        let explanation = "El cambio más visible es el nuevo sistema de temporadas. Cada semana rota una serie con coches y circuitos fijos, y los resultados alimentan una clasificación dividida por divisiones.\n\nLa segunda pieza es la lluvia dinámica. La pista se seca por trazadas, los charcos cambian según la hora y el neumático intermedio por fin tiene una ventana útil. No es solo un efecto visual: obliga a elegir rueda antes de salir y a leer el cielo durante la carrera."
+        let hook = "La actualización 3.0 de Apexia promete arreglar el online y recuperar la categoría que todos pedían. También llega cuatro meses tarde.\n\n¿Te devuelve las ganas de volver o es otra promesa?"
+        let problem = "El problema nunca fue la conducción. El modelo de neumáticos sigue siendo uno de los más legibles del mercado: notas el apoyo, entiendes la pérdida de agarre y puedes corregir sin adivinar.\n\nLo que fallaba era todo lo demás. El online abría salas vacías, el emparejamiento mezclaba niveles sin avisar y la progresión dependía de repetir la misma prueba hasta el cansancio. La 3.0 promete atacar esas tres cosas a la vez."
+        let explanation = "El cambio más visible es el nuevo sistema de temporadas. Cada semana rota una serie con coches y circuitos fijos, y los resultados alimentan una clasificación por divisiones.\n\nLa segunda pieza es la lluvia dinámica. La pista se seca por trazadas, los charcos cambian según la hora y el neumático intermedio por fin tiene una ventana útil. No es solo un efecto visual: obliga a elegir rueda antes de salir y a leer el cielo durante la carrera."
         let example = "Para probarlo hice tres carreras con el mismo coche y tres niveles de agarre distintos. En seco, la diferencia entre el compuesto blando y el duro se nota en la primera frenada. Con lluvia ligera, el intermedio aguanta seis vueltas antes de degradarse; con el de seco, la pérdida llega en dos.\n\nEl dato que más me sorprendió fue el frametime. En la carrera de 20 coches se mantuvo estable, pero los tres primeros segundos tras cambiar de clima dieron un tirón visible. Merece la pena esperar medio segundo antes de atacar."
         let takeaway = "La 3.0 no convierte a Apexia en otro juego. Sigue siendo un simulador que pide paciencia, lectura y ganas de entender el coche antes de pedirle un tiempo.\n\nPero por primera vez en mucho tiempo, el online tiene una estructura que invita a volver mañana. Si venías del modo carrera clásico, espera: todavía no está. Si solo querías una razón para encender el volante otra vez, esta actualización la da.\n\nCuéntame en los comentarios qué categoría quieres ver en la próxima temporada y nos vemos en la siguiente vuelta."
 
@@ -35,7 +35,7 @@ extension SampleData {
                         edit("arreglar el online", cut: "Repetición del clip de apertura", transition: "Corte directo", subtitles: "Sin subtítulos", emphasis: "Ninguno", zoom: "Empuje del 6%", sfx: "", music: "El pulso baja", graphics: "Ninguno", notes: "Rango solapado a propósito para probar la navegación agrupada.")
                     ],
                     reviews: [
-                        review("Claridad del gancho", .suggestion, "El contraste entre promesa y retraso funciona; conviene separar la pregunta final en su propio beat.", "Deja medio segundo de silencio antes de «¿Es el parche...?».")
+                        review("Claridad del gancho", .suggestion, "El contraste entre promesa y retraso funciona; deja que la pregunta final respire.", "Deja medio segundo de silencio antes de la pregunta final.")
                     ],
                     templateType: "Análisis de actualización"
                 ),
@@ -99,7 +99,7 @@ extension SampleData {
                 scene(
                     order: 4,
                     type: .takeaway,
-                    title: "Conclusión / CTA",
+                    title: "Conclusión y llamada a la acción",
                     text: takeaway,
                     notes: "Veredicto por perfiles y una sola pregunta final. Sin presión de compra.",
                     visuals: [
@@ -111,7 +111,7 @@ extension SampleData {
                         edit("qué categoría quieres ver en la próxima temporada", cut: "Cierre pausado", transition: "Fundido a color", subtitles: "Pregunta final", emphasis: "Resaltar «próxima temporada»", zoom: "Retroceso lento", sfx: "Resolución suave", music: "Resolución y fundido", graphics: "Pregunta + siguiente vídeo", notes: "No añadas una segunda llamada a la acción.")
                     ],
                     reviews: [
-                        review("CTA", .note, "El cierre es claro y deja una decisión concreta al espectador.", "Mantén la pregunta en pantalla sin rótulos extra.")
+                        review("Llamada a la acción", .note, "El cierre es claro y deja una decisión concreta al espectador.", "Mantén la pregunta en pantalla sin rótulos extra.")
                     ],
                     templateType: "Análisis de actualización"
                 )

@@ -13,8 +13,7 @@ final class SpanishDemoProjectTests: XCTestCase {
         XCTAssertEqual(project.title, expectedTitle)
         XCTAssertEqual(scenes.count, 5)
         XCTAssertEqual(scenes.map(\.sectionType), [.hook, .problem, .explanation, .example, .takeaway])
-        XCTAssertTrue(scenes.allSatisfy { !$0.scriptText.contains("\n\n") || !$0.notes.isEmpty })
-        XCTAssertTrue(scenes.filter { !$0.notes.isEmpty }.count >= 4)
+        XCTAssertTrue(scenes.allSatisfy { !$0.notes.isEmpty })
         XCTAssertTrue(scenes.allSatisfy { !$0.scriptText.isEmpty && $0.estimatedDuration > 0 && !$0.textSegments.isEmpty })
         XCTAssertTrue(scenes.filter { !$0.bRollItems.isEmpty }.count >= 4)
         XCTAssertTrue(scenes.filter { !$0.editingItems.isEmpty }.count >= 4)
@@ -30,6 +29,7 @@ final class SpanishDemoProjectTests: XCTestCase {
         XCTAssertFalse(first.aiComments.isEmpty)
         XCTAssertTrue(scenes.flatMap { [$0.scriptText] }.joined().contains("Apexia"))
         XCTAssertTrue(scenes.flatMap { [$0.scriptText] }.joined().contains("actualización 3.0"))
+        XCTAssertEqual(scenes.last?.title, "Conclusión y llamada a la acción")
 
         let analysis = try XCTUnwrap(SimracingTemplates.all.first { $0.kind == .updateAnalysis })
         XCTAssertEqual(project.templateID, analysis.id)
