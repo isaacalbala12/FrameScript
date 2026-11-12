@@ -84,9 +84,12 @@ enum ExternalProjectChangeResolution {
 
 /// Result of the pre-write check. `.handled` means the conflict workflow
 /// already reloaded or wrote the file, so the caller must not write again.
+/// `.declined` means the user already declined this exact on-disk hash and a
+/// background autosave must skip it without prompting again.
 enum ProjectFileWriteAuthorization {
     case proceed
     case handled
+    case declined
     case failed
 }
 
@@ -102,6 +105,7 @@ final class AppState {
     typealias ExportFolderBookmarkResolver = @MainActor @Sendable (Data, inout Bool) throws -> URL
     typealias CloseConfirmation = @MainActor () -> CloseConfirmationResult
     typealias ExternalProjectChangeConfirmation = @MainActor () -> ExternalProjectChangeResolution
+    typealias SaveAsDestinationProvider = @MainActor () -> URL?
 
     enum CloseConfirmationResult {
         case save, discard, cancel
@@ -123,6 +127,7 @@ final class AppState {
     private let closeConfirmation: CloseConfirmation?
     let externalChangeConfirmation: ExternalProjectChangeConfirmation?
     let saveProjectCopyHandler: (@MainActor () -> Bool)?
+    let saveAsDestinationProvider: SaveAsDestinationProvider?
 
     var templates: [FrameTemplate]
     private let builtInTemplates: [FrameTemplate]
@@ -132,6 +137,10 @@ final class AppState {
     var declinedExternalProjectSnapshot: ProjectFileSnapshot?
     var projectFileMonitor: ProjectFileMonitor?
     var externalChangePromptIsActive = false
+    var isConfirmingTermination = false
+    var isTerminatingApplication = false
+    weak var projectWindow: NSWindow?
+    var projectWindowCloseObserver: NSObjectProtocol?
     private var segmentRebuildTasks: [UUID: Task<Void, Never>] = [:]
     private var autocompleteCooldowns: [AIProviderKind: Date] = [:]
     var autocompleteIssue: AutocompleteProviderIssue?
@@ -143,8 +152,6 @@ final class AppState {
 #endif
     private var appActivationObserver: NSObjectProtocol?
     private var appResignationObserver: NSObjectProtocol?
-    private var appTerminationObserver: NSObjectProtocol?
-    private var windowCloseObserver: NSObjectProtocol?
 
     init(
         projectStore: ProjectStore = ProjectStore(),
@@ -161,6 +168,7 @@ final class AppState {
         closeConfirmation: CloseConfirmation? = nil,
         externalChangeConfirmation: ExternalProjectChangeConfirmation? = nil,
         saveProjectCopyHandler: (@MainActor () -> Bool)? = nil,
+        saveAsDestinationProvider: SaveAsDestinationProvider? = nil,
         exportFolderBookmarkCreator: @escaping ExportFolderBookmarkCreator = { url in
             try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         },
@@ -183,6 +191,7 @@ final class AppState {
         self.closeConfirmation = closeConfirmation
         self.externalChangeConfirmation = externalChangeConfirmation
         self.saveProjectCopyHandler = saveProjectCopyHandler
+        self.saveAsDestinationProvider = saveAsDestinationProvider
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
@@ -485,7 +494,7 @@ final class AppState {
             break
         case .handled:
             return true
-        case .failed:
+        case .declined, .failed:
             return false
         }
         do {
@@ -507,12 +516,19 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.frameScript]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(project.title).fscr"
-        panel.message = localized("dialog.saveProject.message")
-        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        let url: URL
+        if let saveAsDestinationProvider {
+            guard let chosenURL = saveAsDestinationProvider() else { return false }
+            url = chosenURL
+        } else {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.frameScript]
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = "\(project.title).fscr"
+            panel.message = localized("dialog.saveProject.message")
+            guard panel.runModal() == .OK, let chosenURL = panel.url else { return false }
+            url = chosenURL
+        }
         do {
             try projectStore.saveCurrentProject(to: url, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             startTrackingProjectFile(at: url)
@@ -1435,17 +1451,18 @@ final class AppState {
         )
     }
 
-    private func performAutosave() {
-        guard settings.generalPreferences.autosaveEnabled,
+    func performAutosave() {
+        guard !isTerminatingApplication, !isConfirmingTermination,
+              settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
               let url = projectStore.currentFileURL,
               projectStore.hasUnsavedFileChanges else {
             return
         }
-        switch prepareProjectFileForWrite() {
+        switch prepareProjectFileForWrite(honoringDeclinedConflict: true) {
         case .proceed:
             break
-        case .handled, .failed:
+        case .handled, .declined, .failed:
             return
         }
         do {
@@ -1500,41 +1517,58 @@ final class AppState {
                 }
             }
         }
-        if appTerminationObserver == nil {
-            appTerminationObserver = NotificationCenter.default.addObserver(
-                forName: NSApplication.willTerminateNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.flushForApplicationTermination()
-                }
-            }
-        }
-        if windowCloseObserver == nil {
-            windowCloseObserver = NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.flushForWindowClose()
-                }
-            }
-        }
     }
 
     /// Writes unsaved changes before the app stops being frontmost. Kept
     /// separate from the notification plumbing so it is directly testable.
     func flushForApplicationResignation() {
+        guard !isTerminatingApplication, !isConfirmingTermination else { return }
         flushActiveEditorBoundary(allEditors: true)
     }
 
-    func flushForApplicationTermination() {
-        flushActiveEditorBoundary(allEditors: true)
+    /// Runs the same Save / Don't Save / Cancel decision as closing a project.
+    /// Untitled projects go through Save As. Returns false when the user
+    /// cancels or the save fails, which must cancel app termination.
+    func confirmApplicationTermination() -> Bool {
+        flushActiveEditorBoundary(saveImmediately: false)
+        // The autosave task must not win a race against the modal decision.
+        autosaveTask?.cancel()
+        autosaveTask = nil
+
+        isConfirmingTermination = true
+        let shouldTerminate = confirmCloseProjectIfNeeded()
+        isConfirmingTermination = false
+
+        if shouldTerminate {
+            isTerminatingApplication = true
+        } else {
+            scheduleAutosaveIfNeeded()
+        }
+        return shouldTerminate
+    }
+
+    /// Closing any other window must not run the project save/conflict flow.
+    func setProjectWindow(_ window: NSWindow?) {
+        guard projectWindow !== window else { return }
+        if let projectWindowCloseObserver {
+            NotificationCenter.default.removeObserver(projectWindowCloseObserver)
+            self.projectWindowCloseObserver = nil
+        }
+        projectWindow = window
+        guard let window else { return }
+        projectWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushForWindowClose()
+            }
+        }
     }
 
     func flushForWindowClose() {
+        guard !isTerminatingApplication, !isConfirmingTermination else { return }
         flushActiveEditorBoundary(allEditors: true)
     }
 

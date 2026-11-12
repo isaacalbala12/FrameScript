@@ -24,7 +24,7 @@ extension AppState {
         trackedProjectFileURL = url
         declinedExternalProjectSnapshot = nil
         recordProjectFileSnapshot(at: url)
-        let monitor = ProjectFileMonitor()
+        let monitor = ProjectFileMonitor(securityScope: securityScope)
         monitor.start(watching: url) { [weak self] in
             self?.checkForExternalProjectChanges()
         }
@@ -71,12 +71,19 @@ extension AppState {
 
     /// Must run before every write to the current project file. If the file
     /// changed outside FrameScript, the same reload/overwrite/copy prompt is
-    /// used instead of clobbering the external version.
-    func prepareProjectFileForWrite() -> ProjectFileWriteAuthorization {
+    /// used instead of clobbering the external version. Background autosaves
+    /// pass `honoringDeclinedConflict: true` so a decision the user already
+    /// made for this exact on-disk hash is not shown again every interval.
+    func prepareProjectFileForWrite(honoringDeclinedConflict: Bool = false) -> ProjectFileWriteAuthorization {
         guard let url = projectStore.currentFileURL else { return .failed }
         guard trackedProjectFileURL == url, let known = trackedProjectFileSnapshot else {
+            // No baseline for an existing file means it may have been changed
+            // after FrameScript last saw it. Ask instead of adopting it.
+            if let disk = currentDiskSnapshot(at: url) {
+                return resolveExternalProjectChange(diskSnapshot: disk, url: url)
+            }
             trackedProjectFileURL = url
-            trackedProjectFileSnapshot = currentDiskSnapshot(at: url)
+            trackedProjectFileSnapshot = nil
             return .proceed
         }
         guard let disk = currentDiskSnapshot(at: url) else {
@@ -86,18 +93,35 @@ extension AppState {
             trackedProjectFileSnapshot = disk
             return .proceed
         }
+        if honoringDeclinedConflict,
+           let declined = declinedExternalProjectSnapshot,
+           declined.contentHash == disk.contentHash {
+            return .declined
+        }
         return resolveExternalProjectChange(diskSnapshot: disk, url: url)
     }
 
     @discardableResult
-    func reloadProjectFromDisk() -> Bool {
-        guard let url = projectStore.currentFileURL else { return false }
+    func reloadProjectFromDisk(expectedURL: URL? = nil) -> Bool {
+        guard let url = projectStore.currentFileURL,
+              expectedURL == nil || expectedURL == url else {
+            return false
+        }
         let previousSceneID = editorState.selectedSceneID
         let previousSceneIndex = projectStore.selectedSceneIndex(id: previousSceneID)
         let previousMode = editorState.selectedMode
         do {
+            let snapshotBeforeRead = currentDiskSnapshot(at: url)
             let project = try securityScope.withAccess(to: url) {
                 try FrameScriptFileStore.read(from: url)
+            }
+            guard let snapshotAfterRead = currentDiskSnapshot(at: url) else {
+                projectFileChangeLogger.error("Project file disappeared while reloading.")
+                return false
+            }
+            if let snapshotBeforeRead, snapshotBeforeRead.contentHash != snapshotAfterRead.contentHash {
+                projectFileChangeLogger.notice("Project file changed while reloading; keeping the external version.")
+                return false
             }
             projectStore.openProject(
                 project,
@@ -120,7 +144,12 @@ extension AppState {
                 targetSceneID = orderedScenes.first?.id
             }
             setEditorContextAfterFlush(sceneID: .some(targetSceneID), mode: previousMode)
-            recordProjectFileSnapshot(at: url)
+            // Record the snapshot that was verified against the bytes we
+            // actually read. A later external write is detected on the next
+            // check instead of being adopted silently.
+            trackedProjectFileURL = url
+            trackedProjectFileSnapshot = snapshotAfterRead
+            declinedExternalProjectSnapshot = nil
             return true
         } catch {
             Self.projectFilesLogger.error("Operation project-reload failed. Code: \(Self.diagnosticCode(for: error), privacy: .public)")
@@ -130,20 +159,20 @@ extension AppState {
     }
 
     /// Writes the in-memory project even though the file changed externally.
-    /// Only used after the user explicitly chose "Keep Mine".
+    /// Only used after the user explicitly chose "Keep Mine" for this URL.
     @discardableResult
-    func forceWriteProjectFile() -> Bool {
-        guard let url = projectStore.currentFileURL else { return false }
+    func forceWriteProjectFile(at expectedURL: URL) -> Bool {
+        guard projectStore.currentFileURL == expectedURL else { return false }
         do {
-            try securityScope.withAccess(to: url) {
+            try securityScope.withAccess(to: expectedURL) {
                 try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             }
-            recordProjectFileSnapshot(at: url)
+            recordProjectFileSnapshot(at: expectedURL)
             errorCenter.clearAutosaveFailureSuppression()
             return true
         } catch {
             Self.projectFilesLogger.error("Operation project-overwrite failed. Code: \(Self.diagnosticCode(for: error), privacy: .public)")
-            errorCenter.present(AppError.project(error, fileURL: url, operation: .write))
+            errorCenter.present(AppError.project(error, fileURL: expectedURL, operation: .write))
             return false
         }
     }
@@ -156,11 +185,20 @@ extension AppState {
         externalChangePromptIsActive = true
         defer { externalChangePromptIsActive = false }
 
-        switch externalChangeResolution() {
+        let promptProjectID = projectStore.project.id
+        let resolution = externalChangeResolution()
+        // Opening another project from Finder can spin the modal run loop.
+        // Never apply this project's answer to whatever is open now.
+        guard projectStore.currentFileURL == url, projectStore.project.id == promptProjectID else {
+            projectFileChangeLogger.notice("Discarding external-change decision because the open project changed.")
+            return .failed
+        }
+
+        switch resolution {
         case .reload:
-            return reloadProjectFromDisk() ? .handled : .failed
+            return reloadProjectFromDisk(expectedURL: url) ? .handled : .failed
         case .keepMine:
-            return forceWriteProjectFile() ? .handled : .failed
+            return forceWriteProjectFile(at: url) ? .handled : .failed
         case .saveCopy:
             let saved = saveProjectCopyHandler?() ?? saveProjectAs()
             if saved, let newURL = projectStore.currentFileURL {

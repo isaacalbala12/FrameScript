@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import FrameScript
 import XCTest
@@ -7,11 +8,17 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
     private final class ConfirmationRecorder {
         var count = 0
         var resolution: ExternalProjectChangeResolution = .cancel
+        var onPrompt: (@MainActor () -> Void)?
     }
 
     private final class CopyDestination {
         var url: URL?
         weak var appState: AppState?
+    }
+
+    @MainActor
+    private final class SecurityAccessRecorder {
+        var startCount = 0
     }
 
     func testSnapshotReaderHashesContentAndRecordsModificationMetadata() throws {
@@ -46,6 +53,27 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
 
         try Data("atomic replacement".utf8).write(to: url, options: .atomic)
         try await waitUntil("atomic replacement event after re-arm") { eventCount >= 2 }
+    }
+
+    func testMonitorArmsAndRearmsInsideSecurityScopedAccess() async throws {
+        let url = try temporaryFileURL()
+        try Data("start".utf8).write(to: url)
+        let recorder = SecurityAccessRecorder()
+        let access = SecurityScopedResourceAccess(
+            start: { _ in
+                recorder.startCount += 1
+                return false
+            },
+            stop: { _ in }
+        )
+        let monitor = ProjectFileMonitor(securityScope: access)
+        monitor.start(watching: url) {}
+        defer { monitor.stop() }
+
+        XCTAssertEqual(recorder.startCount, 1)
+
+        try Data("atomic replacement".utf8).write(to: url, options: .atomic)
+        try await waitUntil("security-scoped re-arm") { recorder.startCount >= 2 }
     }
 
     func testExternalChangeWithoutLocalEditsReloadsSilentlyAndPreservesTheSelectedScene() throws {
@@ -207,6 +235,151 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         XCTAssertFalse(appState.projectStore.hasUnsavedFileChanges)
     }
 
+    func testAutosaveDoesNotRepeatADeclinedConflictForTheSameDiskHash() throws {
+        let sceneID = UUID()
+        let url = try temporaryFileURL()
+        try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
+        let recorder = ConfirmationRecorder()
+        let appState = makeAppState(url: url, recorder: recorder, autosaveEnabled: true)
+        defer { appState.resetProjectFileTracking() }
+
+        appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
+        try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
+        recorder.resolution = .cancel
+        appState.checkForExternalProjectChanges()
+        XCTAssertEqual(recorder.count, 1)
+
+        appState.commitScriptTextChange(sceneID: sceneID, text: "local edit again")
+        appState.performAutosave()
+
+        XCTAssertEqual(recorder.count, 1, "Autosave must remember the declined hash instead of prompting again")
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).title, "External")
+        XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
+
+        try FrameScriptFileStore.write(project: makeProject(title: "External again", scenes: [(sceneID, "external again")]), to: url)
+        appState.checkForExternalProjectChanges()
+
+        XCTAssertEqual(recorder.count, 2, "A different on-disk hash must be shown again")
+    }
+
+    func testKeepMineAbortsIfAnotherProjectOpensWhileThePromptIsVisible() throws {
+        let sceneID = UUID()
+        let urlA = try temporaryFileURL()
+        let urlB = try temporaryFileURL()
+        try FrameScriptFileStore.write(project: makeProject(title: "Project A", scenes: [(sceneID, "local A")]), to: urlA)
+        try FrameScriptFileStore.write(project: makeProject(title: "Project B", scenes: [(sceneID, "local B")]), to: urlB)
+        let recorder = ConfirmationRecorder()
+        let appState = makeAppState(
+            url: urlA,
+            recorder: recorder,
+            closeConfirmation: { .discard }
+        )
+        defer { appState.resetProjectFileTracking() }
+
+        appState.commitScriptTextChange(sceneID: sceneID, text: "local A edit")
+        try FrameScriptFileStore.write(project: makeProject(title: "External A", scenes: [(sceneID, "external A")]), to: urlA)
+        recorder.resolution = .keepMine
+        recorder.onPrompt = {
+            appState.openProject(at: urlB)
+        }
+
+        appState.checkForExternalProjectChanges()
+
+        XCTAssertEqual(appState.project.title, "Project B")
+        XCTAssertEqual(appState.projectStore.currentFileURL, urlB)
+        XCTAssertEqual(try FrameScriptFileStore.read(from: urlA).title, "External A")
+        XCTAssertEqual(try FrameScriptFileStore.read(from: urlA).scenes.first?.scriptText, "external A")
+    }
+
+    func testOnlyProjectWindowCloseRunsTheProjectSaveFlow() throws {
+        let sceneID = UUID()
+        let url = try temporaryFileURL()
+        try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
+        let recorder = ConfirmationRecorder()
+        let appState = makeAppState(url: url, recorder: recorder, autosaveEnabled: true)
+        defer {
+            appState.setProjectWindow(nil)
+            appState.resetProjectFileTracking()
+        }
+        let projectWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let otherWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        appState.setProjectWindow(projectWindow)
+        appState.commitScriptTextChange(sceneID: sceneID, text: "project window edit")
+
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: otherWindow)
+
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).title, "Local")
+        XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
+
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: projectWindow)
+
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).scenes.first?.scriptText, "project window edit")
+        XCTAssertFalse(appState.projectStore.hasUnsavedFileChanges)
+    }
+
+    func testExistingFileWithoutBaselinePromptsInsteadOfOverwriting() throws {
+        let sceneID = UUID()
+        let url = try temporaryFileURL()
+        try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
+        let recorder = ConfirmationRecorder()
+        recorder.resolution = .cancel
+        let suite = UserDefaults(suiteName: "ProjectFileChangeDetectionTests-\(UUID().uuidString)")!
+        var settings = AppSettings.defaults
+        settings.generalPreferences.autosaveEnabled = false
+        let project = makeProject(title: "Local", scenes: [(sceneID, "local")])
+        let store = ProjectStore(project: project, projectWriter: FrameScriptFileStore.write)
+        // Bypass AppState.openProject so no baseline is recorded, mimicking a
+        // failed fingerprint read. The existing file must not be overwritten.
+        store.openProject(project, fileURL: url, wordsPerMinute: 150, markUnsaved: false)
+        let appState = AppState(
+            projectStore: store,
+            recentProjectStore: RecentProjectStore(userDefaults: suite),
+            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings"),
+            externalChangeConfirmation: {
+                recorder.count += 1
+                return recorder.resolution
+            }
+        )
+        appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
+
+        XCTAssertFalse(appState.saveProject())
+        XCTAssertEqual(recorder.count, 1)
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).title, "External")
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).scenes.first?.scriptText, "external")
+    }
+
+    func testTerminationDoesNotQuitWhenTheExternalConflictPromptIsCancelled() throws {
+        let sceneID = UUID()
+        let url = try temporaryFileURL()
+        try FrameScriptFileStore.write(project: makeProject(title: "Local", scenes: [(sceneID, "local")]), to: url)
+        let recorder = ConfirmationRecorder()
+        let appState = makeAppState(
+            url: url,
+            recorder: recorder,
+            closeConfirmation: { .save }
+        )
+        defer { appState.resetProjectFileTracking() }
+
+        appState.commitScriptTextChange(sceneID: sceneID, text: "local edit")
+        try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
+        recorder.resolution = .cancel
+
+        XCTAssertFalse(appState.confirmApplicationTermination())
+        XCTAssertFalse(appState.isTerminatingApplication)
+        XCTAssertEqual(try FrameScriptFileStore.read(from: url).title, "External")
+        XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
+    }
+
     func testExternalChangeStringsAreLocalizedInEnglishRussianAndDraftSpanish() throws {
         let keys = [
             "dialog.externalChange.title",
@@ -236,18 +409,22 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
     private func makeAppState(
         url: URL,
         recorder: ConfirmationRecorder,
+        autosaveEnabled: Bool = false,
+        closeConfirmation: AppState.CloseConfirmation? = nil,
         saveProjectCopyHandler: (@MainActor () -> Bool)? = nil
     ) -> AppState {
         let suite = UserDefaults(suiteName: "ProjectFileChangeDetectionTests-\(UUID().uuidString)")!
         var settings = AppSettings.defaults
-        settings.generalPreferences.autosaveEnabled = false
+        settings.generalPreferences.autosaveEnabled = autosaveEnabled
         let store = ProjectStore(project: SampleData.defaultProject, projectWriter: FrameScriptFileStore.write)
         let appState = AppState(
             projectStore: store,
             recentProjectStore: RecentProjectStore(userDefaults: suite),
             settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings"),
+            closeConfirmation: closeConfirmation,
             externalChangeConfirmation: {
                 recorder.count += 1
+                recorder.onPrompt?()
                 return recorder.resolution
             },
             saveProjectCopyHandler: saveProjectCopyHandler

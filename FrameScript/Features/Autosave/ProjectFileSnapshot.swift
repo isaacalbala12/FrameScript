@@ -33,11 +33,16 @@ enum ProjectFileSnapshotReader {
 /// activation also polls as a final fallback.
 @MainActor
 final class ProjectFileMonitor {
+    private let securityScope: SecurityScopedResourceAccess
     private var source: DispatchSourceFileSystemObject?
     private var watchedURL: URL?
     private var changeHandler: (@MainActor () -> Void)?
     private var pendingCheck: Task<Void, Never>?
     private var rearmTask: Task<Void, Never>?
+
+    init(securityScope: SecurityScopedResourceAccess = .live) {
+        self.securityScope = securityScope
+    }
 
     func start(watching url: URL, onChange: @escaping @MainActor () -> Void) {
         stop()
@@ -60,7 +65,9 @@ final class ProjectFileMonitor {
     private func armSource(for url: URL) {
         source?.cancel()
         source = nil
-        let descriptor = open(url.path, O_EVTONLY)
+        let descriptor = securityScope.withAccess(to: url) {
+            open(url.path, O_EVTONLY)
+        }
         guard descriptor >= 0 else { return }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
@@ -107,7 +114,10 @@ final class ProjectFileMonitor {
                     return
                 }
                 guard let self, self.watchedURL == url else { return }
-                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let exists = self.securityScope.withAccess(to: url) {
+                    FileManager.default.fileExists(atPath: url.path)
+                }
+                guard exists else { continue }
                 self.armSource(for: url)
                 self.changeHandler?()
                 return

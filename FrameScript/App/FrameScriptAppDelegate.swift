@@ -33,8 +33,8 @@ final class FrameScriptAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        appState?.flushForApplicationTermination()
-        return .terminateNow
+        guard let appState else { return .terminateNow }
+        return appState.confirmApplicationTermination() ? .terminateNow : .terminateCancel
     }
 
     static func isProjectFile(_ url: URL) -> Bool {

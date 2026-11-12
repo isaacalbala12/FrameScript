@@ -100,7 +100,7 @@ final class AutosaveTests: XCTestCase {
         XCTAssertEqual(recorder.lastWrittenProject?.scenes.first?.scriptText, "window close text")
 
         appState.commitScriptTextChange(sceneID: scene.id, text: "termination text")
-        appState.flushForApplicationTermination()
+        XCTAssertTrue(appState.confirmApplicationTermination())
         XCTAssertEqual(recorder.count, 3)
         XCTAssertEqual(recorder.lastWrittenProject?.scenes.first?.scriptText, "termination text")
     }
@@ -116,7 +116,7 @@ final class AutosaveTests: XCTestCase {
 
         appState.flushForApplicationResignation()
         appState.flushForWindowClose()
-        appState.flushForApplicationTermination()
+        XCTAssertTrue(appState.confirmApplicationTermination())
 
         XCTAssertEqual(recorder.count, 0)
     }
@@ -124,6 +124,7 @@ final class AutosaveTests: XCTestCase {
     private func makeAppState(
         scenes: [Scene],
         interval: Int,
+        closeConfirmation: AppState.CloseConfirmation? = { .save },
         projectWriter: @escaping (FrameProject, URL) throws -> Void
     ) -> AppState {
         let project = FrameProject(title: "Project", scenes: scenes)
@@ -139,7 +140,8 @@ final class AutosaveTests: XCTestCase {
         let appState = AppState(
             projectStore: store,
             recentProjectStore: RecentProjectStore(userDefaults: suite),
-            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings")
+            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings"),
+            closeConfirmation: closeConfirmation
         )
         appState.editorState.selectedSceneID = scenes.first?.id
         return appState

@@ -1563,6 +1563,7 @@ final class EditorPersistenceTests: XCTestCase {
         let fileURL = directory.appendingPathComponent("Immediate.fscr")
         let (appState, scene, _) = makeAppState(fileURL: fileURL)
         try FrameScriptFileStore.write(project: appState.project, to: fileURL)
+        appState.startTrackingProjectFile(at: fileURL)
 
         scene.scriptText = "Persist after the coalesced window"
         let clock = ContinuousClock()
