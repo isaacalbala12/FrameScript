@@ -24,7 +24,10 @@ extension FrameScriptDocument {
             document.migrateLegacySegmentLinks()
             document.migrateV3ToV4()
         default:
-            break
+            // v4 files are current, but external tools can write them too.
+            // Keep the historical read-time relationship repair.
+            document.migrateLegacySegmentLinks()
+            document.repairAnchors()
         }
         document.fileVersion = FrameScriptFormat.currentFileVersion
         try document.validateSceneIdentifiers()
