@@ -23,3 +23,7 @@ xcuserdata/
 
 # Generated repository dumps
 repomix-output.md
+
+# Swift package build output
+Packages/*/.build/
+Packages/*/.swiftpm/

@@ -3,8 +3,20 @@ import Foundation
 enum L10n {
     static func tr(_ key: String, language: AppLanguage) -> String {
         let resolvedLanguage = resolve(language)
-        return strings[resolvedLanguage]?[key] ?? strings[.english]?[key] ?? key
+        return mergedStrings[resolvedLanguage]?[key] ?? mergedStrings[.english]?[key] ?? key
     }
+
+    /// Base tables plus every feature table registered in `Localization+Features.swift`.
+    /// Base keys win over feature keys so a feature can never silently override core UI text.
+    private static let mergedStrings: [AppLanguage: [String: String]] = {
+        var merged = strings
+        for table in featureTables {
+            for (language, entries) in table {
+                merged[language, default: [:]].merge(entries) { existing, _ in existing }
+            }
+        }
+        return merged
+    }()
 
     private static func resolve(_ language: AppLanguage) -> AppLanguage {
         if language != .system {
