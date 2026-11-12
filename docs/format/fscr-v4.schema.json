@@ -1,0 +1,1599 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://framescript.app/schemas/fscr-v4.schema.json",
+  "title": "FrameScript project file (.fscr), schema version 4",
+  "description": "JSON document written by FrameScript when it saves a project. One file is one project. Strings are UTF-8 JSON strings; dates are RFC 3339 / ISO-8601 strings; UUIDs are canonical UUID strings; binary values are base64 strings.",
+  "$comment": "Forward compatibility: every object in this schema allows unknown properties (additionalProperties is true or a value schema for maps). The Swift reader ignores unknown keys and drops them when it re-writes a file, so a round-trip through the macOS app is not byte-preserving. Writers that need to keep data from newer builds should preserve unknown members themselves. Files with a fileVersion above 4 must be rejected instead of being interpreted as v4.",
+  "$ref": "#/$defs/FrameScriptDocument",
+  "$defs": {
+    "FrameScriptDocument": {
+      "type": "object",
+      "description": "Root object of a .fscr file.",
+      "properties": {
+        "fileVersion": {
+          "type": "integer",
+          "const": 4,
+          "description": "Schema version of this document. Writers always emit 4. Readers accept 1 through 4 and migrate older documents in memory; a larger value means the file was written by a newer build and must be rejected."
+        },
+        "project": {
+          "$ref": "#/$defs/Project",
+          "description": "The project payload."
+        }
+      },
+      "required": ["fileVersion", "project"],
+      "additionalProperties": true
+    },
+
+    "Project": {
+      "type": "object",
+      "description": "One video project: the script, its production data and its local publishing metadata.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Stable project identifier. Foundation writes uppercase UUID strings; readers must accept any letter case."
+        },
+        "title": {
+          "type": "string",
+          "description": "Project title as shown in the library."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp. Written as an ISO-8601 instant in UTC with six fractional digits, for example 2024-01-01T10:00:00.000000Z."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modification timestamp. Defaults to createdAt when absent in older files."
+        },
+        "templateID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional identifier of the template this project was created from."
+        },
+        "settingsOverride": {
+          "$ref": "#/$defs/ProjectSettingsOverride",
+          "description": "Optional per-project overrides for application defaults."
+        },
+        "exportPresets": {
+          "type": "array",
+          "description": "Saved export presets. Order is presentation order and has no other meaning.",
+          "items": {
+            "$ref": "#/$defs/ExportPreset"
+          }
+        },
+        "scenes": {
+          "type": "array",
+          "description": "Scenes of the script. Sort by each scene's order field; do not rely on array order.",
+          "items": {
+            "$ref": "#/$defs/Scene"
+          }
+        },
+        "primaryLanguage": {
+          "type": "string",
+          "description": "BCP-47 language code of the original script, for example \"es\". Defaults to \"es\" when absent."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Free-form topic used for classification and filtering. Empty means unset."
+        },
+        "videoType": {
+          "type": "string",
+          "description": "Free-form video type used for classification, for example \"review\". Empty means unset."
+        },
+        "productionStatus": {
+          "$ref": "#/$defs/ProductionStatus",
+          "description": "Coarse production stage shown on the dashboard. Defaults to \"idea\"."
+        },
+        "targetDate": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional date by which the video should be finished."
+        },
+        "publishDate": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional date the video is planned to be published."
+        },
+        "targetDuration": {
+          "type": "number",
+          "description": "Optional target duration of the finished video, in seconds."
+        },
+        "learnedWordsPerMinuteByLanguage": {
+          "type": "object",
+          "description": "Map from BCP-47 language code to the speech rate learned from recordings, in words per minute. JSON object with language codes as keys.",
+          "additionalProperties": {
+            "type": "number",
+            "description": "Learned words per minute for one language."
+          }
+        },
+        "assets": {
+          "type": "array",
+          "description": "Files referenced by the project.",
+          "items": {
+            "$ref": "#/$defs/ProjectAsset"
+          }
+        },
+        "publishingPacks": {
+          "type": "object",
+          "description": "Map from BCP-47 language code to the publishing pack for that language. JSON object with language codes as keys.",
+          "additionalProperties": {
+            "$ref": "#/$defs/PublishingPack"
+          }
+        },
+        "checklistTasks": {
+          "type": "array",
+          "description": "Manual production checklist.",
+          "items": {
+            "$ref": "#/$defs/ChecklistTask"
+          }
+        },
+        "rhythmThresholdsOverride": {
+          "$ref": "#/$defs/RhythmThresholds",
+          "description": "Optional per-project rhythm-review thresholds."
+        },
+        "sources": {
+          "type": "array",
+          "description": "Research sources cited by claims.",
+          "items": {
+            "$ref": "#/$defs/Source"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "description": "Factual claims checked against sources.",
+          "items": {
+            "$ref": "#/$defs/Claim"
+          }
+        },
+        "comparisonTables": {
+          "type": "array",
+          "description": "Free-form comparison tables used while researching.",
+          "items": {
+            "$ref": "#/$defs/ComparisonTable"
+          }
+        },
+        "glossary": {
+          "type": "array",
+          "description": "Translation glossary, used to keep names and technical terms stable across languages.",
+          "items": {
+            "$ref": "#/$defs/GlossaryTerm"
+          }
+        },
+        "clips": {
+          "type": "array",
+          "description": "Short-form clips derived from this project.",
+          "items": {
+            "$ref": "#/$defs/ShortClip"
+          }
+        },
+        "versionHistory": {
+          "type": "array",
+          "description": "Stored snapshots of earlier document states. Each payload is a SnapshotCodec envelope compressed with zlib and then base64-encoded; see docs/format/README.md.",
+          "items": {
+            "$ref": "#/$defs/VersionSnapshot"
+          }
+        },
+        "aiThreadMap": {
+          "$ref": "#/$defs/AIThreadMap",
+          "description": "Mapping between this project and T3 assistant threads."
+        },
+        "unparsedSections": {
+          "type": "array",
+          "description": "Sections of an imported Markdown file that the importer could not map to scenes. Preserved verbatim.",
+          "items": {
+            "$ref": "#/$defs/UnparsedSection"
+          }
+        },
+        "publishedVideos": {
+          "type": "object",
+          "description": "Map from BCP-47 language code to the imported comparison of the published video in that language. JSON object with language codes as keys.",
+          "additionalProperties": {
+            "$ref": "#/$defs/PublishedVideoComparison"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "createdAt",
+        "updatedAt",
+        "exportPresets",
+        "scenes",
+        "primaryLanguage",
+        "topic",
+        "videoType",
+        "productionStatus",
+        "learnedWordsPerMinuteByLanguage",
+        "assets",
+        "publishingPacks",
+        "checklistTasks",
+        "sources",
+        "claims",
+        "comparisonTables",
+        "glossary",
+        "clips",
+        "versionHistory",
+        "aiThreadMap",
+        "unparsedSections",
+        "publishedVideos"
+      ],
+      "additionalProperties": true
+    },
+
+    "ProjectSettingsOverride": {
+      "type": "object",
+      "description": "Per-project overrides for application defaults. Both members are optional; an empty object means \"use defaults\".",
+      "properties": {
+        "wordsPerMinute": {
+          "type": "integer",
+          "description": "Speaking rate override used for duration estimates."
+        },
+        "defaultSplitMode": {
+          "$ref": "#/$defs/SegmentType",
+          "description": "Default text segmentation mode for new scenes in this project."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+
+    "RhythmThresholds": {
+      "type": "object",
+      "description": "Per-project rhythm-review thresholds. Every member is optional; a missing member uses the application default.",
+      "properties": {
+        "longSentenceWordLimit": {
+          "type": "integer",
+          "description": "Sentences longer than this word count are flagged."
+        },
+        "uncoveredSecondsLimit": {
+          "type": "number",
+          "description": "Seconds of script text without any visual or editing note before a warning is shown."
+        },
+        "sceneLengthRatioLimit": {
+          "type": "number",
+          "description": "Maximum ratio between a scene's duration and the average scene duration."
+        },
+        "hookSecondsLimit": {
+          "type": "number",
+          "description": "Maximum duration, in seconds, that the hook may last before a warning is shown."
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+
+    "ExportPreset": {
+      "type": "object",
+      "description": "A saved export configuration.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Preset identifier."
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the preset. Defaults to an empty string."
+        },
+        "format": {
+          "$ref": "#/$defs/ExportFormat",
+          "description": "Export format produced by this preset. Defaults to \"Production outline\"."
+        }
+      },
+      "required": ["id", "name", "format"],
+      "additionalProperties": true
+    },
+
+    "Scene": {
+      "type": "object",
+      "description": "One scene (beat) of the script, with its script text, segments and attached production notes.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Scene identifier. Must be unique within the project."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Zero-based position of the scene inside the project. Sort by this value; array order is not authoritative."
+        },
+        "sectionType": {
+          "$ref": "#/$defs/SectionType",
+          "description": "Narrative role of the scene. Defaults to \"Custom\"."
+        },
+        "title": {
+          "type": "string",
+          "description": "Scene heading."
+        },
+        "scriptText": {
+          "type": "string",
+          "description": "Script text of the scene exactly as typed. Text anchors and segment offsets are measured in UTF-16 code units of this string."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form scene notes."
+        },
+        "estimatedDuration": {
+          "type": "number",
+          "description": "Estimated spoken duration in seconds."
+        },
+        "textSegments": {
+          "type": "array",
+          "description": "Segments of scriptText used for timing and navigation.",
+          "items": {
+            "$ref": "#/$defs/TextSegment"
+          }
+        },
+        "aiComments": {
+          "type": "array",
+          "description": "Script-review comments, possibly produced by an assistant.",
+          "items": {
+            "$ref": "#/$defs/AIComment"
+          }
+        },
+        "bRollItems": {
+          "type": "array",
+          "description": "B-roll (visual) notes attached to this scene.",
+          "items": {
+            "$ref": "#/$defs/BRollItem"
+          }
+        },
+        "editingItems": {
+          "type": "array",
+          "description": "Editing notes attached to this scene.",
+          "items": {
+            "$ref": "#/$defs/EditingItem"
+          }
+        },
+        "targetDuration": {
+          "type": "number",
+          "description": "Optional target duration for this scene, in seconds."
+        },
+        "takes": {
+          "type": "array",
+          "description": "Recorded takes of the original-language script.",
+          "items": {
+            "$ref": "#/$defs/Take"
+          }
+        },
+        "languageVariants": {
+          "type": "array",
+          "description": "Translated versions of the scene. B-roll and editing notes stay shared with the original scene.",
+          "items": {
+            "$ref": "#/$defs/SceneLanguageVariant"
+          }
+        },
+        "obsSceneName": {
+          "type": "string",
+          "description": "Optional OBS scene that should be live while recording this scene."
+        }
+      },
+      "required": [
+        "id",
+        "order",
+        "sectionType",
+        "title",
+        "scriptText",
+        "notes",
+        "estimatedDuration",
+        "textSegments",
+        "aiComments",
+        "bRollItems",
+        "editingItems",
+        "takes",
+        "languageVariants"
+      ],
+      "additionalProperties": true
+    },
+
+    "TextSegment": {
+      "type": "object",
+      "description": "A range of a scene's script text used for timing estimates and as an anchor target.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Segment identifier."
+        },
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Identifier of the owning scene. Must equal the enclosing scene's id."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Zero-based position of the segment within the scene."
+        },
+        "sourceText": {
+          "type": "string",
+          "description": "Trimmed text of the segment. Not necessarily a substring of scriptText: separators are removed and whitespace is normalized."
+        },
+        "segmentType": {
+          "$ref": "#/$defs/SegmentType",
+          "description": "Granularity used to split the scene. Defaults to \"scene\"."
+        },
+        "timingEstimate": {
+          "type": "number",
+          "description": "Estimated spoken duration of the segment, in seconds."
+        }
+      },
+      "required": ["id", "sceneID", "order", "sourceText", "segmentType", "timingEstimate"],
+      "additionalProperties": true
+    },
+
+    "AIComment": {
+      "type": "object",
+      "description": "A script-review comment, optionally anchored to a scene or text segment.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Comment identifier."
+        },
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene the comment refers to."
+        },
+        "segmentID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional text segment the comment refers to."
+        },
+        "type": {
+          "type": "string",
+          "description": "Free-form category tag such as \"pacing\" or \"clarity\". Empty means uncategorized."
+        },
+        "severity": {
+          "$ref": "#/$defs/AICommentSeverity",
+          "description": "Importance of the comment. Defaults to \"note\"."
+        },
+        "message": {
+          "type": "string",
+          "description": "Comment body."
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "Suggested replacement text, if any."
+        },
+        "status": {
+          "$ref": "#/$defs/AICommentStatus",
+          "description": "Review state of the comment. Defaults to \"new\"."
+        }
+      },
+      "required": ["id", "type", "severity", "message", "suggestion", "status"],
+      "additionalProperties": true
+    },
+
+    "BRollItem": {
+      "type": "object",
+      "description": "A B-roll (visual) note, attached either to a text anchor or to a text segment.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "B-roll item identifier."
+        },
+        "textAnchor": {
+          "$ref": "#/$defs/TextAnchor",
+          "description": "Optional anchor into the scene's scriptText."
+        },
+        "linkedSegmentID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional text segment this note follows. Legacy v1 files stored only this link; the migration derives textAnchor from it."
+        },
+        "templateType": {
+          "type": "string",
+          "description": "Free-form template or shot type label, for example \"wide\"."
+        },
+        "sourceType": {
+          "$ref": "#/$defs/BRollSourceType",
+          "description": "Kind of footage suggested. Defaults to \"Custom\"."
+        },
+        "descriptionText": {
+          "type": "string",
+          "description": "What should be on screen."
+        },
+        "mood": {
+          "type": "string",
+          "description": "Desired mood of the shot."
+        },
+        "framing": {
+          "type": "string",
+          "description": "Desired framing of the shot."
+        },
+        "motion": {
+          "type": "string",
+          "description": "Desired camera or subject motion."
+        },
+        "duration": {
+          "type": "number",
+          "description": "Planned duration in seconds. Zero means unspecified."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes for the editor."
+        },
+        "status": {
+          "$ref": "#/$defs/BRollStatus",
+          "description": "Sourcing state of the item. Defaults to \"Idea\"."
+        }
+      },
+      "required": [
+        "id",
+        "templateType",
+        "sourceType",
+        "descriptionText",
+        "mood",
+        "framing",
+        "motion",
+        "duration",
+        "notes",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+
+    "EditingItem": {
+      "type": "object",
+      "description": "An editing note, attached either to a text anchor or to a text segment.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Editing item identifier."
+        },
+        "textAnchor": {
+          "$ref": "#/$defs/TextAnchor",
+          "description": "Optional anchor into the scene's scriptText."
+        },
+        "linkedSegmentID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional text segment this note follows."
+        },
+        "templateType": {
+          "type": "string",
+          "description": "Free-form template label for the note."
+        },
+        "description": {
+          "type": "string",
+          "description": "Cut style. Persisted under the historical key \"description\" so v1-v3 tooling can still read it. Writers must emit this key; readers should also accept the legacy alias \"cutStyle\" when \"description\" is absent."
+        },
+        "cutStyle": {
+          "type": "string",
+          "deprecated": true,
+          "description": "Read-only legacy alias for \"description\". Accepted on input and ignored when both keys are present. Never written by FrameScript 4."
+        },
+        "transition": {
+          "type": "string",
+          "description": "Transition into the next scene."
+        },
+        "subtitleStyle": {
+          "type": "string",
+          "description": "Subtitle treatment for this moment."
+        },
+        "emphasis": {
+          "type": "string",
+          "description": "Emphasis treatment, for example a punch-in or bold caption."
+        },
+        "zoom": {
+          "type": "string",
+          "description": "Zoom instruction, stored as free-form text such as \"110%\"."
+        },
+        "sfx": {
+          "type": "string",
+          "description": "Sound effect cue."
+        },
+        "musicCue": {
+          "type": "string",
+          "description": "Music cue."
+        },
+        "graphics": {
+          "type": "string",
+          "description": "On-screen graphic cue."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form notes for the editor."
+        },
+        "status": {
+          "$ref": "#/$defs/EditingStatus",
+          "description": "Whether the note has been applied. Defaults to \"pending\"."
+        }
+      },
+      "required": [
+        "id",
+        "templateType",
+        "description",
+        "transition",
+        "subtitleStyle",
+        "emphasis",
+        "zoom",
+        "sfx",
+        "musicCue",
+        "graphics",
+        "notes",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+
+    "Take": {
+      "type": "object",
+      "description": "One recorded take of a scene, in the original language or in a translated variant.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Take identifier."
+        },
+        "number": {
+          "type": "integer",
+          "description": "One-based take number shown to the creator. Defaults to 1."
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Recording start instant. Defaults to 1970-01-01T00:00:00Z when absent."
+        },
+        "duration": {
+          "type": "number",
+          "description": "Recorded duration in seconds."
+        },
+        "filePath": {
+          "type": "string",
+          "description": "Path of the recorded file, as shown to the user. Empty when the take has no file yet."
+        },
+        "bookmarkData": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Optional base64-encoded macOS security-scoped bookmark for filePath. Other platforms can ignore it and use filePath."
+        },
+        "rating": {
+          "$ref": "#/$defs/TakeRating",
+          "description": "Rating given while recording. Defaults to \"unrated\"."
+        },
+        "note": {
+          "type": "string",
+          "description": "Free-form note about the take."
+        },
+        "languageCode": {
+          "type": "string",
+          "description": "BCP-47 language code of the spoken text. Empty means the scene's original language."
+        },
+        "readText": {
+          "type": "string",
+          "description": "Text that was shown in the teleprompter while recording this take."
+        },
+        "sceneTextHash": {
+          "type": "string",
+          "description": "FNV-1a 64-bit hash of the scene text at recording time, rendered as lowercase hexadecimal without zero padding. Used to detect stale takes."
+        }
+      },
+      "required": [
+        "id",
+        "number",
+        "startedAt",
+        "duration",
+        "filePath",
+        "rating",
+        "note",
+        "languageCode",
+        "readText",
+        "sceneTextHash"
+      ],
+      "additionalProperties": true
+    },
+
+    "SceneLanguageVariant": {
+      "type": "object",
+      "description": "One translated version of a scene. Takes, durations and text are per language; B-roll and editing notes live on the original scene.",
+      "properties": {
+        "languageCode": {
+          "type": "string",
+          "description": "BCP-47 language code of this variant. Empty means unspecified."
+        },
+        "text": {
+          "type": "string",
+          "description": "Translated script text."
+        },
+        "sourceHash": {
+          "type": "string",
+          "description": "FNV-1a 64-bit hash of the original scene text this translation was produced from. Compare with a fresh hash to detect stale translations."
+        },
+        "takes": {
+          "type": "array",
+          "description": "Recorded takes of this translated text.",
+          "items": {
+            "$ref": "#/$defs/Take"
+          }
+        },
+        "estimatedDuration": {
+          "type": "number",
+          "description": "Estimated spoken duration of the translated text, in seconds."
+        },
+        "actualDuration": {
+          "type": "number",
+          "description": "Measured duration of the recorded takes, in seconds."
+        }
+      },
+      "required": [
+        "languageCode",
+        "text",
+        "sourceHash",
+        "takes",
+        "estimatedDuration",
+        "actualDuration"
+      ],
+      "additionalProperties": true
+    },
+
+    "TextAnchor": {
+      "type": "object",
+      "description": "A selection inside a scene's scriptText. Offsets use UTF-16 code units, the same unit as JavaScript String.length, Java char indices and NSRange. The selected text plus a little surrounding context lets a reader relocate the selection after the script was edited.",
+      "properties": {
+        "startUTF16": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based offset of the first selected UTF-16 code unit within scriptText."
+        },
+        "lengthUTF16": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of selected UTF-16 code units. May differ from selectedText.count when the text contains characters outside the Basic Multilingual Plane, such as emoji."
+        },
+        "selectedText": {
+          "type": "string",
+          "description": "The selected substring. Used as the primary repair key when the offset no longer matches."
+        },
+        "prefixContext": {
+          "type": "string",
+          "description": "Up to 48 UTF-16 code units immediately before the selection, snapped to composed character boundaries. Empty when the selection starts at the beginning of the text."
+        },
+        "suffixContext": {
+          "type": "string",
+          "description": "Up to 48 UTF-16 code units immediately after the selection, snapped to composed character boundaries. Empty when the selection ends at the end of the text."
+        }
+      },
+      "required": ["startUTF16", "lengthUTF16", "selectedText", "prefixContext", "suffixContext"],
+      "additionalProperties": true
+    },
+
+    "ProjectAsset": {
+      "type": "object",
+      "description": "A file referenced by the project, tracked independently of the scenes that use it.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Asset identifier."
+        },
+        "path": {
+          "type": "string",
+          "description": "Path of the file, as shown to the user."
+        },
+        "bookmarkData": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Optional base64-encoded macOS security-scoped bookmark for path. Other platforms can ignore it."
+        },
+        "kind": {
+          "$ref": "#/$defs/AssetKind",
+          "description": "Source tag for the asset. Defaults to \"web\"."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Free-form tags used for filtering.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "linkedSceneIDs": {
+          "type": "array",
+          "description": "Scenes that reference this asset. The migration drops identifiers that do not resolve.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "linkedBRollItemIDs": {
+          "type": "array",
+          "description": "B-roll items that reference this asset. The migration drops identifiers that do not resolve.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "linkedTakeIDs": {
+          "type": "array",
+          "description": "Takes recorded into this asset. The migration drops identifiers that do not resolve.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "isCopiedIntoProject": {
+          "type": "boolean",
+          "description": "True when the file was copied into the project instead of being referenced in place."
+        },
+        "duration": {
+          "type": "number",
+          "description": "Optional media duration in seconds."
+        },
+        "fileSize": {
+          "type": "integer",
+          "description": "Optional file size in bytes, as a signed 64-bit integer."
+        },
+        "modifiedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional filesystem modification time recorded during the last check."
+        },
+        "isLastKnownMissing": {
+          "type": "boolean",
+          "description": "True when the last filesystem check could not find the file."
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "kind",
+        "tags",
+        "linkedSceneIDs",
+        "linkedBRollItemIDs",
+        "linkedTakeIDs",
+        "isCopiedIntoProject",
+        "isLastKnownMissing"
+      ],
+      "additionalProperties": true
+    },
+
+    "ChapterOverride": {
+      "type": "object",
+      "description": "A manual override for one YouTube chapter.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Override identifier."
+        },
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene this chapter is derived from."
+        },
+        "title": {
+          "type": "string",
+          "description": "Chapter title shown in the published video."
+        },
+        "startSeconds": {
+          "type": "number",
+          "description": "Optional manual start time of the chapter, in seconds from the beginning of the video."
+        },
+        "isExcluded": {
+          "type": "boolean",
+          "description": "True when this chapter should not be emitted."
+        }
+      },
+      "required": ["id", "title", "isExcluded"],
+      "additionalProperties": true
+    },
+
+    "ThumbnailVariant": {
+      "type": "object",
+      "description": "A thumbnail candidate paired with a title idea.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Variant identifier."
+        },
+        "assetID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional asset holding the thumbnail image."
+        },
+        "pairedTitle": {
+          "type": "string",
+          "description": "Title text that should be shown next to this thumbnail."
+        },
+        "isChosen": {
+          "type": "boolean",
+          "description": "True for the variant the creator picked."
+        }
+      },
+      "required": ["id", "pairedTitle", "isChosen"],
+      "additionalProperties": true
+    },
+
+    "PublishingPack": {
+      "type": "object",
+      "description": "Everything needed to publish the video in one language.",
+      "properties": {
+        "titleCandidates": {
+          "type": "array",
+          "description": "Candidate titles.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "chosenTitle": {
+          "type": "string",
+          "description": "Title that will be published."
+        },
+        "description": {
+          "type": "string",
+          "description": "Video description."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Platform tags.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hashtags": {
+          "type": "array",
+          "description": "Hashtags, including the leading \"#\".",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pinnedComment": {
+          "type": "string",
+          "description": "Comment to pin under the published video."
+        },
+        "communityPost": {
+          "type": "string",
+          "description": "Text for a community post announcing the video."
+        },
+        "chapterOverrides": {
+          "type": "array",
+          "description": "Manual chapter overrides.",
+          "items": {
+            "$ref": "#/$defs/ChapterOverride"
+          }
+        },
+        "thumbnailVariants": {
+          "type": "array",
+          "description": "Thumbnail candidates.",
+          "items": {
+            "$ref": "#/$defs/ThumbnailVariant"
+          }
+        },
+        "thumbnailConceptNotes": {
+          "type": "string",
+          "description": "Free-form notes about the thumbnail concept."
+        }
+      },
+      "required": [
+        "titleCandidates",
+        "chosenTitle",
+        "description",
+        "tags",
+        "hashtags",
+        "pinnedComment",
+        "communityPost",
+        "chapterOverrides",
+        "thumbnailVariants",
+        "thumbnailConceptNotes"
+      ],
+      "additionalProperties": true
+    },
+
+    "ChecklistTask": {
+      "type": "object",
+      "description": "One manual production task.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Task identifier."
+        },
+        "text": {
+          "type": "string",
+          "description": "Task text."
+        },
+        "kind": {
+          "$ref": "#/$defs/ChecklistTaskKind",
+          "description": "Category of the task. Defaults to \"other\"."
+        },
+        "isDone": {
+          "type": "boolean",
+          "description": "True when the task is complete."
+        },
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene the task belongs to."
+        }
+      },
+      "required": ["id", "text", "kind", "isDone"],
+      "additionalProperties": true
+    },
+
+    "Source": {
+      "type": "object",
+      "description": "A research source.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Source identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Source title."
+        },
+        "url": {
+          "type": "string",
+          "description": "Source URL. Empty when the source is offline."
+        },
+        "note": {
+          "type": "string",
+          "description": "Free-form note about the source."
+        }
+      },
+      "required": ["id", "title", "url", "note"],
+      "additionalProperties": true
+    },
+
+    "Claim": {
+      "type": "object",
+      "description": "A factual claim that must be checked against sources before publishing.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Claim identifier."
+        },
+        "text": {
+          "type": "string",
+          "description": "The claim."
+        },
+        "status": {
+          "$ref": "#/$defs/ClaimStatus",
+          "description": "Verification state. Defaults to \"probable\"."
+        },
+        "sourceIDs": {
+          "type": "array",
+          "description": "Sources that support or discuss the claim. The migration drops identifiers that do not resolve.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "sceneIDs": {
+          "type": "array",
+          "description": "Scenes where the claim is stated. The migration drops identifiers that do not resolve.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "required": ["id", "text", "status", "sourceIDs", "sceneIDs"],
+      "additionalProperties": true
+    },
+
+    "ComparisonTable": {
+      "type": "object",
+      "description": "A free-form comparison table used while researching.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Table identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Table title."
+        },
+        "header": {
+          "type": "array",
+          "description": "Column headers.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "description": "Row-major cells. Rows are not required to have the same length as header.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": ["id", "title", "header", "rows"],
+      "additionalProperties": true
+    },
+
+    "GlossaryTerm": {
+      "type": "object",
+      "description": "A term that must be translated consistently.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Term identifier."
+        },
+        "source": {
+          "type": "string",
+          "description": "Term in the original language."
+        },
+        "target": {
+          "type": "string",
+          "description": "Preferred translation."
+        },
+        "isProtected": {
+          "type": "boolean",
+          "description": "True when the term must not be translated and should be copied verbatim."
+        }
+      },
+      "required": ["id", "source", "target", "isProtected"],
+      "additionalProperties": true
+    },
+
+    "ShortClip": {
+      "type": "object",
+      "description": "A short-form clip derived from one or more scenes.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Clip identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Internal clip title."
+        },
+        "sourceSceneIDs": {
+          "type": "array",
+          "description": "Scenes the clip is cut from.",
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "anchorSceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene the anchor refers to. When set, anchor is measured inside that scene's scriptText."
+        },
+        "anchor": {
+          "$ref": "#/$defs/TextAnchor",
+          "description": "Optional anchor into anchorSceneID's scriptText."
+        },
+        "hook": {
+          "type": "string",
+          "description": "Opening hook of the clip."
+        },
+        "adaptedText": {
+          "type": "string",
+          "description": "Script adapted for the short format."
+        },
+        "targetSeconds": {
+          "type": "number",
+          "description": "Target duration in seconds. Defaults to 30."
+        },
+        "format": {
+          "$ref": "#/$defs/ShortClipFormat",
+          "description": "Destination short format. Defaults to \"reel\"."
+        },
+        "onScreenText": {
+          "type": "string",
+          "description": "Text that should appear on screen."
+        },
+        "description": {
+          "type": "string",
+          "description": "Caption or description for the published clip."
+        },
+        "hashtags": {
+          "type": "array",
+          "description": "Hashtags, including the leading \"#\".",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sourceHash": {
+          "type": "string",
+          "description": "FNV-1a 64-bit hash of the source text the clip was adapted from, as lowercase hexadecimal without padding."
+        },
+        "languageCode": {
+          "type": "string",
+          "description": "BCP-47 language code of the clip. Empty means the project's primary language."
+        },
+        "sceneSourceHashes": {
+          "type": "array",
+          "description": "Per-scene source hashes, used to detect stale clips after a scene was rewritten.",
+          "items": {
+            "$ref": "#/$defs/ShortClipSceneSourceHash"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/ShortClipStatus",
+          "description": "Lifecycle state of the clip. Defaults to \"idea\"."
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "sourceSceneIDs",
+        "hook",
+        "adaptedText",
+        "targetSeconds",
+        "format",
+        "onScreenText",
+        "description",
+        "hashtags",
+        "sourceHash",
+        "languageCode",
+        "sceneSourceHashes",
+        "status"
+      ],
+      "additionalProperties": true
+    },
+
+    "ShortClipSceneSourceHash": {
+      "type": "object",
+      "description": "Hash of one scene's text at the time a clip was derived from it.",
+      "properties": {
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Scene identifier."
+        },
+        "hash": {
+          "type": "string",
+          "description": "FNV-1a 64-bit hash of the scene's scriptText, as lowercase hexadecimal without padding."
+        }
+      },
+      "required": ["sceneID", "hash"],
+      "additionalProperties": true
+    },
+
+    "VersionSnapshot": {
+      "type": "object",
+      "description": "One entry of the in-project version history. The payload is a compressed SnapshotCodec envelope, not plain JSON: base64-decode it, then inflate the zlib payload described in docs/format/README.md.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Snapshot identifier."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation instant. Defaults to 1970-01-01T00:00:00Z when absent."
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional user-visible name. Absent for unnamed automatic snapshots."
+        },
+        "isAutomatic": {
+          "type": "boolean",
+          "description": "True when the snapshot was taken automatically."
+        },
+        "label": {
+          "type": "string",
+          "description": "Short free-form label, for example \"manual\". May be empty."
+        },
+        "compressedPayload": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "description": "Base64 of the SnapshotCodec envelope: 28-byte little-endian header (magic \"FSSC\", version 1, flags 0, two reserved zero bytes, uncompressed length, compressed length, CRC-32) followed by a zlib stream of the UTF-8 JSON document. Empty string for an empty payload."
+        }
+      },
+      "required": ["id", "createdAt", "isAutomatic", "label", "compressedPayload"],
+      "additionalProperties": true
+    },
+
+    "AIThreadMap": {
+      "type": "object",
+      "description": "Links this project to assistant threads maintained by T3.",
+      "properties": {
+        "t3ProjectID": {
+          "type": "string",
+          "description": "T3 project identifier. Empty when the project is not linked."
+        },
+        "threadIDsByProviderModel": {
+          "type": "object",
+          "description": "Map from \"provider/model\" to thread identifier. JSON object with provider/model strings as keys.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": ["t3ProjectID", "threadIDsByProviderModel"],
+      "additionalProperties": true
+    },
+
+    "UnparsedSection": {
+      "type": "object",
+      "description": "A Markdown section preserved verbatim because the importer could not map it to scenes.",
+      "properties": {
+        "heading": {
+          "type": "string",
+          "description": "Heading line of the section, without the leading \"#\" markers."
+        },
+        "body": {
+          "type": "string",
+          "description": "Section body, unchanged."
+        }
+      },
+      "required": ["heading", "body"],
+      "additionalProperties": true
+    },
+
+    "PublishedVideoComparison": {
+      "type": "object",
+      "description": "Comparison between a published video and the planned script, imported from a transcript and retention report.",
+      "properties": {
+        "videoID": {
+          "type": "string",
+          "description": "Platform identifier of the published video."
+        },
+        "url": {
+          "type": "string",
+          "description": "Public URL of the published video."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title the video was published with."
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional publication instant."
+        },
+        "transcriptSegments": {
+          "type": "array",
+          "description": "Transcript of the published audio.",
+          "items": {
+            "$ref": "#/$defs/TranscriptSegment"
+          }
+        },
+        "retentionPoints": {
+          "type": "array",
+          "description": "Retention curve samples.",
+          "items": {
+            "$ref": "#/$defs/RetentionPoint"
+          }
+        },
+        "sceneResults": {
+          "type": "array",
+          "description": "Per-scene comparison results.",
+          "items": {
+            "$ref": "#/$defs/PublishedVideoComparisonSceneResult"
+          }
+        },
+        "learnings": {
+          "type": "string",
+          "description": "Free-form takeaways from the comparison."
+        },
+        "importedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Instant the comparison was imported. Defaults to 1970-01-01T00:00:00Z when absent."
+        }
+      },
+      "required": [
+        "videoID",
+        "url",
+        "title",
+        "transcriptSegments",
+        "retentionPoints",
+        "sceneResults",
+        "learnings",
+        "importedAt"
+      ],
+      "additionalProperties": true
+    },
+
+    "PublishedVideoComparisonSceneResult": {
+      "type": "object",
+      "description": "Comparison result for one scripted scene.",
+      "properties": {
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Scene the result refers to."
+        },
+        "realStart": {
+          "type": "number",
+          "description": "Start of the scene in the published video, in seconds."
+        },
+        "realEnd": {
+          "type": "number",
+          "description": "End of the scene in the published video, in seconds."
+        },
+        "addedWords": {
+          "type": "integer",
+          "description": "Words spoken in the published video that are not in the script."
+        },
+        "removedWords": {
+          "type": "integer",
+          "description": "Script words that were not spoken."
+        },
+        "coverage": {
+          "type": "number",
+          "description": "Fraction of the scripted scene that made it into the published video, 0 to 1."
+        },
+        "avgRetention": {
+          "type": "number",
+          "description": "Average retention during the scene, as a fraction 0 to 1."
+        },
+        "dropMagnitude": {
+          "type": "number",
+          "description": "How strongly retention dropped during the scene, as a fraction 0 to 1."
+        }
+      },
+      "required": [
+        "sceneID",
+        "realStart",
+        "realEnd",
+        "addedWords",
+        "removedWords",
+        "coverage",
+        "avgRetention",
+        "dropMagnitude"
+      ],
+      "additionalProperties": true
+    },
+
+    "TranscriptSegment": {
+      "type": "object",
+      "description": "One timed line of a published video's transcript.",
+      "properties": {
+        "start": {
+          "type": "number",
+          "description": "Start time in seconds from the beginning of the video."
+        },
+        "end": {
+          "type": "number",
+          "description": "End time in seconds from the beginning of the video."
+        },
+        "text": {
+          "type": "string",
+          "description": "Transcript text."
+        }
+      },
+      "required": ["start", "end", "text"],
+      "additionalProperties": true
+    },
+
+    "RetentionPoint": {
+      "type": "object",
+      "description": "One sample of the audience-retention curve.",
+      "properties": {
+        "time": {
+          "type": "number",
+          "description": "Seconds since the start of the published video."
+        },
+        "percent": {
+          "type": "number",
+          "description": "Percentage of viewers still watching at that time, 0 to 100. Fractional values are allowed."
+        }
+      },
+      "required": ["time", "percent"],
+      "additionalProperties": true
+    },
+
+    "SectionType": {
+      "type": "string",
+      "description": "Narrative role of a scene. Raw values are persisted and must never change.",
+      "enum": [
+        "Hook",
+        "Problem",
+        "Why this matters",
+        "Explanation",
+        "Example",
+        "Takeaway",
+        "CTA",
+        "Custom"
+      ]
+    },
+
+    "SegmentType": {
+      "type": "string",
+      "description": "Granularity used to split a scene's script text into segments.",
+      "enum": ["scene", "paragraph", "sentence"]
+    },
+
+    "BRollSourceType": {
+      "type": "string",
+      "description": "Kind of footage a B-roll note asks for. Raw values are persisted and must never change.",
+      "enum": [
+        "Stock footage",
+        "Talking head",
+        "Screen recording",
+        "Animation",
+        "Infographic",
+        "Text on screen",
+        "Meme / insert",
+        "Product shot",
+        "Screenshot",
+        "Custom"
+      ]
+    },
+
+    "BRollStatus": {
+      "type": "string",
+      "description": "Sourcing state of a B-roll item.",
+      "enum": ["Idea", "Planned", "Sourced", "Done"]
+    },
+
+    "AICommentStatus": {
+      "type": "string",
+      "description": "Review state of an assistant comment.",
+      "enum": ["new", "dismissed", "applied"]
+    },
+
+    "AICommentSeverity": {
+      "type": "string",
+      "description": "Importance of an assistant comment.",
+      "enum": ["note", "suggestion", "important"]
+    },
+
+    "ExportFormat": {
+      "type": "string",
+      "description": "Format produced by an export preset. Raw values are persisted and must never change.",
+      "enum": ["Plain text", "Markdown", "CSV", "Production outline"]
+    },
+
+    "EditingStatus": {
+      "type": "string",
+      "description": "Whether an editing note has been applied.",
+      "enum": ["pending", "done"]
+    },
+
+    "ProductionStatus": {
+      "type": "string",
+      "description": "Coarse production stage of the project.",
+      "enum": ["idea", "outline", "script", "recorded", "edited", "published"]
+    },
+
+    "TakeRating": {
+      "type": "string",
+      "description": "Rating given to a recorded take.",
+      "enum": ["good", "bad", "safe", "unrated"]
+    },
+
+    "AssetKind": {
+      "type": "string",
+      "description": "Source tag for a project asset. Raw values are persisted and must never change.",
+      "enum": ["CAM", "OBS", "screenshot", "web", "music", "graphic", "thumbnail"]
+    },
+
+    "ClaimStatus": {
+      "type": "string",
+      "description": "Verification state of a claim.",
+      "enum": ["confirmed", "probable", "rumor"]
+    },
+
+    "ChecklistTaskKind": {
+      "type": "string",
+      "description": "Category of a manual production task.",
+      "enum": ["record", "acquire", "edit", "research", "other"]
+    },
+
+    "ShortClipFormat": {
+      "type": "string",
+      "description": "Destination format of a short clip.",
+      "enum": ["reel", "short", "story"]
+    },
+
+    "ShortClipStatus": {
+      "type": "string",
+      "description": "Lifecycle state of a short clip.",
+      "enum": ["idea", "draft", "ready", "published"]
+    }
+  }
+}

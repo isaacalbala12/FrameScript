@@ -222,7 +222,9 @@ struct DocumentFormatTests {
         )
     }
 
-    fileprivate static func fullDocument() -> FrameScriptDocument {
+    // Shared with FormatSchemaTests, which validates the encoding against the
+    // published JSON Schema. Keep every optional property populated here.
+    static func fullDocument() -> FrameScriptDocument {
         let projectID = UUID()
         let templateID = UUID()
         let sceneID = UUID()
