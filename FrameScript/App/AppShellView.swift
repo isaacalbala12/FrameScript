@@ -69,6 +69,7 @@ struct AppRootView: View {
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }
+            .background(ProjectWindowReader { appState.setProjectWindow($0) })
     }
 }
 

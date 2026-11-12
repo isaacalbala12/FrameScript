@@ -75,10 +75,29 @@ struct NewProjectRequest: Identifiable, Equatable {
     var showsTemplateBrowser = false
 }
 
+/// What the user chose when the project file changed outside FrameScript.
+enum ExternalProjectChangeResolution {
+    case reload
+    case keepMine
+    case saveCopy
+    case cancel
+}
+
+/// Result of the pre-write check. `.handled` means the conflict workflow
+/// already reloaded or wrote the file, so the caller must not write again.
+/// `.declined` means the user already declined this exact on-disk hash and a
+/// background autosave must skip it without prompting again.
+enum ProjectFileWriteAuthorization {
+    case proceed
+    case handled
+    case declined
+    case failed
+}
+
 @MainActor
 @Observable
 final class AppState {
-    private static let projectFilesLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FrameScript", category: "ProjectFiles")
+    static let projectFilesLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FrameScript", category: "ProjectFiles")
     private static let exportLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FrameScript", category: "Export")
 #if DEBUG
     private static let autocompleteLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FrameScript", category: "Autocomplete")
@@ -86,6 +105,8 @@ final class AppState {
     typealias ExportFolderBookmarkCreator = @MainActor @Sendable (URL) throws -> Data
     typealias ExportFolderBookmarkResolver = @MainActor @Sendable (Data, inout Bool) throws -> URL
     typealias CloseConfirmation = @MainActor () -> CloseConfirmationResult
+    typealias ExternalProjectChangeConfirmation = @MainActor () -> ExternalProjectChangeResolution
+    typealias SaveAsDestinationProvider = @MainActor () -> URL?
 
     enum CloseConfirmationResult {
         case save, discard, cancel
@@ -101,14 +122,26 @@ final class AppState {
     let themeManager: ResolvedThemeManager
     let dependencies: AppDependencies
     private let aiProviderConfigurationStore: AIProviderConfigurationStore
-    private let securityScope: SecurityScopedResourceAccess
+    let securityScope: SecurityScopedResourceAccess
     private let exportFolderBookmarkCreator: ExportFolderBookmarkCreator
     private let exportFolderBookmarkResolver: ExportFolderBookmarkResolver
     private let closeConfirmation: CloseConfirmation?
+    let externalChangeConfirmation: ExternalProjectChangeConfirmation?
+    let saveProjectCopyHandler: (@MainActor () -> Bool)?
+    let saveAsDestinationProvider: SaveAsDestinationProvider?
 
     var templates: [FrameTemplate]
     private let builtInTemplates: [FrameTemplate]
     private var autosaveTask: Task<Void, Never>?
+    var trackedProjectFileURL: URL?
+    var trackedProjectFileSnapshot: ProjectFileSnapshot?
+    var declinedExternalProjectSnapshot: ProjectFileSnapshot?
+    var projectFileMonitor: ProjectFileMonitor?
+    var externalChangePromptIsActive = false
+    var isConfirmingTermination = false
+    var isTerminatingApplication = false
+    weak var projectWindow: NSWindow?
+    var projectWindowCloseObserver: NSObjectProtocol?
     private var segmentRebuildTasks: [UUID: Task<Void, Never>] = [:]
     private var autocompleteCooldowns: [AIProviderKind: Date] = [:]
     var autocompleteIssue: AutocompleteProviderIssue?
@@ -134,6 +167,9 @@ final class AppState {
         aiProviderConfigurationStore: AIProviderConfigurationStore = AIProviderConfigurationStore(),
         securityScope: SecurityScopedResourceAccess = .live,
         closeConfirmation: CloseConfirmation? = nil,
+        externalChangeConfirmation: ExternalProjectChangeConfirmation? = nil,
+        saveProjectCopyHandler: (@MainActor () -> Bool)? = nil,
+        saveAsDestinationProvider: SaveAsDestinationProvider? = nil,
         exportFolderBookmarkCreator: @escaping ExportFolderBookmarkCreator = { url in
             try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
         },
@@ -154,6 +190,9 @@ final class AppState {
         self.aiProviderConfigurationStore = aiProviderConfigurationStore
         self.securityScope = securityScope
         self.closeConfirmation = closeConfirmation
+        self.externalChangeConfirmation = externalChangeConfirmation
+        self.saveProjectCopyHandler = saveProjectCopyHandler
+        self.saveAsDestinationProvider = saveAsDestinationProvider
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
@@ -359,6 +398,7 @@ final class AppState {
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
         projectStore.openProject(project, fileURL: nil, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: true)
+        resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
         editorState.isFocusModeEnabled = false
@@ -375,6 +415,7 @@ final class AppState {
             markUnsaved: false,
             origin: .builtInDemo
         )
+        resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
         projectStore.clearDemoDirtyState()
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
@@ -401,6 +442,7 @@ final class AppState {
             rememberRecentProject(url)
             projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
             setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
+            startTrackingProjectFile(at: url)
         } catch {
             Self.projectFilesLogger.error("Operation project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             errorCenter.present(AppError.project(error, fileURL: url, operation: .read))
@@ -427,6 +469,7 @@ final class AppState {
                 rememberRecentProject(url)
                 projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
                 setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
+                startTrackingProjectFile(at: url)
             }
         } catch RecentProjectStoreError.missingFile {
             recentProjectStore.remove(id: entry.id)
@@ -449,15 +492,22 @@ final class AppState {
     func saveProject() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        guard let url = projectStore.currentFileURL else { return saveProjectAs() }
+        switch prepareProjectFileForWrite() {
+        case .proceed:
+            break
+        case .handled:
+            return true
+        case .declined, .failed:
+            return false
+        }
         do {
-            guard let url = projectStore.currentFileURL else { return saveProjectAs() }
             try securityScope.withAccess(to: url) {
                 try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             }
+            recordProjectFileSnapshot(at: url)
             errorCenter.clearAutosaveFailureSuppression()
-            if let currentFileURL = projectStore.currentFileURL {
-                rememberRecentProject(currentFileURL)
-            }
+            rememberRecentProject(url)
             return true
         } catch {
             Self.projectFilesLogger.error("Operation project-save failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -470,14 +520,22 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.frameScript]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(project.title).fscr"
-        panel.message = localized("dialog.saveProject.message")
-        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        let url: URL
+        if let saveAsDestinationProvider {
+            guard let chosenURL = saveAsDestinationProvider() else { return false }
+            url = chosenURL
+        } else {
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.frameScript]
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = "\(project.title).fscr"
+            panel.message = localized("dialog.saveProject.message")
+            guard panel.runModal() == .OK, let chosenURL = panel.url else { return false }
+            url = chosenURL
+        }
         do {
             try projectStore.saveCurrentProject(to: url, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            startTrackingProjectFile(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
             return true
@@ -525,6 +583,7 @@ final class AppState {
         transitionEditorContext {
             copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
         }
+        resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(copy?.scenes.sortedByOrder.first?.id))
     }
 
@@ -534,6 +593,7 @@ final class AppState {
         flushActiveEditorBoundary()
         guard confirmCloseProjectIfNeeded() else { return false }
         projectStore.closeProject()
+        resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(nil))
         return true
     }
@@ -581,6 +641,7 @@ final class AppState {
         transitionEditorContext(sceneID: .some(nil)) {
             projectStore.deleteCurrentProject()
         }
+        resetProjectFileTracking()
     }
 
     func selectScene(_ sceneID: UUID) {
@@ -599,7 +660,7 @@ final class AppState {
         setEditorContextAfterFlush(sceneID: sceneID, mode: mode, preservingProductionSelection: preservingProductionSelection)
     }
 
-    private func setEditorContextAfterFlush(
+    func setEditorContextAfterFlush(
         sceneID: UUID?? = nil,
         mode: WorkspaceMode? = nil,
         preservingProductionSelection: Bool = false
@@ -1005,9 +1066,15 @@ final class AppState {
             return
         }
         guard let selectedSceneIndex else { return }
-        let nextID = project.scenes.indices.contains(selectedSceneIndex + 1)
-            ? project.scenes[selectedSceneIndex + 1].id
-            : project.scenes.indices.contains(selectedSceneIndex - 1) ? project.scenes[selectedSceneIndex - 1].id : nil
+        // `selectedSceneIndex` is an index into visual (sorted) order, while
+        // `project.scenes` keeps insertion order. Subscripting storage with it
+        // selects an unrelated scene after "Add Scene After".
+        let orderedScenes = project.scenes.sortedByOrder
+        let nextID = orderedScenes.indices.contains(selectedSceneIndex + 1)
+            ? orderedScenes[selectedSceneIndex + 1].id
+            : orderedScenes.indices.contains(selectedSceneIndex - 1)
+                ? orderedScenes[selectedSceneIndex - 1].id
+                : orderedScenes.indices.contains(selectedSceneIndex) ? orderedScenes[selectedSceneIndex].id : nil
         transitionEditorContext(sceneID: .some(nextID)) {
             projectStore.deleteScene(at: selectedSceneIndex, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             scheduleAutosaveIfNeeded()
@@ -1105,8 +1172,10 @@ final class AppState {
 
     func moveSelection(_ delta: Int) {
         guard let selectedSceneIndex else { return }
-        let nextIndex = max(0, min(project.scenes.count - 1, selectedSceneIndex + delta))
-        selectScene(project.scenes[nextIndex].id)
+        let orderedScenes = project.scenes.sortedByOrder
+        guard !orderedScenes.isEmpty else { return }
+        let nextIndex = max(0, min(orderedScenes.count - 1, selectedSceneIndex + delta))
+        selectScene(orderedScenes[nextIndex].id)
     }
 
     func analyzeSelectedScene() async {
@@ -1332,21 +1401,27 @@ final class AppState {
     }
 
     private func scheduleAutosaveIfNeeded() {
-        autosaveTask?.cancel()
+        // One pending write per interval: the first unsaved change arms the
+        // timer and further edits coalesce into it instead of postponing it
+        // forever. Editor text and live metrics were already committed by the
+        // caller; only this disk write is delayed.
+        guard autosaveTask == nil else { return }
         guard settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
               projectStore.currentFileURL != nil,
               projectStore.hasUnsavedFileChanges else {
             return
         }
+        let interval = AutosaveInterval.duration(forSeconds: settings.generalPreferences.autosaveIntervalSeconds)
         autosaveTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(60))
+                try await Task.sleep(for: interval)
             } catch {
                 return
             }
-            guard !Task.isCancelled else { return }
-            self?.performAutosave()
+            guard !Task.isCancelled, let self else { return }
+            self.autosaveTask = nil
+            self.performAutosave()
         }
     }
 
@@ -1380,17 +1455,25 @@ final class AppState {
         )
     }
 
-    private func performAutosave() {
-        guard settings.generalPreferences.autosaveEnabled,
+    func performAutosave() {
+        guard !isTerminatingApplication, !isConfirmingTermination,
+              settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
               let url = projectStore.currentFileURL,
               projectStore.hasUnsavedFileChanges else {
+            return
+        }
+        switch prepareProjectFileForWrite(honoringDeclinedConflict: true) {
+        case .proceed:
+            break
+        case .handled, .declined, .failed:
             return
         }
         do {
             try securityScope.withAccess(to: url) {
                 try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
             }
+            recordProjectFileSnapshot(at: url)
             errorCenter.clearAutosaveFailureSuppression()
         } catch {
             Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -1423,6 +1506,7 @@ final class AppState {
                     let result = await self.recentProjectStore.validateEntries()
                     self.presentAutomaticRecentRemovalNotice(count: result.removedMissingCount)
                     self.consumeRecentProjectStoreError()
+                    self.checkForExternalProjectChanges()
                 }
             }
         }
@@ -1433,10 +1517,63 @@ final class AppState {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.flushActiveEditorBoundary(allEditors: true)
+                    self?.flushForApplicationResignation()
                 }
             }
         }
+    }
+
+    /// Writes unsaved changes before the app stops being frontmost. Kept
+    /// separate from the notification plumbing so it is directly testable.
+    func flushForApplicationResignation() {
+        guard !isTerminatingApplication, !isConfirmingTermination else { return }
+        flushActiveEditorBoundary(allEditors: true)
+    }
+
+    /// Runs the same Save / Don't Save / Cancel decision as closing a project.
+    /// Untitled projects go through Save As. Returns false when the user
+    /// cancels or the save fails, which must cancel app termination.
+    func confirmApplicationTermination() -> Bool {
+        flushActiveEditorBoundary(saveImmediately: false)
+        // The autosave task must not win a race against the modal decision.
+        autosaveTask?.cancel()
+        autosaveTask = nil
+
+        isConfirmingTermination = true
+        let shouldTerminate = confirmCloseProjectIfNeeded()
+        isConfirmingTermination = false
+
+        if shouldTerminate {
+            isTerminatingApplication = true
+        } else {
+            scheduleAutosaveIfNeeded()
+        }
+        return shouldTerminate
+    }
+
+    /// Closing any other window must not run the project save/conflict flow.
+    func setProjectWindow(_ window: NSWindow?) {
+        guard projectWindow !== window else { return }
+        if let projectWindowCloseObserver {
+            NotificationCenter.default.removeObserver(projectWindowCloseObserver)
+            self.projectWindowCloseObserver = nil
+        }
+        projectWindow = window
+        guard let window else { return }
+        projectWindowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushForWindowClose()
+            }
+        }
+    }
+
+    func flushForWindowClose() {
+        guard !isTerminatingApplication, !isConfirmingTermination else { return }
+        flushActiveEditorBoundary(allEditors: true)
     }
 
     private func presentAutomaticRecentRemovalNotice(count: Int) {

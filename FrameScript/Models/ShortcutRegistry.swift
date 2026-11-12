@@ -273,8 +273,24 @@ enum ShortcutRegistry {
     ]
 
     static func definition(for command: ShortcutCommand) -> ShortcutDefinition {
-        // The registry is static and intentionally complete; fail fast during development if it drifts.
-        definitions.first(where: { $0.command == command })!
+        if let definition = definitions.first(where: { $0.command == command }) {
+            return definition
+        }
+        // The registry is static and intentionally complete; fail fast during
+        // development if it drifts. In release builds, keep displaying the
+        // command with an unassigned-style fallback instead of crashing.
+        assertionFailure("Missing ShortcutDefinition for \(command.rawValue)")
+        return fallbackDefinition(for: command)
+    }
+
+    static func fallbackDefinition(for command: ShortcutCommand) -> ShortcutDefinition {
+        ShortcutDefinition(
+            command: command,
+            localizationKey: "command.\(command.rawValue)",
+            category: .application,
+            factoryDefault: .init("0", modifiers: [.command, .option, .control, .shift]),
+            order: Int.max
+        )
     }
 
     static func binding(for command: ShortcutCommand, overrides: [ShortcutCommand: ShortcutOverride]) -> ShortcutBinding? {

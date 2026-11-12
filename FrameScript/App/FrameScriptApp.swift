@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct FrameScriptApp: App {
+    @NSApplicationDelegateAdaptor(FrameScriptAppDelegate.self) private var appDelegate
     @State private var appState: AppState
     @Environment(\.openSettings) private var openSettings
 
@@ -22,7 +23,10 @@ struct FrameScriptApp: App {
                 AppRootView()
             }
             .environment(appState)
-            .onAppear { shortcutRouter.start(using: appState) }
+            .onAppear {
+                shortcutRouter.start(using: appState)
+                appDelegate.attach(appState)
+            }
             .onDisappear { shortcutRouter.stop() }
         }
         .windowStyle(.hiddenTitleBar)
