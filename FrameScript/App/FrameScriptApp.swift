@@ -3,8 +3,14 @@ import SwiftUI
 
 @main
 struct FrameScriptApp: App {
-    @State private var appState = AppState()
+    @State private var appState: AppState
     @Environment(\.openSettings) private var openSettings
+
+    init() {
+        // Must run before AppState creates its settings and recents stores.
+        SandboxDataMigration.migrateIfNeeded()
+        _appState = State(initialValue: AppState())
+    }
 
     var body: some SwiftUI.Scene {
         WindowGroup {

@@ -25,7 +25,7 @@ The [ZIP fallback](https://github.com/Drash-ko/frame-script/releases/latest/down
 - Configurable keyboard shortcuts with recording, conflict reassignment, explicit unassignment, reserved-shortcut protection, and immediate updates to menus and visible keycaps. Letter shortcuts execute by physical key position, independently of the active keyboard layout.
 - Anchor-first Visuals and Editing relationships. Ordinary unambiguous script edits keep selections and production markers aligned; links are cleared when a substantial rewrite cannot be repaired safely.
 - Live word counts and scene, sidebar, and project duration estimates; saved projects coalesce rapid changes into one autosave.
-- Project save/open using `.fscr` format version 3. FrameScript reads versions 1–3 and still imports legacy `.framescript` files.
+- Project save/open using `.fscr` format version 4. FrameScript reads versions 1–4 and still imports legacy `.framescript` files.
 - Export as plain text, Markdown, CSV, or a production outline.
 - AI review, rewrites, inline autocomplete, and production suggestions for OpenAI-compatible endpoints, OpenRouter, Groq, and Google AI Studio. Inline autocomplete can be enabled in Settings, shows at most one complete sentence, accepts with Tab, and dismisses with Escape.
 - Provider API keys stored in the macOS Keychain, never in project files.

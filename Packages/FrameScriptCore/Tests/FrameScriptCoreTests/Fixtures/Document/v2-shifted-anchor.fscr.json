@@ -1,0 +1,71 @@
+{
+  "fileVersion": 2,
+  "project": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "title": "Legacy v2 project",
+    "createdAt": "2024-02-01T10:00:00Z",
+    "updatedAt": "2024-02-01T11:00:00Z",
+    "settingsOverride": {
+      "wordsPerMinute": 155,
+      "defaultSplitMode": "paragraph"
+    },
+    "exportPresets": [
+      {
+        "id": "77777777-7777-4777-8777-777777777777",
+        "name": "Legacy preset",
+        "format": "Markdown"
+      }
+    ],
+    "scenes": [
+      {
+        "id": "88888888-8888-4888-8888-888888888888",
+        "order": 0,
+        "sectionType": "Explanation",
+        "title": "Shifted anchor",
+        "scriptText": "NEW alpha target omega",
+        "notes": "",
+        "estimatedDuration": 2.5,
+        "textSegments": [
+          {
+            "id": "99999999-9999-4999-8999-999999999999",
+            "sceneID": "88888888-8888-4888-8888-888888888888",
+            "order": 0,
+            "sourceText": "NEW alpha target omega",
+            "segmentType": "scene",
+            "timingEstimate": 2.5
+          }
+        ],
+        "aiComments": [],
+        "bRollItems": [
+          {
+            "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "textAnchor": {
+              "startUTF16": 0,
+              "lengthUTF16": 12,
+              "selectedText": "alpha target",
+              "prefixContext": "",
+              "suffixContext": " omega"
+            },
+            "sourceType": "Talking head",
+            "descriptionText": "repaired visual",
+            "notes": "legacy visual note"
+          }
+        ],
+        "editingItems": [
+          {
+            "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "textAnchor": {
+              "startUTF16": 0,
+              "lengthUTF16": 5,
+              "selectedText": "alpha",
+              "prefixContext": "ZZZ",
+              "suffixContext": ""
+            },
+            "description": "unrecoverable cut",
+            "notes": "stale anchor"
+          }
+        ]
+      }
+    ]
+  }
+}
