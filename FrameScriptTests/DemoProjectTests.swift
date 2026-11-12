@@ -59,6 +59,8 @@ final class DemoProjectTests: XCTestCase {
         let appState = makeAppState(store: store)
 
         appState.touchProject()
+        appState.flushForApplicationResignation()
+        appState.flushForWindowClose()
         try await Task.sleep(for: .milliseconds(140))
 
         XCTAssertEqual(writes, 0)

@@ -1272,6 +1272,9 @@ final class EditorPersistenceTests: XCTestCase {
             coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view.textView))
         }
         try await Task.sleep(for: .milliseconds(140))
+        XCTAssertEqual(writes, 0, "Editor commits must not wait for the autosave interval to update the model")
+
+        appState.flushActiveEditorBoundary()
 
         XCTAssertEqual(writes, 1)
         XCTAssertEqual(appState.saveState, .saved)
@@ -1287,7 +1290,7 @@ final class EditorPersistenceTests: XCTestCase {
 
         view.textView.string = "this write will fail"
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view.textView))
-        try await Task.sleep(for: .milliseconds(100))
+        appState.flushActiveEditorBoundary()
 
         XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
         XCTAssertEqual(appState.saveState, .edited)
@@ -1553,7 +1556,7 @@ final class EditorPersistenceTests: XCTestCase {
         XCTAssertEqual(saved!.visibleOrigin, expectedOrigin)
     }
 
-    func testExistingFileAutosavesOnceAfterCoalescedWindow() async throws {
+    func testExistingFileAutosaveWaitsForIntervalAndFlushesOnDemand() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1569,11 +1572,13 @@ final class EditorPersistenceTests: XCTestCase {
             await Task.yield()
         }
 
+        XCTAssertEqual(appState.saveState, .edited)
+
+        appState.flushActiveEditorBoundary()
+
         let saved = try FrameScriptFileStore.read(from: fileURL)
         XCTAssertEqual(saved.scenes.first?.scriptText, "Persist after the coalesced window")
         XCTAssertEqual(appState.saveState, .saved)
-        XCTAssertGreaterThanOrEqual(clock.now - started, .milliseconds(50))
-        XCTAssertLessThan(clock.now - started, .milliseconds(180))
     }
 
     func testUntitledProjectPreservesTextWithoutFileURL() {

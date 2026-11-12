@@ -119,6 +119,8 @@ final class AppState {
 #endif
     private var appActivationObserver: NSObjectProtocol?
     private var appResignationObserver: NSObjectProtocol?
+    private var appTerminationObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
 
     init(
         projectStore: ProjectStore = ProjectStore(),
@@ -1336,21 +1338,27 @@ final class AppState {
     }
 
     private func scheduleAutosaveIfNeeded() {
-        autosaveTask?.cancel()
+        // One pending write per interval: the first unsaved change arms the
+        // timer and further edits coalesce into it instead of postponing it
+        // forever. Editor text and live metrics were already committed by the
+        // caller; only this disk write is delayed.
+        guard autosaveTask == nil else { return }
         guard settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
               projectStore.currentFileURL != nil,
               projectStore.hasUnsavedFileChanges else {
             return
         }
+        let interval = AutosaveInterval.duration(forSeconds: settings.generalPreferences.autosaveIntervalSeconds)
         autosaveTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: .milliseconds(60))
+                try await Task.sleep(for: interval)
             } catch {
                 return
             }
-            guard !Task.isCancelled else { return }
-            self?.performAutosave()
+            guard !Task.isCancelled, let self else { return }
+            self.autosaveTask = nil
+            self.performAutosave()
         }
     }
 
@@ -1437,10 +1445,46 @@ final class AppState {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.flushActiveEditorBoundary(allEditors: true)
+                    self?.flushForApplicationResignation()
                 }
             }
         }
+        if appTerminationObserver == nil {
+            appTerminationObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.flushForApplicationTermination()
+                }
+            }
+        }
+        if windowCloseObserver == nil {
+            windowCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.flushForWindowClose()
+                }
+            }
+        }
+    }
+
+    /// Writes unsaved changes before the app stops being frontmost. Kept
+    /// separate from the notification plumbing so it is directly testable.
+    func flushForApplicationResignation() {
+        flushActiveEditorBoundary(allEditors: true)
+    }
+
+    func flushForApplicationTermination() {
+        flushActiveEditorBoundary(allEditors: true)
+    }
+
+    func flushForWindowClose() {
+        flushActiveEditorBoundary(allEditors: true)
     }
 
     private func presentAutomaticRecentRemovalNotice(count: Int) {
