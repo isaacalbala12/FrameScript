@@ -122,6 +122,20 @@ Tomorrow we will compare it with the old configuration.
     #expect(digits.tokens.map(\.normalized) == ["en", "2026", "hay", "31", "coches"])
 }
 
+@Test func tokenizerNormalizesDecimalsAndThousands() {
+    #expect(script("1,5", .spanish).tokens.map(\.normalized) == ["1.5"])
+    #expect(script("1.5", .spanish).tokens.map(\.normalized) == ["1.5"])
+    #expect(script("uno coma cinco", .spanish).tokens.map(\.normalized) == ["1.5"])
+    #expect(script("1.5", .english).tokens.map(\.normalized) == ["1.5"])
+    #expect(script("one point five", .english).tokens.map(\.normalized) == ["1.5"])
+
+    #expect(script("1.500", .spanish).tokens.map(\.normalized) == ["1500"])
+    #expect(script("mil quinientos", .spanish).tokens.map(\.normalized) == ["1500"])
+    #expect(script("1,500", .english).tokens.map(\.normalized) == ["1500"])
+    #expect(script("1.500,25", .spanish).tokens.map(\.normalized) == ["1500.25"])
+    #expect(script("cero coma cero cinco", .spanish).tokens.map(\.normalized) == ["0.05"])
+}
+
 @Test func tokenizerDoesNotMergeAdjacentStandaloneNumbers() {
     #expect(script("dos tres", .spanish).tokens.map(\.normalized) == ["2", "3"])
     #expect(script("one two", .english).tokens.map(\.normalized) == ["1", "2"])
@@ -164,8 +178,13 @@ Tomorrow we will compare it with the old configuration.
     let paragraphBreak = script("Uno\n\nDos", .spanish)
     #expect(paragraphBreak.tokens.map(\.sentenceIndex) == [0, 1])
 
-    let softWrap = script("Uno\nDos", .spanish)
-    #expect(softWrap.tokens.map(\.sentenceIndex) == [0, 0])
+    // A single newline is a script line boundary too: line-based scripts often
+    // omit terminal punctuation.
+    let lineBreak = script("Uno\nDos", .spanish)
+    #expect(lineBreak.tokens.map(\.sentenceIndex) == [0, 1])
+
+    let abbreviation = script("El Sr. García llega tarde. Otra frase.", .spanish)
+    #expect(abbreviation.tokens.map(\.sentenceIndex) == [0, 0, 0, 0, 0, 1, 1])
 }
 
 // MARK: - Follower: perfect reading
@@ -301,6 +320,364 @@ Tomorrow we will compare it with the old configuration.
 
 // MARK: - Follower: jumps
 
+@Test func followerContinuesReadingAfterPauseAcrossSentences() {
+    // Exact review script: after a pause the reader adds 12 new words that
+    // continue right after the current word. This is reading, not a jump, even
+    // though it spans sentences 2 and 3.
+    let text = "Hoy probamos el nuevo coche en Monza. La frenada es brutal y el coche gira muy bien. Ahora vamos con la lluvia. En mojado el coche gira muy bien pero hay que frenar antes. Conclusión: merece la pena."
+    let tokenized = script(text, .spanish)
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+
+    for index in 0...16 {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+    #expect(state.tokenIndex == 16)
+    #expect(state.sentenceIndex == 1)
+
+    let continuingHypothesis = tokenized.tokens[12...28]
+        .map(\.normalized)
+        .joined(separator: " ")
+    state = follower.process(text: continuingHypothesis, at: 20)
+
+    #expect(state.tokenIndex == 28)
+    #expect(state.sentenceIndex == 3)
+    #expect(state.matchedWordCount >= 10)
+    #expect(!state.isLost)
+}
+
+@Test func followerContinuesFromSegmentOnlyHypothesis() {
+    let text = "Hoy probamos el nuevo coche en Monza. La frenada es brutal y el coche gira muy bien. Ahora vamos con la lluvia. En mojado el coche gira muy bien pero hay que frenar antes."
+    let tokenized = script(text, .spanish)
+    var follower = SpeechFollower(script: tokenized)
+
+    for index in 0...16 {
+        _ = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+
+    // A new recognition segment contains only the 12 new words.
+    let state = follower.process(
+        text: "ahora vamos con la lluvia en mojado el coche gira muy bien",
+        at: 20,
+        segment: 2
+    )
+    #expect(state.tokenIndex == 28)
+    #expect(state.sentenceIndex == 3)
+}
+
+@Test func followerKeepsPositionAcrossRecognizerSegmentRestart() {
+    let text = "Hoy probamos el nuevo coche en Monza. La frenada es brutal y el coche gira muy bien. Ahora vamos con la lluvia. En mojado el coche gira muy bien pero hay que frenar antes."
+    let tokenized = script(text, .spanish)
+    var follower = SpeechFollower(script: tokenized)
+
+    var state = follower.state
+    for index in 0...16 {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2,
+            segment: 1
+        )
+    }
+    #expect(state.tokenIndex == 16)
+
+    // New SFSpeechRecognitionTask, transcript restarts from empty with words
+    // from the beginning of the current sentence. The position must not move.
+    state = follower.process(text: "la frenada es", at: 20, segment: 2)
+    #expect(state.tokenIndex == 16)
+    #expect(!state.isLost)
+
+    // Once the new segment reaches the continuation, it advances normally.
+    state = follower.process(
+        text: "bien ahora vamos con la lluvia en mojado el coche gira muy bien",
+        at: 21,
+        segment: 2
+    )
+    #expect(state.tokenIndex == 28)
+    #expect(state.sentenceIndex == 3)
+}
+
+@Test func followerDoesNotJitterBackwardsOnShortRevision() {
+    let text = "Hoy probamos el nuevo coche en Monza. La frenada es brutal y el coche gira muy bien. Ahora vamos con la lluvia."
+    let tokenized = script(text, .spanish)
+    var follower = SpeechFollower(script: tokenized)
+
+    var state = follower.state
+    for index in 0...16 {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+    #expect(state.tokenIndex == 16)
+
+    // Three words of a revised partial, confidence exactly 0.6 before the fix.
+    state = follower.process(text: "la frenada es", at: 20)
+    #expect(state.tokenIndex == 16)
+    #expect(state.confidence < 0.85)
+}
+
+@Test func followerRecoversAfterSkippingManySentences() throws {
+    let lines = [
+        "El motor suena limpio en la recta principal.",
+        "La suspensión absorbe los pianos sin brusquedad.",
+        "Los frenos aguantan vueltas y vueltas.",
+        "El volante transmite cada bache del asfalto.",
+        "La caja de cambios encaja con precisión.",
+        "Los neumáticos blandos se calientan deprisa.",
+        "El alerón trasero genera carga estable.",
+        "La telemetría muestra una diferencia mínima.",
+        "El sector dos castiga la tracción.",
+        "La lluvia cambia por completo el agarre.",
+        "El depósito va lleno para esta tanda.",
+        "La conclusión merece una vuelta más."
+    ]
+    let tokenized = script(lines.joined(separator: "\n"), .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let targetLine = try #require(tokenized.tokenRange(forSentence: 9))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+    #expect(state.sentenceIndex == 0)
+
+    var spoken: [String] = []
+    for (offset, index) in targetLine.enumerated() {
+        spoken.append(tokenized.tokens[index].normalized)
+        state = follower.process(
+            text: spoken.joined(separator: " "),
+            at: 10 + Double(offset) * 0.4
+        )
+    }
+
+    #expect(state.sentenceIndex == 9)
+    #expect(targetLine.contains(state.tokenIndex ?? -1))
+    #expect(!state.isLost)
+}
+
+@Test func followerStillRejectsJumpsBeyondRecoveryWindow() throws {
+    let lines = (0..<16).map { index in
+        switch index {
+        case 0: "El motor suena limpio en la recta principal."
+        case 1: "La suspensión absorbe los pianos sin brusquedad."
+        case 2: "Los frenos aguantan vueltas y vueltas."
+        case 3: "El volante transmite cada bache del asfalto."
+        case 4: "La caja de cambios encaja con precisión."
+        case 5: "Los neumáticos blandos se calientan deprisa."
+        case 6: "El alerón trasero genera carga estable."
+        case 7: "La telemetría muestra una diferencia mínima."
+        case 8: "El sector dos castiga la tracción."
+        case 9: "La lluvia cambia por completo el agarre."
+        case 10: "El depósito va lleno para esta tanda."
+        case 11: "La conclusión merece una vuelta más."
+        case 12: "El chasis responde sin retardo."
+        case 13: "La dirección pesa lo justo."
+        case 14: "El escape suena ronco arriba."
+        default: "La bandera cae y termina."
+        }
+    }
+    let tokenized = script(lines.joined(separator: "\n"), .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let farLine = try #require(tokenized.tokenRange(forSentence: 13))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+
+    var spoken: [String] = []
+    for (offset, index) in farLine.enumerated() {
+        spoken.append(tokenized.tokens[index].normalized)
+        state = follower.process(
+            text: spoken.joined(separator: " "),
+            at: 10 + Double(offset) * 0.4
+        )
+    }
+
+    #expect((state.sentenceIndex ?? 0) <= 2)
+}
+
+@Test func followerResolvesRepeatedPhraseAfterALongSkip() throws {
+    let text = """
+    Vamos a ver el coche en la pista de Monza.
+    Primera frase distinta del ejemplo.
+    Segunda frase distinta del ejemplo.
+    Tercera frase distinta del ejemplo.
+    Cuarta frase distinta del ejemplo.
+    Quinta frase distinta del ejemplo.
+    Sexta frase distinta del ejemplo.
+    Septima frase distinta del ejemplo.
+    Octava frase distinta del ejemplo.
+    Vamos a ver el coche en la pista de Monza con lluvia y neumáticos nuevos.
+    """
+    let tokenized = script(text, .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let targetLine = try #require(tokenized.tokenRange(forSentence: 9))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.1
+        )
+    }
+
+    var spoken: [String] = []
+    for (offset, index) in targetLine.enumerated() {
+        spoken.append(tokenized.tokens[index].normalized)
+        state = follower.process(
+            text: spoken.joined(separator: " "),
+            at: 10 + Double(offset) * 0.4
+        )
+    }
+
+    #expect(state.sentenceIndex == 9)
+    #expect(targetLine.contains(state.tokenIndex ?? -1))
+}
+
+@Test func followerResolvesFarRepeatedPhraseByCoverage() throws {
+    let text = """
+    Vamos a ver el coche en la pista de Monza.
+    Primera frase distinta del ejemplo.
+    Segunda frase distinta del ejemplo.
+    Tercera frase distinta del ejemplo.
+    Vamos a ver el coche en la pista de Monza con lluvia y neumáticos nuevos.
+    """
+    let tokenized = script(text, .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let targetLine = try #require(tokenized.tokenRange(forSentence: 4))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.1
+        )
+    }
+
+    var spoken: [String] = []
+    for (offset, index) in targetLine.enumerated() {
+        spoken.append(tokenized.tokens[index].normalized)
+        state = follower.process(
+            text: spoken.joined(separator: " "),
+            at: 10 + Double(offset) * 0.4
+        )
+    }
+
+    #expect(state.sentenceIndex == 4)
+    #expect(targetLine.contains(state.tokenIndex ?? -1))
+}
+
+@Test func followerRespectsLinesInUnpunctuatedScripts() throws {
+    let text = """
+    linea uno con palabras claras
+    otra linea distinta aqui
+    tercera linea del guion
+    cuarta linea del ejemplo
+    quinta linea retomada
+    sexta linea final
+    """
+    let tokenized = script(text, .spanish)
+    #expect(tokenized.sentenceCount == 6)
+
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let fifthLine = try #require(tokenized.tokenRange(forSentence: 4))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+    #expect(state.sentenceIndex == 0)
+
+    state = follower.process(
+        text: tokenized.tokens[fifthLine].map(\.normalized).joined(separator: " "),
+        at: 5
+    )
+    #expect((state.sentenceIndex ?? 0) <= 2)
+}
+
+@Test func followerDoesNotJumpAcrossManyUnpunctuatedLines() throws {
+    var lines: [String] = []
+    for index in 0..<30 {
+        if index == 0 || index == 29 {
+            lines.append("vamos a ver el coche en la pista numero \(index) con calma")
+        } else {
+            lines.append("linea \(index) con palabras distintas del ejemplo")
+        }
+    }
+    let tokenized = script(lines.joined(separator: "\n"), .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let lastLine = try #require(tokenized.tokenRange(forSentence: 29))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+
+    let temptingPhrase = tokenized.tokens[lastLine]
+        .prefix(6)
+        .map(\.normalized)
+        .joined(separator: " ")
+    state = follower.process(text: temptingPhrase, at: 5)
+
+    #expect((state.sentenceIndex ?? 0) <= 2)
+    #expect((state.tokenIndex ?? 0) < 100)
+}
+
+@Test func followerRequiresStrongMatchForTwoSentenceJump() throws {
+    let text = """
+    El motor suena limpio en la recta principal.
+    La suspensión absorbe los pianos sin brusquedad.
+    Los frenos aguantan vueltas y vueltas.
+    El volante transmite cada bache del asfalto.
+    La caja de cambios encaja con precisión.
+    """
+    let tokenized = script(text, .spanish)
+    let firstLine = try #require(tokenized.tokenRange(forSentence: 0))
+    let thirdLine = try #require(tokenized.tokenRange(forSentence: 2))
+
+    var follower = SpeechFollower(script: tokenized)
+    var state = follower.state
+    for index in firstLine {
+        state = follower.process(
+            text: cumulativeTranscript(tokenized.tokens, through: index),
+            at: Double(index) * 0.2
+        )
+    }
+
+    let firstThree = tokenized.tokens[thirdLine].prefix(3).map(\.normalized)
+    state = follower.process(text: firstThree.joined(separator: " "), at: 10)
+    #expect((state.sentenceIndex ?? 0) <= 2)
+
+    let firstFive = tokenized.tokens[thirdLine].prefix(5).map(\.normalized)
+    state = follower.process(text: firstFive.joined(separator: " "), at: 10.4)
+    #expect(state.sentenceIndex == 2)
+}
+
 @Test func followerJumpsForwardOverOneSkippedSentence() throws {
     let text = """
     Primera frase del guion con palabras claras.
@@ -380,44 +757,6 @@ Tomorrow we will compare it with the old configuration.
 
     #expect(state.sentenceIndex == 4)
     #expect(targetSentence.contains(state.tokenIndex ?? -1))
-}
-
-@Test func followerNeverJumpsBeyondConfirmedForwardWindow() throws {
-    let text = """
-    Primera frase del guion con palabras claras.
-    Segunda frase que nadie llega a leer.
-    Tercera frase intermedia del ejemplo.
-    Cuarta frase que tampoco se escucha.
-    Quinta frase de relleno para el ejemplo.
-    Sexta frase de relleno otra vez.
-    Septima frase final del guion completo.
-    Octava frase que queda demasiado lejos.
-    """
-    let tokenized = script(text, .spanish)
-    let firstSentence = try #require(tokenized.tokenRange(forSentence: 0))
-    let farSentence = try #require(tokenized.tokenRange(forSentence: 7))
-
-    var follower = SpeechFollower(script: tokenized)
-    var state = follower.state
-    for index in firstSentence {
-        state = follower.process(
-            text: cumulativeTranscript(tokenized.tokens, through: index),
-            at: Double(index) * 0.2
-        )
-    }
-
-    let prefix = tokenized.tokens[0..<firstSentence.upperBound].map(\.normalized)
-    var appended: [String] = []
-    for (offset, index) in farSentence.enumerated() {
-        appended.append(tokenized.tokens[index].normalized)
-        state = follower.process(
-            text: (prefix + appended).joined(separator: " "),
-            at: 5 + Double(offset) * 0.3
-        )
-        #expect((state.sentenceIndex ?? 0) <= 2)
-    }
-
-    #expect((state.sentenceIndex ?? 0) <= 2)
 }
 
 @Test func followerNeverJumpsBackMoreThanOneSentenceButAllowsOne() throws {

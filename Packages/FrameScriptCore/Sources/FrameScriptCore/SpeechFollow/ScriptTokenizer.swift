@@ -103,7 +103,7 @@ public enum ScriptTokenizer {
         language: SpeechLanguage = .spanish
     ) -> TokenizedScript {
         let rawWords = scanWords(in: text)
-        let mergedWords = mergeNumbers(in: rawWords, language: language)
+        let mergedWords = mergeNumbers(in: rawWords, source: text, language: language)
         let tokens = mergedWords.enumerated().map { index, word in
             ScriptToken(
                 index: index,
@@ -171,16 +171,12 @@ public enum ScriptTokenizer {
             let character = characters[index]
 
             if character.isWhitespace {
+                // A newline is a script line boundary. Teleprompter scripts
+                // commonly put one sentence or one scene line per line without
+                // terminal punctuation; treating a soft newline as one giant
+                // sentence would make all jump limits vacuous.
                 if character.isNewline {
-                    var lookahead = index + 1
-                    while lookahead < characters.count,
-                          characters[lookahead].isWhitespace,
-                          !characters[lookahead].isNewline {
-                        lookahead += 1
-                    }
-                    if lookahead < characters.count, characters[lookahead].isNewline {
-                        pendingSentenceBreak = true
-                    }
+                    pendingSentenceBreak = true
                 }
                 index += 1
                 continue
@@ -240,16 +236,20 @@ public enum ScriptTokenizer {
             }
 
             if character == "." || character == "!" || character == "?" || character == "…" {
-                let isDecimalPoint: Bool
+                var shouldBreak = true
                 if character == "." {
-                    isDecimalPoint = index > 0
+                    let isDecimalPoint = index > 0
                         && index + 1 < characters.count
                         && characters[index - 1].isNumber
                         && characters[index + 1].isNumber
-                } else {
-                    isDecimalPoint = false
+                    let followsKnownAbbreviation = index > 0
+                        && !characters[index - 1].isWhitespace
+                        && words.last.map { abbreviations.contains($0.normalized) } == true
+                    if isDecimalPoint || followsKnownAbbreviation {
+                        shouldBreak = false
+                    }
                 }
-                if !isDecimalPoint {
+                if shouldBreak {
                     pendingSentenceBreak = true
                 }
             }
@@ -263,6 +263,12 @@ public enum ScriptTokenizer {
     private static func isWordCharacter(_ character: Character) -> Bool {
         character.isLetter || character.isNumber
     }
+
+    private static let abbreviations: Set<String> = [
+        "sr", "sra", "srta", "dr", "dra", "prof", "ud", "uds", "etc", "ej",
+        "aprox", "nro", "num", "p", "pp", "ee", "uu", "vs", "mr", "mrs",
+        "ms", "st", "av", "ct", "tel"
+    ]
 
     private static func isApostrophe(_ character: Character) -> Bool {
         character == "'" || character == "’" || character == "‘"
@@ -331,6 +337,7 @@ public enum ScriptTokenizer {
 
     private static func mergeNumbers(
         in words: [RawWord],
+        source: String,
         language: SpeechLanguage
     ) -> [RawWord] {
         var merged: [RawWord] = []
@@ -340,19 +347,53 @@ public enum ScriptTokenizer {
         while index < words.count {
             let word = words[index]
 
-            if word.isAllDigits {
-                if word.normalized.count <= 6, let value = Int(word.normalized) {
-                    merged.append(
-                        RawWord(
-                            normalized: String(value),
-                            range: word.range,
-                            sentenceIndex: word.sentenceIndex,
-                            isAllDigits: true
-                        )
+            if word.isAllDigits,
+               let expression = parseDigitExpression(
+                   words,
+                   start: index,
+                   source: source,
+                   language: language
+               ) {
+                let last = words[index + expression.count - 1]
+                merged.append(
+                    RawWord(
+                        normalized: expression.canonical,
+                        range: word.range.lowerBound..<last.range.upperBound,
+                        sentenceIndex: word.sentenceIndex,
+                        isAllDigits: false
                     )
-                } else {
-                    merged.append(word)
-                }
+                )
+                index += expression.count
+                continue
+            }
+
+            if let expression = parseSpokenDecimalExpression(
+                words,
+                start: index,
+                language: language
+            ) {
+                let last = words[index + expression.count - 1]
+                merged.append(
+                    RawWord(
+                        normalized: expression.canonical,
+                        range: word.range.lowerBound..<last.range.upperBound,
+                        sentenceIndex: word.sentenceIndex,
+                        isAllDigits: false
+                    )
+                )
+                index += expression.count
+                continue
+            }
+
+            if word.isAllDigits {
+                merged.append(
+                    RawWord(
+                        normalized: canonicalDigits(word.normalized),
+                        range: word.range,
+                        sentenceIndex: word.sentenceIndex,
+                        isAllDigits: true
+                    )
+                )
                 index += 1
                 continue
             }
@@ -365,15 +406,8 @@ public enum ScriptTokenizer {
             }
 
             let normalizedSlice = words[index..<sameSentenceEnd].map(\.normalized)
-            let parsed: (value: Int, count: Int)?
-            switch language {
-            case .spanish:
-                parsed = parseSpanishNumber(normalizedSlice)
-            case .english:
-                parsed = parseEnglishNumber(normalizedSlice)
-            }
-
-            if let parsed, parsed.count > 0 {
+            if let parsed = parseNumberWords(normalizedSlice, language: language),
+               parsed.count > 0 {
                 let last = words[index + parsed.count - 1]
                 let range = word.range.lowerBound..<last.range.upperBound
                 merged.append(
@@ -393,6 +427,210 @@ public enum ScriptTokenizer {
         }
 
         return merged
+    }
+
+    private static func parseNumberWords(
+        _ words: [String],
+        language: SpeechLanguage
+    ) -> (value: Int, count: Int)? {
+        switch language {
+        case .spanish:
+            parseSpanishNumber(words)
+        case .english:
+            parseEnglishNumber(words)
+        }
+    }
+
+    /// Parses digit expressions with locale-aware separators:
+    /// `1,5` and `1.5` → `1.5`; `1.500` (Spanish) and `1,500` (English) → `1500`.
+    private static func parseDigitExpression(
+        _ words: [RawWord],
+        start: Int,
+        source: String,
+        language: SpeechLanguage
+    ) -> (canonical: String, count: Int)? {
+        guard words.indices.contains(start), words[start].isAllDigits else { return nil }
+
+        let sentence = words[start].sentenceIndex
+        var integerPart = words[start].normalized
+        var fractionPart: String?
+        var index = start + 1
+
+        while index < words.count,
+              words[index].sentenceIndex == sentence,
+              words[index].isAllDigits {
+            let separatorText = substring(
+                of: source,
+                utf16Range: words[index - 1].range.upperBound..<words[index].range.lowerBound
+            )
+            guard separatorText.count == 1,
+                  let separator = separatorText.first,
+                  separator == "." || separator == "," else {
+                break
+            }
+
+            let group = words[index].normalized
+            if fractionPart != nil { break }
+
+            if separator == decimalSeparator(for: language) {
+                fractionPart = group
+                index += 1
+                break
+            }
+
+            if group.count == 3 {
+                integerPart += group
+                index += 1
+                continue
+            }
+
+            // Forgiving fallback: a non-native separator with a short group is
+            // almost certainly a decimal comma/point typed by a non-native app.
+            fractionPart = group
+            index += 1
+            break
+        }
+
+        var canonical = canonicalDigits(integerPart)
+        if let fractionPart {
+            let normalizedFraction = normalizedFractionDigits(fractionPart)
+            if !normalizedFraction.isEmpty {
+                canonical += "." + normalizedFraction
+            }
+        }
+        return (canonical, index - start)
+    }
+
+    /// Parses spoken decimals: `uno coma cinco`, `cero coma cero cinco`,
+    /// `one point five`, `25 coma 4`.
+    private static func parseSpokenDecimalExpression(
+        _ words: [RawWord],
+        start: Int,
+        language: SpeechLanguage
+    ) -> (canonical: String, count: Int)? {
+        guard words.indices.contains(start) else { return nil }
+        let sentence = words[start].sentenceIndex
+
+        let whole: Int
+        let wholeCount: Int
+        if words[start].isAllDigits, let value = Int(words[start].normalized) {
+            whole = value
+            wholeCount = 1
+        } else {
+            var end = start
+            let maximum = min(words.count, start + 8)
+            while end < maximum, words[end].sentenceIndex == sentence {
+                end += 1
+            }
+            let slice = words[start..<end].map(\.normalized)
+            guard let parsed = parseNumberWords(slice, language: language) else { return nil }
+            whole = parsed.value
+            wholeCount = parsed.count
+        }
+
+        let separatorIndex = start + wholeCount
+        guard separatorIndex < words.count,
+              words[separatorIndex].sentenceIndex == sentence,
+              isDecimalSeparatorWord(words[separatorIndex].normalized, language: language) else {
+            return nil
+        }
+
+        let fractionStart = separatorIndex + 1
+        guard fractionStart < words.count,
+              words[fractionStart].sentenceIndex == sentence else {
+            return nil
+        }
+
+        var fractionDigits: String
+        var fractionCount: Int
+
+        if words[fractionStart].isAllDigits {
+            fractionDigits = words[fractionStart].normalized
+            fractionCount = 1
+        } else if let sequence = parseUnitDigitSequence(
+            words,
+            start: fractionStart,
+            language: language
+        ) {
+            fractionDigits = sequence.digits
+            fractionCount = sequence.count
+        } else {
+            var end = fractionStart
+            let maximum = min(words.count, fractionStart + 8)
+            while end < maximum, words[end].sentenceIndex == sentence {
+                end += 1
+            }
+            let slice = words[fractionStart..<end].map(\.normalized)
+            guard let parsed = parseNumberWords(slice, language: language) else { return nil }
+            fractionDigits = String(parsed.value)
+            fractionCount = parsed.count
+        }
+
+        let normalizedFraction = normalizedFractionDigits(fractionDigits)
+        let canonical = normalizedFraction.isEmpty
+            ? String(whole)
+            : "\(whole).\(normalizedFraction)"
+        return (canonical, wholeCount + 1 + fractionCount)
+    }
+
+    private static func parseUnitDigitSequence(
+        _ words: [RawWord],
+        start: Int,
+        language: SpeechLanguage
+    ) -> (digits: String, count: Int)? {
+        let sentence = words[start].sentenceIndex
+        var digits = ""
+        var index = start
+        while index < words.count,
+              index < start + 6,
+              words[index].sentenceIndex == sentence,
+              let digit = unitDigit(words[index].normalized, language: language) {
+            digits += String(digit)
+            index += 1
+        }
+        guard digits.count >= 2 else { return nil }
+        return (digits, index - start)
+    }
+
+    private static func unitDigit(_ word: String, language: SpeechLanguage) -> Int? {
+        switch language {
+        case .spanish:
+            spanishUnits[word]
+        case .english:
+            englishUnits[word]
+        }
+    }
+
+    private static func isDecimalSeparatorWord(
+        _ word: String,
+        language: SpeechLanguage
+    ) -> Bool {
+        switch language {
+        case .spanish:
+            word == "coma" || word == "punto"
+        case .english:
+            word == "point"
+        }
+    }
+
+    private static func decimalSeparator(for language: SpeechLanguage) -> Character {
+        switch language {
+        case .spanish: ","
+        case .english: "."
+        }
+    }
+
+    private static func canonicalDigits(_ digits: String) -> String {
+        let trimmed = digits.drop(while: { $0 == "0" })
+        return trimmed.isEmpty ? "0" : String(trimmed)
+    }
+
+    private static func normalizedFractionDigits(_ digits: String) -> String {
+        var result = digits
+        while result.count > 1, result.last == "0" {
+            result.removeLast()
+        }
+        return result == "0" ? "" : result
     }
 
     private static func substring(of text: String, utf16Range: Range<Int>) -> String {

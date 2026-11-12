@@ -48,6 +48,7 @@ public enum SpeechRecognitionError: Error, Sendable, Equatable {
     case localeUnsupported(String)
     case recognizerUnavailable
     case alreadyRunning
+    case cancelled
     case audioDeviceUnavailable(AudioDeviceID)
     case audioEngineFailure(String)
     case recognitionFailed(String)
@@ -66,6 +67,8 @@ extension SpeechRecognitionError: LocalizedError {
             "Speech recognition is not available right now."
         case .alreadyRunning:
             "Speech recognition is already running."
+        case .cancelled:
+            "Speech recognition was cancelled."
         case .audioDeviceUnavailable(let id):
             "The requested audio input device (\(id)) is not available."
         case .audioEngineFailure(let description):
@@ -194,7 +197,7 @@ public enum AudioInputDevices {
         var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         let status = AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value)
         guard status == noErr, let value else { return nil }
-        return value.takeUnretainedValue() as String
+        return value.takeRetainedValue() as String
     }
 }
 
@@ -206,7 +209,8 @@ public struct LiveSpeechRecognizerConfiguration: Sendable, Equatable {
     /// minute, so the default replaces the task at 50 s while audio keeps
     /// flowing through the same engine tap.
     public var segmentDuration: TimeInterval = 50
-    /// Delay before restarting after an SFSpeechRecognitionTask ends by itself.
+    /// Delay before retrying after a recognition error (not after a normal
+    /// end-of-task, which restarts immediately).
     public var segmentRestartDelay: TimeInterval = 0.05
     /// Give up after this many consecutive recognition errors without text.
     public var maximumConsecutiveRestartFailures: Int = 5
@@ -219,20 +223,35 @@ public struct LiveSpeechRecognizerConfiguration: Sendable, Equatable {
 ///
 /// Kept behind ``SpeechRecognizing`` and out of the unit tests: CI has no
 /// microphone. The audio engine stays running across recognition-task
-/// restarts, so only the transcript resets, not the microphone stream.
+/// restarts, and the request tap is swapped to the new task before the old one
+/// is finished, so no microphone buffers are lost at the boundary.
 public actor LiveSpeechRecognizer: SpeechRecognizing {
     public let configuration: LiveSpeechRecognizerConfiguration
+
+    private struct RecognitionCallback: Sendable {
+        let text: String?
+        let isFinal: Bool
+        let errorDescription: String?
+        let generation: UInt64
+        let segment: Int
+    }
 
     private var engine: AVAudioEngine?
     private var requestBox: RecognitionRequestBox?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognizer: SFSpeechRecognizer?
     private var continuation: AsyncThrowingStream<SpeechRecognitionEvent, Error>.Continuation?
+    private var rawEventContinuation: AsyncStream<RecognitionCallback>.Continuation?
+    private var eventPump: Task<Void, Never>?
     private var restartTimerTask: Task<Void, Never>?
+    private var restartTask: Task<Void, Never>?
     private var isRunning = false
+    private var isStarting = false
     private var tapInstalled = false
     private var generation: UInt64 = 0
+    private var lifecycleGeneration: UInt64 = 0
     private var segment = 0
+    private var lastProcessedSegment = 0
     private var consecutiveRestartFailures = 0
     private var restartScheduled = false
 
@@ -269,46 +288,83 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
         language: SpeechLanguage,
         inputDeviceID: AudioDeviceID?
     ) async throws -> AsyncThrowingStream<SpeechRecognitionEvent, Error> {
-        guard !isRunning else { throw SpeechRecognitionError.alreadyRunning }
-
-        let permissions = await requestPermissions()
-        guard permissions.speech == .authorized else {
-            throw SpeechRecognitionError.speechPermissionDenied
+        // The actor yields at `await requestPermissions()`. Mark the start in
+        // progress before that point so a second start cannot install a second
+        // engine and leak a stream.
+        guard !isRunning, !isStarting else {
+            throw SpeechRecognitionError.alreadyRunning
         }
-        guard permissions.microphone == .authorized else {
-            throw SpeechRecognitionError.microphonePermissionDenied
-        }
-
-        let locale = Locale(identifier: language.localeIdentifier)
-        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
-            throw SpeechRecognitionError.localeUnsupported(language.localeIdentifier)
-        }
-        guard recognizer.isAvailable else {
-            throw SpeechRecognitionError.recognizerUnavailable
-        }
-
-        let pair = AsyncThrowingStream<SpeechRecognitionEvent, Error>.makeStream(
-            bufferingPolicy: .bufferingNewest(32)
-        )
-        continuation = pair.continuation
-        self.recognizer = recognizer
-        isRunning = true
-        segment = 0
-        consecutiveRestartFailures = 0
-        generation &+= 1
+        isStarting = true
+        let startLifecycle = lifecycleGeneration
 
         do {
-            try startAudioEngine(inputDeviceID: inputDeviceID)
-            beginRecognitionTask()
+            let permissions = await requestPermissions()
+            guard isStarting, startLifecycle == lifecycleGeneration else {
+                isStarting = false
+                throw SpeechRecognitionError.cancelled
+            }
+            guard permissions.speech == .authorized else {
+                isStarting = false
+                throw SpeechRecognitionError.speechPermissionDenied
+            }
+            guard permissions.microphone == .authorized else {
+                isStarting = false
+                throw SpeechRecognitionError.microphonePermissionDenied
+            }
+
+            let locale = Locale(identifier: language.localeIdentifier)
+            guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+                isStarting = false
+                throw SpeechRecognitionError.localeUnsupported(language.localeIdentifier)
+            }
+
+            let pair = AsyncThrowingStream<SpeechRecognitionEvent, Error>.makeStream(
+                bufferingPolicy: .bufferingNewest(32)
+            )
+            pair.continuation.onTermination = { [weak self] _ in
+                Task { await self?.stop() }
+            }
+
+            let rawPair = AsyncStream<RecognitionCallback>.makeStream(
+                bufferingPolicy: .unbounded
+            )
+
+            continuation = pair.continuation
+            rawEventContinuation = rawPair.continuation
+            eventPump = Task { [weak self] in
+                for await callback in rawPair.stream {
+                    guard !Task.isCancelled else { break }
+                    await self?.handleRecognitionCallback(callback)
+                }
+            }
+
+            self.recognizer = recognizer
+            isRunning = true
+            isStarting = false
+            segment = 0
+            lastProcessedSegment = 0
+            consecutiveRestartFailures = 0
+            restartScheduled = false
+            generation &+= 1
+
+            do {
+                try startAudioEngine(inputDeviceID: inputDeviceID)
+                beginRecognitionTask()
+            } catch {
+                tearDown(finishWith: nil)
+                throw error
+            }
+
+            return pair.stream
         } catch {
-            tearDown(finishWith: nil)
+            isStarting = false
             throw error
         }
-
-        return pair.stream
     }
 
     public func stop() async {
+        lifecycleGeneration &+= 1
+        isStarting = false
         tearDown(finishWith: nil)
     }
 
@@ -372,10 +428,13 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
     // MARK: - Recognition task
 
     private func beginRecognitionTask() {
-        guard isRunning, let recognizer, let requestBox else { return }
+        guard isRunning, !isStarting, let recognizer, let requestBox else { return }
 
         restartTimerTask?.cancel()
         restartTimerTask = nil
+        restartTask?.cancel()
+        restartTask = nil
+        restartScheduled = false
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -383,27 +442,31 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
         if configuration.prefersOnDeviceRecognition, recognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true
         }
-        requestBox.setRequest(request)
 
+        // Swap the tap to the new request before ending the old task, so audio
+        // produced during the boundary is not appended to a finished request.
+        let oldTask = recognitionTask
+        let oldRequest = requestBox.swapRequest(request)
         generation &+= 1
         let currentGeneration = generation
         segment += 1
         let currentSegment = segment
+        let rawContinuation = rawEventContinuation
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            let text = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let errorDescription = error?.localizedDescription
-            Task { [weak self] in
-                await self?.handleRecognition(
-                    text: text,
-                    isFinal: isFinal,
-                    errorDescription: errorDescription,
+        recognitionTask = recognizer.recognitionTask(with: request) { result, error in
+            rawContinuation?.yield(
+                RecognitionCallback(
+                    text: result?.bestTranscription.formattedString,
+                    isFinal: result?.isFinal ?? false,
+                    errorDescription: error?.localizedDescription,
                     generation: currentGeneration,
                     segment: currentSegment
                 )
-            }
+            )
         }
+
+        oldRequest?.endAudio()
+        oldTask?.finish()
 
         scheduleProactiveRestart()
     }
@@ -421,41 +484,46 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
 
     private func restartSegmentProactively() {
         guard isRunning, !restartScheduled else { return }
-        recognitionTask?.finish()
-        recognitionTask = nil
         beginRecognitionTask()
     }
 
-    private func handleRecognition(
-        text: String?,
-        isFinal: Bool,
-        errorDescription: String?,
-        generation callbackGeneration: UInt64,
-        segment callbackSegment: Int
-    ) {
-        guard isRunning, callbackGeneration == generation else { return }
+    private func handleRecognitionCallback(_ callback: RecognitionCallback) {
+        guard isRunning else { return }
 
-        if let text, !text.isEmpty {
+        let isCurrent = callback.generation == generation
+        let isPreviousSegmentFinal = callback.isFinal
+            && callback.generation &+ 1 == generation
+        guard isCurrent || isPreviousSegmentFinal else { return }
+        guard callback.segment >= lastProcessedSegment else { return }
+
+        if let text = callback.text, !text.isEmpty {
+            lastProcessedSegment = callback.segment
             consecutiveRestartFailures = 0
             continuation?.yield(
                 SpeechRecognitionEvent(
                     text: text,
-                    isFinal: isFinal,
-                    segment: callbackSegment,
+                    isFinal: callback.isFinal,
+                    segment: callback.segment,
                     timestamp: ProcessInfo.processInfo.systemUptime
                 )
             )
         }
 
-        if let errorDescription {
+        // A final result from the previous segment is delivered in order when
+        // possible, but it never drives the lifecycle of the new task.
+        guard isCurrent else { return }
+
+        if let errorDescription = callback.errorDescription {
             consecutiveRestartFailures += 1
             if consecutiveRestartFailures > configuration.maximumConsecutiveRestartFailures {
                 fail(.recognitionFailed(errorDescription))
             } else {
                 scheduleRestartAfterTaskEnded()
             }
-        } else if isFinal {
-            scheduleRestartAfterTaskEnded()
+        } else if callback.isFinal {
+            // Normal end of a recognition task (the ~1 minute limit): restart
+            // immediately, with the request swap already done in begin.
+            beginRecognitionTask()
         }
     }
 
@@ -463,18 +531,31 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
         guard isRunning, !restartScheduled else { return }
         restartScheduled = true
         let delay = configuration.segmentRestartDelay
-        Task { [weak self] in
+        let session = lifecycleGeneration
+        let recognitionGeneration = generation
+        restartTask = Task { [weak self] in
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
-            await self?.performScheduledRestart()
+            guard !Task.isCancelled else { return }
+            await self?.performScheduledRestart(
+                session: session,
+                recognitionGeneration: recognitionGeneration
+            )
         }
     }
 
-    private func performScheduledRestart() {
+    private func performScheduledRestart(
+        session: UInt64,
+        recognitionGeneration: UInt64
+    ) {
+        guard isRunning,
+              session == lifecycleGeneration,
+              recognitionGeneration == generation else {
+            return
+        }
         restartScheduled = false
-        guard isRunning else { return }
-        recognitionTask = nil
+        restartTask = nil
         beginRecognitionTask()
     }
 
@@ -484,17 +565,18 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
 
     private func tearDown(finishWith error: SpeechRecognitionError?) {
         isRunning = false
+        isStarting = false
+        lifecycleGeneration &+= 1
         generation &+= 1
         restartScheduled = false
         restartTimerTask?.cancel()
         restartTimerTask = nil
+        restartTask?.cancel()
+        restartTask = nil
 
         recognitionTask?.cancel()
         recognitionTask = nil
         recognizer = nil
-
-        requestBox?.endAudio()
-        requestBox = nil
 
         if let engine {
             if tapInstalled {
@@ -504,13 +586,22 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
             engine.stop()
         }
         engine = nil
+        // Removing the tap first guarantees no new buffers are produced.
+        requestBox?.endAudio()
+        requestBox = nil
 
-        if let error {
-            continuation?.finish(throwing: error)
-        } else {
-            continuation?.finish()
-        }
+        rawEventContinuation?.finish()
+        rawEventContinuation = nil
+        eventPump?.cancel()
+        eventPump = nil
+
+        let publicContinuation = continuation
         continuation = nil
+        if let error {
+            publicContinuation?.finish(throwing: error)
+        } else {
+            publicContinuation?.finish()
+        }
     }
 
     private static func speechAuthorization(
@@ -544,17 +635,22 @@ private final class RecognitionRequestBox: @unchecked Sendable {
     private let lock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
 
-    func setRequest(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+    func swapRequest(
+        _ newRequest: SFSpeechAudioBufferRecognitionRequest?
+    ) -> SFSpeechAudioBufferRecognitionRequest? {
         lock.lock()
-        self.request = request
+        let old = request
+        request = newRequest
         lock.unlock()
+        return old
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
+        // Hold the lock through append: endAudio() must not finalize a request
+        // while a buffer is still being appended.
         lock.lock()
-        let request = self.request
-        lock.unlock()
         request?.append(buffer)
+        lock.unlock()
     }
 
     func endAudio() {

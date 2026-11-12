@@ -10,11 +10,22 @@ public struct SpeechHypothesis: Sendable, Equatable {
     public let text: String
     public let timestamp: TimeInterval
     public let isFinal: Bool
+    /// Recognizer task generation, when known. `SFSpeechRecognizer` tasks are
+    /// replaced roughly once a minute and the new transcript starts from empty;
+    /// a changed value tells the follower to keep its position and ignore
+    /// backward-only evidence until the new segment moves forward.
+    public let segment: Int?
 
-    public init(text: String, timestamp: TimeInterval, isFinal: Bool = false) {
+    public init(
+        text: String,
+        timestamp: TimeInterval,
+        isFinal: Bool = false,
+        segment: Int? = nil
+    ) {
         self.text = text
         self.timestamp = timestamp
         self.isFinal = isFinal
+        self.segment = segment
     }
 }
 
@@ -25,32 +36,58 @@ public struct SpeechFollowConfiguration: Sendable, Equatable, Codable {
     public var maximumRecognizedWords: Int = 14
     /// Below this confidence a candidate is not allowed to move the position.
     public var minimumConfidence: Double = 0.4
-    /// Confidence required before a long forward jump is considered.
+    /// Confidence required before a long non-contiguous forward jump is
+    /// considered.
     public var strongConfidence: Double = 0.72
-    /// Backward moves need more evidence than forward moves to avoid jitter.
-    public var backwardConfidence: Double = 0.6
+    /// Backward moves need much stronger evidence than forward moves. A short
+    /// revision of three or four words must never drag the teleprompter back.
+    public var backwardConfidence: Double = 0.85
     /// Minimum number of matched words in an alignment.
     public var minimumMatchedWords: Int = 3
+    /// Minimum matched words for a backward move.
+    public var minimumBackwardMatchedWords: Int = 5
     /// Short suffixes get a lower confidence so a two-word coincidence cannot
     /// move the teleprompter. Five words of evidence saturate the factor.
     public var evidenceSaturationWords: Int = 5
     /// Hard limit: never go back more than this many sentences.
     public var maximumBackwardSentences: Int = 1
-    /// Forward jumps up to this many sentences are accepted immediately.
+    /// Forward jumps up to this many sentences are accepted immediately when
+    /// they are not a contiguous continuation of the current reading path.
     public var maximumForwardSentences: Int = 2
-    /// A jump beyond `maximumForwardSentences` is allowed only up to this many
-    /// sentences, and only after sustained strong matches.
+    /// A non-contiguous jump beyond `maximumForwardSentences` is allowed up to
+    /// this many sentences, and only after sustained strong matches.
     public var confirmedForwardSentences: Int = 5
+    /// Deep recovery search limit. Candidates beyond `confirmedForwardSentences`
+    /// can still win when re-acquiring, or when they beat the local match by at
+    /// least two matched words; the actual move still requires sustained strong
+    /// evidence.
+    public var recoveryForwardSentences: Int = 12
+    /// How long confidence must be low before deep recovery candidates can
+    /// override a strong local match without the two-word coverage advantage.
+    public var reacquisitionDelay: TimeInterval = 1.0
+    /// Alignment window limits in tokens, independent of sentence length. They
+    /// keep per-update work bounded on very long sentences.
+    public var maximumBackwardTokens: Int = 48
+    public var maximumForwardTokens: Int = 320
+    /// A candidate whose alignment starts this close after the current token is
+    /// a contiguous continuation, i.e. normal reading, not a jump.
+    public var continuationStartToleranceTokens: Int = 2
+    /// A continuation may overlap this many already-read words.
+    public var continuationMaximumOverlapTokens: Int = 5
+    /// A continuation may skip at most this many script words (recognizer or
+    /// speaker dropped a word); more than this is a jump, not reading.
+    public var continuationMaximumGaps: Int = 2
     /// Number of consecutive distinct strong hypotheses required to confirm a
-    /// long forward jump.
+    /// long non-contiguous jump.
     public var forwardConfirmationUpdates: Int = 3
     /// Silence or sustained low confidence for this long puts the follower in
     /// the `lost` state so the UI can fall back to timed scrolling.
     public var lostAfterSeconds: TimeInterval = 3.0
-    /// Scores this close are treated as a tie, where the nearest forward match
-    /// wins (useful when the same phrase appears twice).
+    /// Scores this close are treated as a tie, where coverage and then the
+    /// nearest forward match decide (useful when a phrase repeats).
     public var preferAheadTolerance: Double = 0.05
-    /// A long forward match must beat the best local match by this margin.
+    /// A long forward match must beat the best local match by this margin, or
+    /// have at least two more matched words, to be considered a jump.
     public var farMustBeatNearBy: Double = 0.15
 
     public init() {}
@@ -95,6 +132,8 @@ public struct SpeechFollower: Sendable {
     private var lost: Bool
     private var lastHypothesisText: String?
     private var pendingForwardJump: PendingForwardJump?
+    private var currentSegment: Int?
+    private var segmentRestartNeedsForwardProgress: Bool
 
     private struct PendingForwardJump: Sendable, Equatable {
         let sentenceIndex: Int
@@ -104,9 +143,11 @@ public struct SpeechFollower: Sendable {
 
     private struct Candidate: Sendable, Equatable {
         let tokenIndex: Int
+        let firstTokenIndex: Int
         let sentenceIndex: Int
         let confidence: Double
         let matchedWordCount: Int
+        let scriptGapCount: Int
     }
 
     public init(
@@ -121,6 +162,8 @@ public struct SpeechFollower: Sendable {
         self.lastMatchedWordCount = 0
         self.lastTimestamp = 0
         self.lost = false
+        self.currentSegment = nil
+        self.segmentRestartNeedsForwardProgress = false
     }
 
     public var state: SpeechFollowState {
@@ -148,6 +191,8 @@ public struct SpeechFollower: Sendable {
         lost = false
         lastHypothesisText = nil
         pendingForwardJump = nil
+        currentSegment = nil
+        segmentRestartNeedsForwardProgress = false
     }
 
     /// Feed one full partial transcript. Returns the resulting position.
@@ -157,6 +202,13 @@ public struct SpeechFollower: Sendable {
         lastTimestamp = max(lastTimestamp, hypothesis.timestamp)
         lastHypothesisAt = hypothesis.timestamp
 
+        if let segment = hypothesis.segment {
+            if let currentSegment, currentSegment != segment {
+                beginRecognitionSegment(at: hypothesis.timestamp)
+            }
+            currentSegment = segment
+        }
+
         // Identical hypotheses must not move the teleprompter or count as
         // sustained evidence for a long jump.
         if let lastHypothesisText, lastHypothesisText == hypothesis.text {
@@ -165,11 +217,21 @@ public struct SpeechFollower: Sendable {
         }
         lastHypothesisText = hypothesis.text
 
+        guard !script.isEmpty else {
+            pendingForwardJump = nil
+            lastConfidence = 0
+            lastMatchedWordCount = 0
+            updateLiveness(at: lastTimestamp)
+            return state
+        }
+
         let recognizedWords = ScriptTokenizer
             .normalizedWords(in: hypothesis.text, language: script.language)
         let tail = Array(recognizedWords.suffix(max(1, configuration.maximumRecognizedWords)))
 
-        guard !script.isEmpty, !tail.isEmpty else {
+        guard !tail.isEmpty else {
+            // An empty partial right after a recognizer restart is not evidence
+            // against the current position; keep it and let liveness decide.
             pendingForwardJump = nil
             lastConfidence = 0
             lastMatchedWordCount = 0
@@ -178,7 +240,7 @@ public struct SpeechFollower: Sendable {
         }
 
         let candidates = alignmentCandidates(for: tail)
-        decide(candidates: candidates)
+        decide(candidates: candidates, at: lastTimestamp)
         updateLiveness(at: lastTimestamp)
         return state
     }
@@ -187,9 +249,46 @@ public struct SpeechFollower: Sendable {
     public mutating func process(
         text: String,
         at timestamp: TimeInterval,
-        isFinal: Bool = false
+        isFinal: Bool = false,
+        segment: Int? = nil
     ) -> SpeechFollowState {
-        process(SpeechHypothesis(text: text, timestamp: timestamp, isFinal: isFinal))
+        process(
+            SpeechHypothesis(
+                text: text,
+                timestamp: timestamp,
+                isFinal: isFinal,
+                segment: segment
+            )
+        )
+    }
+
+    /// Convenience for the live pipeline: forwards the event's segment so a
+    /// recognizer task replacement keeps the current position.
+    @discardableResult
+    public mutating func process(_ event: SpeechRecognitionEvent) -> SpeechFollowState {
+        process(
+            SpeechHypothesis(
+                text: event.text,
+                timestamp: event.timestamp,
+                isFinal: event.isFinal,
+                segment: event.segment
+            )
+        )
+    }
+
+    /// Tell the follower that the recognizer replaced its task and the new
+    /// transcript starts from empty (see `SpeechRecognitionEvent.segment`).
+    ///
+    /// The current position is kept. Until the new segment moves forward, a
+    /// short backward-looking partial cannot drag the teleprompter back; a
+    /// contiguous continuation advances normally.
+    @discardableResult
+    public mutating func beginRecognitionSegment(at timestamp: TimeInterval) -> SpeechFollowState {
+        lastTimestamp = max(lastTimestamp, timestamp)
+        segmentRestartNeedsForwardProgress = true
+        lastHypothesisText = nil
+        pendingForwardJump = nil
+        return state
     }
 
     /// Time-based liveness check. Call this periodically (for example 4 times
@@ -234,17 +333,34 @@ public struct SpeechFollower: Sendable {
 
         let currentSentence = script.sentenceIndex(forTokenAt: anchorTokenIndex) ?? 0
         let firstSentence = max(0, currentSentence - configuration.maximumBackwardSentences)
+        // Search the full recovery range even when not yet flagged as lost: a
+        // repeated opening phrase can keep local confidence high while the
+        // reader has actually skipped ahead. The move still requires sustained
+        // strong evidence in `decide`.
         let lastSentence = min(
             script.sentenceCount - 1,
-            currentSentence + configuration.confirmedForwardSentences
+            currentSentence + max(
+                configuration.confirmedForwardSentences,
+                configuration.recoveryForwardSentences
+            )
         )
-        guard let windowRange = script.tokenRange(
+        guard let sentenceRange = script.tokenRange(
             fromSentence: firstSentence,
             throughSentence: lastSentence
         ) else {
             return []
         }
 
+        // Token caps keep the DP bounded even when a "sentence" is a 5,000-word
+        // paragraph. They are much wider than any natural 10-15 word update.
+        let start = max(sentenceRange.lowerBound, anchorTokenIndex - configuration.maximumBackwardTokens)
+        let end = min(
+            sentenceRange.upperBound,
+            anchorTokenIndex + configuration.maximumForwardTokens + 1
+        )
+        guard start < end else { return [] }
+
+        let windowRange = start..<end
         let windowTokens = Array(script.tokens[windowRange])
         guard !windowTokens.isEmpty else { return [] }
 
@@ -298,7 +414,15 @@ public struct SpeechFollower: Sendable {
             repeating: [Int](repeating: -1, count: m + 1),
             count: n + 1
         )
+        var firstMatched = [[Int]](
+            repeating: [Int](repeating: -1, count: m + 1),
+            count: n + 1
+        )
         var matchedCounts = [[Int]](
+            repeating: [Int](repeating: 0, count: m + 1),
+            count: n + 1
+        )
+        var scriptGaps = [[Int]](
             repeating: [Int](repeating: 0, count: m + 1),
             count: n + 1
         )
@@ -318,54 +442,97 @@ public struct SpeechFollower: Sendable {
 
                 let diagonalScore = scores[i - 1][j - 1] + substitution
                 let diagonalLast = isMatch ? (j - 1) : lastMatched[i - 1][j - 1]
+                let diagonalFirst: Int
+                if isMatch {
+                    let previousFirst = firstMatched[i - 1][j - 1]
+                    diagonalFirst = previousFirst >= 0 ? previousFirst : (j - 1)
+                } else {
+                    diagonalFirst = firstMatched[i - 1][j - 1]
+                }
                 let diagonalMatches = matchedCounts[i - 1][j - 1] + (isMatch ? 1 : 0)
 
                 let upwardScore = scores[i - 1][j] + skipRecognizedPenalty
                 let upwardLast = lastMatched[i - 1][j]
+                let upwardFirst = firstMatched[i - 1][j]
                 let upwardMatches = matchedCounts[i - 1][j]
+                let upwardGaps = scriptGaps[i - 1][j]
 
                 let leftScore = scores[i][j - 1] + skipScriptPenalty
                 let leftLast = lastMatched[i][j - 1]
+                let leftFirst = firstMatched[i][j - 1]
                 let leftMatches = matchedCounts[i][j - 1]
+                let leftGaps = scriptGaps[i][j - 1]
 
                 // Prefer a real match on ties so the anchor advances.
                 if diagonalScore >= upwardScore, diagonalScore >= leftScore {
                     scores[i][j] = diagonalScore
                     lastMatched[i][j] = diagonalLast
+                    firstMatched[i][j] = diagonalFirst
                     matchedCounts[i][j] = diagonalMatches
+                    scriptGaps[i][j] = scriptGaps[i - 1][j - 1]
                 } else if upwardScore >= leftScore {
                     scores[i][j] = upwardScore
                     lastMatched[i][j] = upwardLast
+                    firstMatched[i][j] = upwardFirst
                     matchedCounts[i][j] = upwardMatches
+                    scriptGaps[i][j] = upwardGaps
                 } else {
                     scores[i][j] = leftScore
                     lastMatched[i][j] = leftLast
+                    firstMatched[i][j] = leftFirst
                     matchedCounts[i][j] = leftMatches
+                    scriptGaps[i][j] = leftGaps + 1
                 }
             }
         }
 
         for j in 0...m {
             let relativeAnchor = lastMatched[n][j]
-            guard relativeAnchor >= 0 else { continue }
+            let relativeFirst = firstMatched[n][j]
+            guard relativeAnchor >= 0, relativeFirst >= 0 else { continue }
             guard matchedCounts[n][j] > 0 else { continue }
 
             let quality = max(0, scores[n][j]) / (matchScore * Double(n))
             let confidence = min(1, quality * evidence)
             let absoluteAnchor = windowStart + relativeAnchor
-            guard script.tokens.indices.contains(absoluteAnchor) else { continue }
+            let absoluteFirst = windowStart + relativeFirst
+            guard script.tokens.indices.contains(absoluteAnchor),
+                  script.tokens.indices.contains(absoluteFirst) else { continue }
 
             let candidate = Candidate(
                 tokenIndex: absoluteAnchor,
+                firstTokenIndex: absoluteFirst,
                 sentenceIndex: script.tokens[absoluteAnchor].sentenceIndex,
                 confidence: confidence,
-                matchedWordCount: matchedCounts[n][j]
+                matchedWordCount: matchedCounts[n][j],
+                scriptGapCount: scriptGaps[n][j]
             )
-            if let existing = best[absoluteAnchor], existing.confidence >= confidence {
-                continue
+            if let existing = best[absoluteAnchor] {
+                let existingIsContinuation = looksLikeContinuation(existing)
+                let candidateIsContinuation = looksLikeContinuation(candidate)
+                if existingIsContinuation != candidateIsContinuation {
+                    if candidateIsContinuation {
+                        best[absoluteAnchor] = candidate
+                    }
+                    continue
+                }
+                if existing.confidence > confidence { continue }
+                if abs(existing.confidence - confidence) <= 0.000_001,
+                   existing.matchedWordCount >= candidate.matchedWordCount {
+                    continue
+                }
             }
             best[absoluteAnchor] = candidate
         }
+    }
+
+    private func looksLikeContinuation(_ candidate: Candidate) -> Bool {
+        guard candidate.tokenIndex > anchorTokenIndex else { return false }
+        return candidate.firstTokenIndex
+                <= anchorTokenIndex + configuration.continuationStartToleranceTokens
+            && candidate.firstTokenIndex
+                >= anchorTokenIndex - configuration.continuationMaximumOverlapTokens
+            && candidate.scriptGapCount <= configuration.continuationMaximumGaps
     }
 
     private func substitutionScore(_ recognized: String, _ scriptWord: String) -> Double {
@@ -375,6 +542,12 @@ public struct SpeechFollower: Sendable {
     }
 
     private func areSimilar(_ lhs: String, _ rhs: String) -> Bool {
+        // Numbers must match exactly: "linea1" and "linea9", or "2025" and
+        // "2026", are different words, not spelling corrections.
+        if lhs.contains(where: \.isNumber) || rhs.contains(where: \.isNumber) {
+            return false
+        }
+
         let shorter = lhs.count <= rhs.count ? lhs : rhs
         let longer = lhs.count <= rhs.count ? rhs : lhs
         guard shorter.count >= 3, longer.count >= 4 else { return false }
@@ -415,7 +588,7 @@ public struct SpeechFollower: Sendable {
 
     // MARK: - Position decision
 
-    private mutating func decide(candidates: [Candidate]) {
+    private mutating func decide(candidates: [Candidate], at timestamp: TimeInterval) {
         guard !candidates.isEmpty else {
             pendingForwardJump = nil
             lastConfidence = 0
@@ -432,45 +605,96 @@ public struct SpeechFollower: Sendable {
         )
         let normalForwardSentence = currentSentence + configuration.maximumForwardSentences
         let confirmedForwardSentence = currentSentence + configuration.confirmedForwardSentences
+        let recoveryForwardSentence = currentSentence + configuration.recoveryForwardSentences
+        let reacquiring = isReacquiring(at: timestamp)
+        let backwardTokenFloor = anchorTokenIndex - configuration.maximumBackwardTokens
 
+        var continuationCandidates: [Candidate] = []
         var nearCandidates: [Candidate] = []
         var farCandidates: [Candidate] = []
-        var belowCandidates: [Candidate] = []
+        var deepFarCandidates: [Candidate] = []
 
         for candidate in candidates {
             guard candidate.matchedWordCount >= configuration.minimumMatchedWords else {
                 continue
             }
-            guard candidate.sentenceIndex >= firstAllowedSentence,
-                  candidate.sentenceIndex <= confirmedForwardSentence else {
+            guard candidate.tokenIndex >= backwardTokenFloor else { continue }
+            guard candidate.sentenceIndex >= firstAllowedSentence else { continue }
+
+            let isForward = candidate.tokenIndex > anchorTokenIndex
+            let startsNear = candidate.firstTokenIndex
+                <= anchorTokenIndex + configuration.continuationStartToleranceTokens
+            let overlapsReasonable = candidate.firstTokenIndex
+                >= anchorTokenIndex - configuration.continuationMaximumOverlapTokens
+            let isContiguous = candidate.scriptGapCount <= configuration.continuationMaximumGaps
+            let isContinuation = isForward && startsNear && overlapsReasonable && isContiguous
+
+            if isContinuation {
+                // Matching the text that comes right after the current word is
+                // normal reading, not a jump. It may span several sentences
+                // when a 10-15 word update lands after a pause.
+                if candidate.confidence < configuration.minimumConfidence {
+                    continue
+                }
+                continuationCandidates.append(candidate)
                 continue
             }
+
+            guard candidate.sentenceIndex <= recoveryForwardSentence else { continue }
 
             if candidate.confidence < configuration.minimumConfidence {
-                belowCandidates.append(candidate)
                 continue
             }
 
-            if candidate.tokenIndex < anchorTokenIndex,
-               candidate.confidence < configuration.backwardConfidence {
+            if candidate.tokenIndex < anchorTokenIndex {
+                // After a recognizer restart the new transcript starts from
+                // empty. Backward-looking partials must not move the position.
+                let canMoveBack = !segmentRestartNeedsForwardProgress
+                    && candidate.confidence >= configuration.backwardConfidence
+                    && candidate.matchedWordCount >= configuration.minimumBackwardMatchedWords
+                if !canMoveBack {
+                    continue
+                }
+            }
+
+            // A non-contiguous jump over more than one sentence needs strong
+            // evidence. A three-word 0.6-confidence coincidence is not enough.
+            let sentencesAhead = candidate.sentenceIndex - currentSentence
+            if sentencesAhead > 1,
+               candidate.confidence < configuration.strongConfidence {
                 continue
             }
 
             if candidate.sentenceIndex <= normalForwardSentence {
                 nearCandidates.append(candidate)
             } else if candidate.confidence >= configuration.strongConfidence {
-                farCandidates.append(candidate)
+                if candidate.sentenceIndex <= confirmedForwardSentence {
+                    farCandidates.append(candidate)
+                } else {
+                    deepFarCandidates.append(candidate)
+                }
             }
         }
 
-        let nearBest = bestCandidate(in: nearCandidates)
-        let farBest = bestCandidate(in: farCandidates)
+        if let continuation = bestContinuation(in: continuationCandidates) {
+            pendingForwardJump = nil
+            accept(continuation)
+            return
+        }
 
-        var accepted: Candidate?
+        let nearBest = bestCandidate(in: nearCandidates)
+        let eligibleDeep = deepFarCandidates.filter { candidate in
+            reacquiring
+                || nearBest == nil
+                || candidate.matchedWordCount >= (nearBest?.matchedWordCount ?? 0) + 2
+        }
+        let farBest = bestCandidate(in: farCandidates + eligibleDeep)
+
         let farBeatsNear: Bool
         if let far = farBest {
             if let near = nearBest {
                 farBeatsNear = far.confidence > near.confidence + configuration.farMustBeatNearBy
+                    || far.matchedWordCount >= near.matchedWordCount + 2
             } else {
                 farBeatsNear = true
             }
@@ -481,33 +705,58 @@ public struct SpeechFollower: Sendable {
         if let far = farBest, farBeatsNear {
             let streak = notePendingForwardJump(far)
             if streak >= configuration.forwardConfirmationUpdates {
-                accepted = far
                 pendingForwardJump = nil
+                accept(far)
+                return
             }
         } else {
             pendingForwardJump = nil
-            accepted = nearBest
+            if let near = nearBest {
+                accept(near)
+                return
+            }
         }
 
-        if let accepted {
-            if accepted.tokenIndex < anchorTokenIndex {
-                pendingForwardJump = nil
+        // No accepted move. Report zero confidence: an unconfirmed far jump or
+        // a rejected backward revision must not look trustworthy while the
+        // teleprompter is actually stuck.
+        lastConfidence = 0
+        lastMatchedWordCount = 0
+    }
+
+    private mutating func accept(_ candidate: Candidate) {
+        let movedForward = candidate.tokenIndex > anchorTokenIndex
+        if candidate.tokenIndex < anchorTokenIndex {
+            pendingForwardJump = nil
+        }
+        anchorTokenIndex = candidate.tokenIndex
+        furthestSentenceIndex = max(furthestSentenceIndex, candidate.sentenceIndex)
+        lastConfidence = candidate.confidence
+        lastMatchedWordCount = candidate.matchedWordCount
+        if movedForward {
+            segmentRestartNeedsForwardProgress = false
+        }
+    }
+
+    private func isReacquiring(at timestamp: TimeInterval) -> Bool {
+        if lost { return true }
+        guard let since = lowConfidenceSince else { return false }
+        return timestamp - since >= configuration.reacquisitionDelay
+    }
+
+    private func bestContinuation(in candidates: [Candidate]) -> Candidate? {
+        candidates.reduce(nil) { best, candidate in
+            guard let best else { return candidate }
+            if candidate.matchedWordCount != best.matchedWordCount {
+                return candidate.matchedWordCount > best.matchedWordCount ? candidate : best
             }
-            anchorTokenIndex = accepted.tokenIndex
-            furthestSentenceIndex = max(furthestSentenceIndex, accepted.sentenceIndex)
-            lastConfidence = accepted.confidence
-            lastMatchedWordCount = accepted.matchedWordCount
-        } else if let far = farBest {
-            // A strong long jump is pending confirmation. Report its
-            // confidence so a short confirmation window does not look "lost".
-            lastConfidence = far.confidence
-            lastMatchedWordCount = far.matchedWordCount
-        } else if let below = bestCandidate(in: belowCandidates) {
-            lastConfidence = below.confidence
-            lastMatchedWordCount = below.matchedWordCount
-        } else {
-            lastConfidence = 0
-            lastMatchedWordCount = 0
+            if candidate.tokenIndex != best.tokenIndex {
+                return candidate.tokenIndex > best.tokenIndex ? candidate : best
+            }
+            if abs(candidate.confidence - best.confidence) > 0.000_001 {
+                return candidate.confidence > best.confidence ? candidate : best
+            }
+            return candidate.firstTokenIndex < best.firstTokenIndex ? candidate : best
         }
     }
 
@@ -548,6 +797,12 @@ public struct SpeechFollower: Sendable {
             return candidateIsAhead
         }
 
+        // Equal-confidence longer coverage is the phrase that continues the
+        // current reading path, even when a shorter local match is closer.
+        if candidate.matchedWordCount != current.matchedWordCount {
+            return candidate.matchedWordCount > current.matchedWordCount
+        }
+
         let candidateDistance = abs(candidate.tokenIndex - anchorTokenIndex)
         let currentDistance = abs(current.tokenIndex - anchorTokenIndex)
         if candidateDistance != currentDistance {
@@ -556,9 +811,6 @@ public struct SpeechFollower: Sendable {
 
         if abs(candidate.confidence - current.confidence) > 0.000_001 {
             return candidate.confidence > current.confidence
-        }
-        if candidate.matchedWordCount != current.matchedWordCount {
-            return candidate.matchedWordCount > current.matchedWordCount
         }
         return candidate.tokenIndex < current.tokenIndex
     }
