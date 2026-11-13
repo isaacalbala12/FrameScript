@@ -4,7 +4,7 @@ import Security
 import XCTest
 
 @MainActor
-final class ErrorHandlingTests: XCTestCase {
+final class ErrorHandlingTests: FrameScriptTestCase {
     func testErrorCenterPresentsQueuesPromotesAndDeduplicates() {
         let center = ErrorCenter()
         let first = AppError(kind: .projectRead)
@@ -72,9 +72,7 @@ final class ErrorHandlingTests: XCTestCase {
     }
 
     func testCorruptedSettingsDataIsPreserved() {
-        let suite = "ErrorHandlingTests-settings-read-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeDefaults()
         let original = Data("{broken".utf8)
         defaults.set(original, forKey: "settings")
 
@@ -87,7 +85,7 @@ final class ErrorHandlingTests: XCTestCase {
 
     func testSettingsEncodingFailureIsReported() {
         enum EncodingFailure: Error { case failed }
-        let store = SettingsStore(settings: .defaults, encoder: { _ in throw EncodingFailure.failed })
+        let store = SettingsStore(settings: .defaults, userDefaults: makeDefaults(), encoder: { _ in throw EncodingFailure.failed })
         store.settings.generalPreferences.autosaveEnabled.toggle()
         XCTAssertEqual(store.errorEvent?.kind, .settingsWrite)
     }
@@ -196,9 +194,7 @@ final class ErrorHandlingTests: XCTestCase {
     }
 
     func testProviderSpecificSettingsRemainSeparate() {
-        let suite = "ErrorHandlingTests-ai-providers-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeDefaults()
         let store = AIProviderConfigurationStore(userDefaults: defaults)
         let google = AIProviderConfiguration(model: "gemini-custom", baseURL: "https://google.example/v1")
         let groq = AIProviderConfiguration(model: "groq-custom", baseURL: "https://groq.example/v1")
@@ -211,9 +207,7 @@ final class ErrorHandlingTests: XCTestCase {
     }
 
     func testStoredKeyMetadataCanBeClearedWithoutReadingKeychain() {
-        let suite = "ErrorHandlingTests-ai-key-metadata-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeDefaults()
         let store = AIProviderConfigurationStore(userDefaults: defaults)
 
         store.setHasStoredKey(true, for: .groq)
@@ -229,9 +223,7 @@ final class ErrorHandlingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("Project.fscr")
         try "test".write(to: file, atomically: true, encoding: .utf8)
-        let suite = "ErrorHandlingTests-recents-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeDefaults()
         var encodeCount = 0
         let store = RecentProjectStore(
             userDefaults: defaults,

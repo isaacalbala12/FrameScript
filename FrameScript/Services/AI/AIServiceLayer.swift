@@ -548,8 +548,8 @@ final class ProviderCredentialSession {
 struct AIProviderConfigurationStore {
     private let userDefaults: UserDefaults
 
-    init(userDefaults: UserDefaults = .standard) {
-        self.userDefaults = userDefaults
+    init(userDefaults: UserDefaults = AppEnvironment.defaults) {
+        self.userDefaults = AppEnvironment.isolatedDefaults(userDefaults)
     }
 
     func save(_ configuration: AIProviderConfiguration, for provider: AIProviderKind) {

@@ -5,7 +5,7 @@ import SwiftUI
 import XCTest
 
 @MainActor
-final class EditorPersistenceTests: XCTestCase {
+final class EditorPersistenceTests: FrameScriptTestCase {
     func testVisualsTerminologyUsesNaturalLocalizedValues() throws {
         let englishVisualsKeys = [
             "production.addBRollForSelection", "dialog.deleteScene.message", "settings.defaultSplit",
@@ -2400,7 +2400,7 @@ final class EditorPersistenceTests: XCTestCase {
         let project = project ?? FrameProject(title: "Project", scenes: [scene])
         let store = ProjectStore(project: project, projectWriter: projectWriter)
         store.openProject(project, fileURL: fileURL, wordsPerMinute: 150, markUnsaved: false)
-        let suite = UserDefaults(suiteName: "EditorPersistenceTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         let configurationStore = AIProviderConfigurationStore(userDefaults: suite)
         configurationStore.setHasStoredKey(hasAutocompleteStoredKey, for: .openAICompatible)
         var settings = AppSettings.defaults

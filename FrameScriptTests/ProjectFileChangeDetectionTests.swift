@@ -4,7 +4,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class ProjectFileChangeDetectionTests: XCTestCase {
+final class ProjectFileChangeDetectionTests: FrameScriptTestCase {
     private final class ConfirmationRecorder {
         var count = 0
         var resolution: ExternalProjectChangeResolution = .cancel
@@ -333,7 +333,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         try FrameScriptFileStore.write(project: makeProject(title: "External", scenes: [(sceneID, "external")]), to: url)
         let recorder = ConfirmationRecorder()
         recorder.resolution = .cancel
-        let suite = UserDefaults(suiteName: "ProjectFileChangeDetectionTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.autosaveEnabled = false
         let project = makeProject(title: "Local", scenes: [(sceneID, "local")])
@@ -413,7 +413,7 @@ final class ProjectFileChangeDetectionTests: XCTestCase {
         closeConfirmation: AppState.CloseConfirmation? = nil,
         saveProjectCopyHandler: (@MainActor () -> Bool)? = nil
     ) -> AppState {
-        let suite = UserDefaults(suiteName: "ProjectFileChangeDetectionTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.autosaveEnabled = autosaveEnabled
         let store = ProjectStore(project: SampleData.defaultProject, projectWriter: FrameScriptFileStore.write)

@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class SceneDeletionSelectionTests: XCTestCase {
+final class SceneDeletionSelectionTests: FrameScriptTestCase {
     func testDeletingSceneAfterAddSceneAfterSelectsTheVisualNeighbor() throws {
         let first = Scene(order: 0, sectionType: .hook, title: "First", scriptText: "First scene")
         let second = Scene(order: 1, sectionType: .problem, title: "Second", scriptText: "Second scene")
@@ -59,7 +59,7 @@ final class SceneDeletionSelectionTests: XCTestCase {
     }
 
     private func makeAppState(store: ProjectStore) -> AppState {
-        let suite = UserDefaults(suiteName: "SceneDeletionSelectionTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.confirmBeforeDeleting = false
         settings.generalPreferences.autosaveEnabled = false

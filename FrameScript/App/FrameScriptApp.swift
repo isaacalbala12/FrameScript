@@ -1,15 +1,45 @@
 import AppKit
 import SwiftUI
 
+/// Runtime entry point.
+///
+/// XCTest injects its bundle into the host app, and a `WindowGroup` there would
+/// create a window, steal focus and write window-frame keys into the user's
+/// real preferences. The test host therefore runs a scene with no windows.
 @main
-struct FrameScriptApp: App {
+enum FrameScriptApp {
+    static func main() {
+        if AppEnvironment.isRunningTests {
+            FrameScriptTestHostApp.main()
+        } else {
+            FrameScriptProductionApp.main()
+        }
+    }
+}
+
+struct FrameScriptTestHostApp: App {
+    init() {
+        AppEnvironment.prepareForLaunch()
+        TestIsolationBaseline.captureIfNeeded()
+    }
+
+    var body: some SwiftUI.Scene {
+        Settings<EmptyView> { EmptyView() }
+    }
+}
+
+struct FrameScriptProductionApp: App {
     @NSApplicationDelegateAdaptor(FrameScriptAppDelegate.self) private var appDelegate
     @State private var appState: AppState
     @Environment(\.openSettings) private var openSettings
 
     init() {
         // Must run before AppState creates its settings and recents stores.
-        SandboxDataMigration.migrateIfNeeded()
+        AppEnvironment.prepareForLaunch()
+        TestIsolationBaseline.captureIfNeeded()
+        if !AppEnvironment.isRunningTests {
+            SandboxDataMigration.migrateIfNeeded()
+        }
         _appState = State(initialValue: AppState())
         // This is a process-wide AppKit setting, so enable automatic spelling
         // language detection once at launch instead of mutating it from the

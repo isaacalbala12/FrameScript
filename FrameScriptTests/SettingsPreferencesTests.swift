@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class SettingsPreferencesTests: XCTestCase {
+final class SettingsPreferencesTests: FrameScriptTestCase {
     func testLegacyLaunchBehaviorMigrationRestoresOnlyTheUnambiguousCombination() throws {
         for (showBrowser, restoreLastProject, expected) in [
             (false, true, LaunchBehavior.restoreLastProject),
@@ -38,9 +38,7 @@ final class SettingsPreferencesTests: XCTestCase {
     }
 
     func testDisabledInlineAutocompleteBlocksOnlyAutocompleteEligibility() async {
-        let suiteName = "SettingsPreferencesTests-autocomplete-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
         let configurationStore = AIProviderConfigurationStore(userDefaults: defaults)
         configurationStore.setHasStoredKey(true, for: .openAICompatible)
         var settings = AppSettings.defaults
@@ -67,9 +65,7 @@ final class SettingsPreferencesTests: XCTestCase {
         XCTAssertTrue(AppSettings.defaults.editorPreferences.showAIReviewPanel)
         XCTAssertFalse(AppSettings.defaults.aiPreferences.enableInlineAutocomplete)
 
-        let suiteName = "SettingsPreferencesTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
         let store = SettingsStore(settings: .defaults, userDefaults: defaults, key: "settings")
         store.settings.editorPreferences.showAIReviewPanel = false
         store.settings.aiPreferences.enableInlineAutocomplete = true

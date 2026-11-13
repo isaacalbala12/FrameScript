@@ -21,6 +21,7 @@ enum SandboxDataMigration {
         var copiedSettings = false
         var skippedAlreadyMigrated = false
         var skippedMissingContainer = false
+        var skippedTestEnvironment = false
     }
 
     static func defaultContainerPlistURL(fileManager: FileManager = .default) -> URL {
@@ -33,7 +34,7 @@ enum SandboxDataMigration {
 
     @discardableResult
     static func migrateIfNeeded(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppEnvironment.defaults,
         containerPlistURL: URL? = nil,
         fileManager: FileManager = .default,
         logger: Logger = Logger(
@@ -41,6 +42,15 @@ enum SandboxDataMigration {
             category: "SandboxMigration"
         )
     ) -> Result {
+        // The test host's launch path must not read or write the user's real
+        // container plist. Unit tests that exercise the migration always pass
+        // an explicit temporary container URL and isolated defaults.
+        guard !AppEnvironment.isRunningTests || containerPlistURL != nil else {
+            var result = Result()
+            result.skippedTestEnvironment = true
+            return result
+        }
+
         if defaults.bool(forKey: markerKey) {
             var result = Result()
             result.skippedAlreadyMigrated = true

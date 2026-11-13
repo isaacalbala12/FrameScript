@@ -6,7 +6,7 @@ import SwiftUI
 import XCTest
 
 @MainActor
-final class EditorMarkupTests: XCTestCase {
+final class EditorMarkupTests: FrameScriptTestCase {
     // MARK: - Duration (F4 / F11 / F3)
 
     func testDurationCountsSpokenWordsAndPausesButNotCues() {
@@ -887,7 +887,7 @@ final class EditorMarkupTests: XCTestCase {
     private func makeAppState(project: FrameProject) -> AppState {
         AppState(
             projectStore: ProjectStore(project: project),
-            settingsStore: SettingsStore(settings: .defaults)
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings")
         )
     }
 

@@ -134,7 +134,7 @@ final class SubscriptionTestRouterBuilder {
 }
 
 @MainActor
-final class SubscriptionAIProviderTests: XCTestCase {
+final class SubscriptionAIProviderTests: FrameScriptTestCase {
     // MARK: Helpers
 
     private func llmRequest(
@@ -722,9 +722,7 @@ final class SubscriptionAIProviderTests: XCTestCase {
     // MARK: Runtime concurrency and exit-2
 
     func testConcurrentRequestIsRejectedAndTheFirstRunKeepsItsCancelSlot() async throws {
-        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
         let store = SubscriptionAISettingsStore(userDefaults: defaults)
 
         let recorder = SubscriptionRunnerRecorder()
@@ -770,9 +768,7 @@ final class SubscriptionAIProviderTests: XCTestCase {
     }
 
     func testNewThreadIsRefusedWhileARunIsActive() async throws {
-        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
 
         let project = SampleData.defaultProject
         let selection = SubscriptionAISettings.defaults.defaultSelection
@@ -823,9 +819,7 @@ final class SubscriptionAIProviderTests: XCTestCase {
     }
 
     func testExitTwoPopulatesTheObservedPendingPrompt() async throws {
-        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
         let store = SubscriptionAISettingsStore(userDefaults: defaults)
 
         let question = AgentCLIPendingQuestion(
@@ -925,17 +919,15 @@ final class SubscriptionAIProviderTests: XCTestCase {
     }
 
     func testSettingsStorePersistsAndResets() throws {
-        let suiteName = "FrameScript.SubscriptionAI.\(UUID().uuidString)"
-        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { suite.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
 
-        let store = SubscriptionAISettingsStore(userDefaults: suite)
+        let store = SubscriptionAISettingsStore(userDefaults: defaults)
         XCTAssertEqual(store.settings.defaultTimeout, 180)
         store.settings.defaultTimeout = 240
         store.settings.setUseForAllTasks(false)
         store.settings.setSelection(SubscriptionAISelection(kind: .codex, modelSlug: "gpt-5.3-codex"), for: .hooks)
 
-        let reloaded = SubscriptionAISettingsStore(userDefaults: suite)
+        let reloaded = SubscriptionAISettingsStore(userDefaults: defaults)
         XCTAssertEqual(reloaded.settings.defaultTimeout, 240)
         XCTAssertFalse(reloaded.settings.useForAllTasks)
         XCTAssertEqual(reloaded.settings.selection(for: .hooks).kind, .codex)

@@ -99,7 +99,7 @@ struct SceneDurationControl: View {
     }
 }
 
-private struct SceneDurationPopover: View {
+struct SceneDurationPopover: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let scene: Scene

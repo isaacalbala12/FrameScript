@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class DemoProjectTests: XCTestCase {
+final class DemoProjectTests: FrameScriptTestCase {
     func testEditedDemoClosesAndReplacesWithoutConfirmationWhileNormalUnsavedProjectDoesNot() {
         let demo = SampleData.demoProject(language: .english)
         let store = ProjectStore(project: demo)
@@ -171,7 +171,7 @@ final class DemoProjectTests: XCTestCase {
         store: ProjectStore,
         closeConfirmation: AppState.CloseConfirmation? = nil
     ) -> AppState {
-        let suite = UserDefaults(suiteName: "DemoProjectTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.autosaveEnabled = true
         return AppState(

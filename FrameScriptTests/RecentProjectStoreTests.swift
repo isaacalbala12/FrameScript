@@ -2,32 +2,24 @@ import Foundation
 @testable import FrameScript
 import XCTest
 
-final class RecentProjectStoreTests: XCTestCase {
+final class RecentProjectStoreTests: FrameScriptTestCase {
     private var temporaryDirectory: URL!
-    private var userDefaultsSuiteName: String!
-    private var userDefaults: UserDefaults!
     private var bookmarkCodec: TestBookmarkCodec!
 
     override func setUpWithError() throws {
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FrameScriptRecentProjectStoreTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
-        userDefaultsSuiteName = "FrameScriptRecentProjectStoreTests-\(UUID().uuidString)"
-        userDefaults = UserDefaults(suiteName: userDefaultsSuiteName)!
         bookmarkCodec = TestBookmarkCodec()
     }
 
     override func tearDownWithError() throws {
-        if let userDefaults {
-            userDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
-        }
         if let temporaryDirectory {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
         temporaryDirectory = nil
-        userDefaultsSuiteName = nil
-        userDefaults = nil
         bookmarkCodec = nil
+        try super.tearDownWithError()
     }
 
     @MainActor
@@ -48,13 +40,13 @@ final class RecentProjectStoreTests: XCTestCase {
     func testLegacyPathMigrationSkipsMissingFilesAndRemovesLegacyStorage() throws {
         let existingURL = try makeProjectFile(named: "Existing.fscr")
         let missingURL = temporaryDirectory.appendingPathComponent("Missing.fscr")
-        userDefaults.set([missingURL.path, existingURL.path], forKey: "legacy-recents")
+        makeDefaults().set([missingURL.path, existingURL.path], forKey: "legacy-recents")
 
         let store = makeStore(legacyPathsKey: "legacy-recents")
         store.load()
 
         XCTAssertEqual(store.entries.map(\.displayName), ["Existing"])
-        XCTAssertNil(userDefaults.stringArray(forKey: "legacy-recents"))
+        XCTAssertNil(makeDefaults().stringArray(forKey: "legacy-recents"))
     }
 
     @MainActor
@@ -102,7 +94,7 @@ final class RecentProjectStoreTests: XCTestCase {
             lastOpenedAt: Date()
         )
         let data = try JSONEncoder().encode([invalidEntry])
-        userDefaults.set(data, forKey: "recents")
+        makeDefaults().set(data, forKey: "recents")
         let store = makeStore(storageKey: "recents")
 
         store.load()
@@ -150,40 +142,40 @@ final class RecentProjectStoreTests: XCTestCase {
         let store = makeStore()
         try store.add(url: first)
         try store.add(url: second)
-        userDefaults.set([first.path, second.path], forKey: "legacy-recents")
+        makeDefaults().set([first.path, second.path], forKey: "legacy-recents")
 
         store.removeAll()
 
         XCTAssertTrue(store.entries.isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
-        XCTAssertNil(userDefaults.data(forKey: "recents"))
-        XCTAssertNil(userDefaults.stringArray(forKey: "legacy-recents"))
+        XCTAssertNil(makeDefaults().data(forKey: "recents"))
+        XCTAssertNil(makeDefaults().stringArray(forKey: "legacy-recents"))
     }
 
     @MainActor
     func testLegacyMigrationPreservesLegacyStorageWhenPersistenceFails() throws {
         let file = try makeProjectFile(named: "RecoverableLegacy.fscr")
-        userDefaults.set([file.path], forKey: "legacy-recents")
+        makeDefaults().set([file.path], forKey: "legacy-recents")
         let store = makeStore(entriesEncoder: { _ in throw RecentProjectStoreError.persistenceFailed })
 
         store.load()
 
         XCTAssertEqual(store.entries.map(\.displayName), ["RecoverableLegacy"])
-        XCTAssertEqual(userDefaults.stringArray(forKey: "legacy-recents"), [file.path])
+        XCTAssertEqual(makeDefaults().stringArray(forKey: "legacy-recents"), [file.path])
         XCTAssertEqual(store.storeError, .persistenceFailed)
     }
 
     @MainActor
     func testCorruptedStoredJSONIsNotOverwritten() throws {
         let corrupted = Data("{broken-json".utf8)
-        userDefaults.set(corrupted, forKey: "recents")
+        makeDefaults().set(corrupted, forKey: "recents")
         let store = makeStore()
 
         store.load()
         store.validateEntriesNow()
 
-        XCTAssertEqual(userDefaults.data(forKey: "recents"), corrupted)
+        XCTAssertEqual(makeDefaults().data(forKey: "recents"), corrupted)
         XCTAssertNotNil(store.storeError)
     }
 
@@ -196,7 +188,7 @@ final class RecentProjectStoreTests: XCTestCase {
 
         XCTAssertEqual(store.entries.map(\.displayName), ["PersistenceFailure"])
         XCTAssertEqual(store.storeError, .persistenceFailed)
-        XCTAssertNil(userDefaults.data(forKey: "recents"))
+        XCTAssertNil(makeDefaults().data(forKey: "recents"))
     }
 
     @MainActor
@@ -301,7 +293,7 @@ final class RecentProjectStoreTests: XCTestCase {
         securityScope: SecurityScopedResourceAccess = SecurityScopedResourceAccess(start: { _ in false }, stop: { _ in })
     ) -> RecentProjectStore {
         RecentProjectStore(
-            userDefaults: userDefaults,
+            userDefaults: makeDefaults(),
             storageKey: storageKey,
             legacyPathsKey: legacyPathsKey,
             bookmarkCreator: bookmarkCodec.createBookmark(for:),
@@ -316,6 +308,8 @@ final class RecentProjectStoreTests: XCTestCase {
         securityScope: SecurityScopedResourceAccess = SecurityScopedResourceAccess(start: { _ in false }, stop: { _ in })
     ) -> AppState {
         AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
             securityScope: securityScope,
             exportFolderBookmarkCreator: bookmarkCodec.createBookmark(for:),
             exportFolderBookmarkResolver: bookmarkCodec.resolveBookmark(data:isStale:)

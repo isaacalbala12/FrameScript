@@ -46,9 +46,14 @@ extension KeychainStore {
     )
 
     static func saveOBSWebSocketPassword(_ password: String) throws {
+        let service = AppEnvironment.isRunningTests ? obsWebSocketService + ".Tests" : obsWebSocketService
+        guard !AppEnvironment.isRunningTests else {
+            KeychainStore.setTestSecret(password, service: service, account: obsWebSocketAccount)
+            return
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: obsWebSocketService,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: obsWebSocketAccount
         ]
         let value = Data(password.utf8)
@@ -73,9 +78,13 @@ extension KeychainStore {
     }
 
     static func readOBSWebSocketPassword() throws -> String? {
+        let service = AppEnvironment.isRunningTests ? obsWebSocketService + ".Tests" : obsWebSocketService
+        guard !AppEnvironment.isRunningTests else {
+            return KeychainStore.testSecret(service: service, account: obsWebSocketAccount)
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: obsWebSocketService,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: obsWebSocketAccount,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -92,9 +101,14 @@ extension KeychainStore {
     }
 
     static func deleteOBSWebSocketPassword() throws {
+        let service = AppEnvironment.isRunningTests ? obsWebSocketService + ".Tests" : obsWebSocketService
+        guard !AppEnvironment.isRunningTests else {
+            KeychainStore.setTestSecret(nil, service: service, account: obsWebSocketAccount)
+            return
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: obsWebSocketService,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: obsWebSocketAccount
         ]
         let status = SecItemDelete(query as CFDictionary)

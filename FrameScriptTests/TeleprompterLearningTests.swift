@@ -4,7 +4,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class TeleprompterLearningTests: XCTestCase {
+final class TeleprompterLearningTests: FrameScriptTestCase {
     func testReadingSessionTeachesLearnedWPMAndRefreshesEstimates() throws {
         let text = Array(repeating: "palabra", count: 40).joined(separator: " ")
         let scene = Scene(order: 0, sectionType: .hook, title: "Hook", scriptText: text)
@@ -100,7 +100,7 @@ final class TeleprompterLearningTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeAppState(project: FrameProject) -> AppState {
-        let suite = UserDefaults(suiteName: "TeleprompterLearningTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
         return AppState(

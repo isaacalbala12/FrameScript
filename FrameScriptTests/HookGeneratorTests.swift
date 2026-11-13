@@ -5,7 +5,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class HookGeneratorTests: XCTestCase {
+final class HookGeneratorTests: FrameScriptTestCase {
     // MARK: - Prompts
 
     func testHookSystemPromptContainsVoiceConstraintsAndLanguage() {
@@ -560,13 +560,19 @@ final class HookGeneratorTests: XCTestCase {
     }
 
     private func makeAppState(provider: any LLMProviderProtocol) -> AppState {
-        AppState(dependencies: AppDependencies(
-            rewriteService: RewriteService(provider: provider),
-            analysisService: AnalysisService(provider: provider),
-            exportService: ExportService(),
-            llmProvider: provider,
-            providerCredentials: ProviderCredentialSession(reader: { _ in "secret" })
-        ))
+        let defaults = makeDefaults()
+        return AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: defaults),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: defaults, key: "settings"),
+            dependencies: AppDependencies(
+                rewriteService: RewriteService(provider: provider),
+                analysisService: AnalysisService(provider: provider),
+                exportService: ExportService(),
+                llmProvider: provider,
+                providerCredentials: ProviderCredentialSession(reader: { _ in "secret" })
+            ),
+            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
+        )
     }
 }
 

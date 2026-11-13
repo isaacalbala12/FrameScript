@@ -87,7 +87,7 @@ final class RecentProjectStore {
 #endif
 
     init(
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = AppEnvironment.defaults,
         fileManager: FileManager = .default,
         storageKey: String = "FrameScript.recentProjects.v1",
         legacyPathsKey: String = "FrameScript.recentProjectPaths",
@@ -97,7 +97,7 @@ final class RecentProjectStore {
         entriesEncoder: @escaping EntriesEncoder = { try JSONEncoder().encode($0) },
         securityScope: SecurityScopedResourceAccess = .live
     ) {
-        self.userDefaults = userDefaults
+        self.userDefaults = AppEnvironment.isolatedDefaults(userDefaults)
         self.fileManager = fileManager
         self.storageKey = storageKey
         self.legacyPathsKey = legacyPathsKey

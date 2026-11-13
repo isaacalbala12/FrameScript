@@ -5,7 +5,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class VoiceFollowTests: XCTestCase {
+final class VoiceFollowTests: FrameScriptTestCase {
     // MARK: - Visible text and document mapping
 
     func testVisibleTextMatchesRendererCharacterCounts() {
@@ -723,11 +723,7 @@ final class VoiceFollowTests: XCTestCase {
         provider: TeleprompterSceneProvider? = nil,
         recognizer: any SpeechRecognizing = FakeSpeechRecognizer()
     ) throws -> TeleprompterModel {
-        let suiteName = "VoiceFollowTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = makeDefaults()
         let model = TeleprompterModel(
             sections: TeleprompterContentBuilder.sections(from: scenes),
             startingSectionIndex: 0,

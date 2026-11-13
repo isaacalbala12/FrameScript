@@ -4,7 +4,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class DurationTests: XCTestCase {
+final class DurationTests: FrameScriptTestCase {
     // MARK: Real take selection
 
     func testLatestGoodTakeWinsOverOlderGoodAndNewerNonGoodTake() {
@@ -824,7 +824,7 @@ final class DurationTests: XCTestCase {
         project: FrameProject,
         settings: AppSettings = .defaults
     ) -> AppState {
-        let suite = UserDefaults(suiteName: "DurationTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
         return AppState(
