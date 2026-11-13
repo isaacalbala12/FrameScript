@@ -199,6 +199,12 @@ final class AppState {
         self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: Self.loadCustomTemplates())
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
+        self.projectStore.durationConfigurationProvider = { [weak self] scene in
+            self?.durationConfiguration(for: scene) ?? .standard
+        }
+        self.projectStore.markupReviewRefreshHandler = { [weak self] in
+            self?.scheduleRhythmReview()
+        }
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
@@ -702,7 +708,11 @@ final class AppState {
         if let text {
             projectStore.commitScriptText(text, sceneID: sceneID, previousText: oldText)
         }
-        projectStore.updateCurrentSceneMetrics(sceneID: sceneID, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+        // Typing must not parse the whole script: one debounced pass computes
+        // word count and duration off the main actor once the user stops.
+        scheduleSceneMetricsUpdate(sceneID: sceneID)
+        RhythmReviewCenter.shared.invalidate(sceneID: sceneID)
+        scheduleRhythmReview()
         validateProductionSelection()
         projectStore.markProjectDirty()
         scheduleSegmentRebuild(for: sceneID)
@@ -1880,6 +1890,11 @@ final class ProjectStore {
     private(set) var origin: ProjectStoreOrigin = .normal
     private var segmentSplitMode: SegmentType = AppSettings.defaults.generalPreferences.defaultSplitMode
     private let projectWriter: (FrameProject, URL) throws -> Void
+    /// Resolves the markup-aware duration configuration for a scene. Set by
+    /// `AppState`; a closure keeps this store independent from settings.
+    var durationConfigurationProvider: ((Scene) -> DurationConfiguration)?
+    /// Re-runs the rhythm review after anchor mutations. Set by `AppState`.
+    var markupReviewRefreshHandler: (() -> Void)?
 
     init(
         project: FrameProject = SampleData.defaultProject,
@@ -1912,6 +1927,7 @@ final class ProjectStore {
         currentFileURL = fileURL
         self.origin = origin
         hasOpenProject = true
+        EditorMarkupSessionCaches.reset()
         recalculateDurations(wordsPerMinute: wordsPerMinute)
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
@@ -1923,6 +1939,7 @@ final class ProjectStore {
         hasUnsavedFileChanges = false
         saveState = .saved
         origin = .normal
+        EditorMarkupSessionCaches.reset()
     }
 
     var needsCloseConfirmation: Bool {
@@ -1972,6 +1989,7 @@ final class ProjectStore {
         hasOpenProject = false
         hasUnsavedFileChanges = false
         saveState = .saved
+        EditorMarkupSessionCaches.reset()
     }
 
     var totalDuration: TimeInterval {
@@ -2033,6 +2051,7 @@ final class ProjectStore {
             return
         }
         project.scenes.remove(at: storageIndex)
+        EditorMarkupSessionCaches.removeScene(scene.id)
         normalizeSceneOrder()
         markProjectDirty()
     }
@@ -2065,7 +2084,7 @@ final class ProjectStore {
 
     func updateCurrentSceneMetrics(sceneID: UUID, wordsPerMinute: Int) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
-        scene.estimatedDuration = DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: wordsPerMinute)
+        scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
     }
 
     private func prepareForSave(wordsPerMinute: Int) {
@@ -2092,7 +2111,7 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
-        scene.estimatedDuration = DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: wordsPerMinute)
+        scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
         project.updatedAt = Date()
         if markUnsaved {
             hasUnsavedFileChanges = true
@@ -2166,22 +2185,38 @@ final class ProjectStore {
         guard let anchor = TextAnchorRepair.anchor(for: segment, in: scene.scriptText) else { return }
         item.textAnchor = anchor
         item.linkedSegmentID = segment.id
+        RhythmReviewCenter.shared.invalidate(sceneID: scene.id)
+        markupReviewRefreshHandler?()
     }
 
     func link(_ item: EditingItem, to segment: TextSegment, in scene: Scene) {
         guard let anchor = TextAnchorRepair.anchor(for: segment, in: scene.scriptText) else { return }
         item.textAnchor = anchor
         item.linkedSegmentID = segment.id
+        RhythmReviewCenter.shared.invalidate(sceneID: scene.id)
+        markupReviewRefreshHandler?()
     }
 
     func unlink(_ item: BRollItem) {
         item.textAnchor = nil
         item.linkedSegmentID = nil
+        invalidateRhythm(forItemID: item.id)
     }
 
     func unlink(_ item: EditingItem) {
         item.textAnchor = nil
         item.linkedSegmentID = nil
+        invalidateRhythm(forItemID: item.id)
+    }
+
+    /// Drops cached warnings for the scene that owns an unlinked item.
+    private func invalidateRhythm(forItemID itemID: UUID) {
+        guard let scene = project.scenes.first(where: { scene in
+            scene.bRollItems.contains { $0.id == itemID }
+                || scene.editingItems.contains { $0.id == itemID }
+        }) else { return }
+        RhythmReviewCenter.shared.invalidate(sceneID: scene.id)
+        markupReviewRefreshHandler?()
     }
 
     private func migrateLegacyLink(_ item: BRollItem, segments: [TextSegment], text: String) {
@@ -2209,10 +2244,7 @@ final class ProjectStore {
 
     private func recalculateDurations(wordsPerMinute: Int) {
         for scene in project.scenes {
-            scene.estimatedDuration = DurationEstimator.estimate(
-                text: scene.scriptText,
-                wordsPerMinute: wordsPerMinute
-            )
+            scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
         }
     }
 

@@ -743,6 +743,7 @@ private struct ExportSheetView: View {
                     Toggle(appState.localized("settings.includeEditing"), isOn: $preferences.includeEditingNotes)
                     Toggle(appState.localized("settings.includeAI"), isOn: $preferences.includeAINotes)
                     Toggle(appState.localized("settings.teleprompter"), isOn: $preferences.teleprompterFormatting)
+                    Toggle(appState.localized("settings.cleanMarkup"), isOn: $preferences.cleanMarkup)
                 }
                 .toggleStyle(.checkbox)
 

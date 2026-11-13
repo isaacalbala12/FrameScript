@@ -70,11 +70,16 @@ final class AutosaveTests: XCTestCase {
         appState.commitScriptTextChange(sceneID: first.id, text: "one two three four")
 
         XCTAssertEqual(first.scriptText, "one two three four")
-        XCTAssertEqual(first.estimatedDuration, DurationEstimator.estimate(text: "one two three four", wordsPerMinute: 150))
+        // Text commits immediately; metrics are debounced and are recomputed
+        // synchronously when the scene switch saves the project.
         XCTAssertEqual(recorder.count, 0)
 
         appState.selectScene(second.id)
 
+        XCTAssertEqual(
+            first.estimatedDuration,
+            DurationEstimator.estimate(text: "one two three four", wordsPerMinute: 150)
+        )
         XCTAssertEqual(recorder.count, 1)
         XCTAssertEqual(appState.saveState, .saved)
         XCTAssertEqual(recorder.lastWrittenProject?.scenes.first(where: { $0.id == first.id })?.scriptText, "one two three four")

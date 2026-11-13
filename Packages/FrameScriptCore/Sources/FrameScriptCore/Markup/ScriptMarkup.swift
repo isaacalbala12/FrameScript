@@ -18,8 +18,8 @@ import Foundation
 ///
 /// Slashes inside tokens (`km/h`, `1/4`, `and/or`, `https://…`, `12/11`) stay
 /// literal, runs of three or more slashes stay literal, and `\*` / `\/` escape
-/// their marker. Emphasis delimiters must hug their content and may span a
-/// single line break, but cannot cross a blank line. Inline emphasis does not
+/// their marker. Emphasis delimiters must hug their content and may span line
+/// breaks, but cannot cross a blank line. Inline emphasis does not
 /// nest, but pauses and cues inside an emphasis span are still parsed: the span
 /// is split into `.emphasis` segments around them, with the opening delimiter
 /// on the first segment and the closing delimiter on the last.
@@ -78,6 +78,26 @@ public enum ScriptMarkup {
         wordsPerMinute: Double,
         defaults: PauseDefaults = .standard
     ) -> TimeInterval {
+        estimate(text, wordsPerMinute: wordsPerMinute, defaults: defaults).duration
+    }
+
+    /// Word count and duration from a single parse.
+    ///
+    /// Consumers that show both numbers (the editor header, the app's debounced
+    /// scene metrics) should use this instead of calling ``spokenWordCount(_:)``
+    /// and ``estimateDuration(_:wordsPerMinute:defaults:)`` back to back, which
+    /// would parse the whole script twice.
+    ///
+    /// - Parameters:
+    ///   - text: The script text, markers included.
+    ///   - wordsPerMinute: Reading speed for the script's language.
+    ///   - defaults: The configured short and long pause durations.
+    /// - Returns: The spoken word count and the estimated duration in seconds.
+    public static func estimate(
+        _ text: String,
+        wordsPerMinute: Double,
+        defaults: PauseDefaults = .standard
+    ) -> MarkupEstimate {
         let tokens = parse(text, defaults: defaults)
         var seconds = 0.0
         for token in tokens {
@@ -89,7 +109,7 @@ public enum ScriptMarkup {
         if wordsPerMinute.isFinite, wordsPerMinute > 0 {
             seconds += Double(words) / wordsPerMinute * 60
         }
-        return seconds
+        return MarkupEstimate(spokenWordCount: words, duration: seconds)
     }
 
     /// Flattens a script into display runs for a teleprompter.

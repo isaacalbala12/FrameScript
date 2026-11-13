@@ -79,6 +79,8 @@ struct SidebarRow: View {
                         .monospacedDigit()
                 }
 
+                RhythmSidebarBadge(sceneID: scene.id)
+
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 8)

@@ -968,6 +968,18 @@ struct ScriptMarkupDurationTests {
         #expect(abs(duration - 60) < 0.0001)
     }
 
+    @Test func combinedEstimateMatchesSeparateCalls() {
+        let text = "Hola / mundo // [IMAGEN: coche] *énfasis* [2s] fin."
+        let defaults = PauseDefaults(short: 0.4, long: 1.2)
+        let estimate = ScriptMarkup.estimate(text, wordsPerMinute: 120, defaults: defaults)
+        #expect(estimate.spokenWordCount == ScriptMarkup.spokenWordCount(text))
+        #expect(
+            abs(estimate.duration - ScriptMarkup.estimateDuration(text, wordsPerMinute: 120, defaults: defaults))
+                < 0.0001
+        )
+        #expect(abs(estimate.duration - 5.6) < 0.0001)
+    }
+
     @Test func wordsPlusPauses() {
         let text = "palabra / palabra // palabra [pausa 2s] palabra"
         let duration = ScriptMarkup.estimateDuration(text, wordsPerMinute: 120)

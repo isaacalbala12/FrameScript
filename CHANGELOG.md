@@ -4,11 +4,22 @@
 
 ### Added
 
+- Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
+- Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
+- Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
 - Added `FrameScriptCore`, a UI-free Swift package linked into the app, with the `.fscr` document value types and codec.
 - Added the v4 project schema for takes, learned speech rate, assets, per-language publishing packs, checklist tasks, sources and claims, comparison tables, language variants, short clips, version snapshots, T3 thread reuse, Markdown import leftovers, and published-video comparison.
 
+### Fixed
+
+- Script markup highlighting now re-runs over the whole document after a multi-paragraph paste and covers the whole blank-line block for emphasis that spans several lines, instead of leaving pasted or distant markers unstyled.
+- Word count and duration are cached from one debounced parse per settled edit, with the parse off the main actor, so typing a 20k-word scene no longer parses the whole script on every keystroke.
+- Rhythm review runs on an immutable snapshot off the main actor; warnings are dropped immediately when their scene changes, project-level outliers count in the sidebar badge, threshold edits refresh the review, and anchor links/unlinks refresh the visual-change analysis.
+- Marker colors in the light editor now keep at least WCAG AA 4.5:1 contrast.
+
 ### Changed
 
+- Duration estimates for scenes, the sidebar and the project now run through `ScriptMarkup`: spoken words only (cues excluded) plus pause durations, using the per-language rate, the project's learned WPM when present, and the configured pause defaults.
 - `.fscr` format v4 persists every Visuals and Editing field; readers migrate v1–v3 in memory and writers always emit v4. Files from a newer version fail with a clear error.
 - Settings decoding falls back per field and per section instead of resetting every preference when a key is missing.
 - Removed the App Sandbox entitlement; security-scoped bookmarks remain supported.

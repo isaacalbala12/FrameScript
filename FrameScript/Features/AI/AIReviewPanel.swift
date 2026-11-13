@@ -38,6 +38,8 @@ struct AIReviewPanel: View {
                         }
                     }
 
+                    RhythmReviewSection()
+
                     if appState.aiState.isAnalyzing {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)

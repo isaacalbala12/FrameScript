@@ -1,4 +1,5 @@
 import AppKit
+import FrameScriptCore
 import OSLog
 import SwiftUI
 
@@ -17,54 +18,9 @@ struct ScriptEditorView: View {
         VStack(alignment: .leading, spacing: 18) {
             sceneHeader
 
-            LinkedScriptTextView(
-                text: $scene.scriptText,
-                sceneID: scene.id,
-                editorIdentity: editorSessionID,
-                sceneTitle: scene.title,
-                autocompleteProvider: appState.settings.aiPreferences.provider,
-                autocompleteConfigurationVersion: appState.autocompleteConfigurationVersion,
-                autocompleteConfigurationEligibility: appState.autocompleteConfigurationEligibility,
-                autocompleteDelay: appState.autocompleteCompletionDelay,
-                autocompleteFallbackLanguage: appState.currentLanguage,
-                autocompleteState: $autocompleteState,
-                loadRestorationState: {
-                    appState.editorState.scriptEditorState(sceneID: scene.id, editorIdentity: editorSessionID)
-                },
-                saveRestorationState: { state in
-                    appState.editorState.setScriptEditorState(state, sceneID: scene.id, editorIdentity: editorSessionID)
-                },
-                markers: productionMarkers,
-                fontSize: appState.settings.editorPreferences.fontSize,
-                spellcheck: appState.settings.editorPreferences.spellcheck,
-                smartQuotes: appState.settings.editorPreferences.smartQuotes,
-                placeholder: appState.localized("script.placeholder"),
-                textColor: NSColor(theme.primaryText),
-                placeholderColor: NSColor(theme.secondaryText.opacity(0.58)),
-                backgroundColor: NSColor(theme.editorSurface),
-                bRollColor: NSColor(theme.bRollMarker),
-                editingColor: NSColor(theme.editingMarker),
-                addBRollLabel: appState.localized("production.addBRollForSelection"),
-                addEditingLabel: appState.localized("production.addEditingForSelection"),
-                onTextCommitted: { previousText, text in
-                    appState.commitScriptTextChange(sceneID: scene.id, previousText: previousText, text: text)
-                },
-                autocomplete: { context in await appState.autocompleteScript(context: context) },
-                onTeardown: { appState.flushActiveEditorBoundary(flushEditor: false) },
-                markerAction: appState.selectProductionItems,
-                addMarkerAction: { mode, anchor in
-                    switch mode {
-                    case .bRoll:
-                        appState.addBRollItem(sceneID: scene.id, anchor: anchor)
-                    case .editing:
-                        appState.addEditingItem(sceneID: scene.id, anchor: anchor)
-                    case .script:
-                        break
-                    }
-                }
-            )
-            .frame(minHeight: appState.isFocusModeEnabled ? 430 : 390, maxHeight: .infinity)
-            .accessibilityLabel(appState.localized("script.accessibilityLabel"))
+            scriptTextView
+                .frame(minHeight: appState.isFocusModeEnabled ? 430 : 390, maxHeight: .infinity)
+                .accessibilityLabel(appState.localized("script.accessibilityLabel"))
 
             DisclosureGroup(isExpanded: Binding(
                 get: { notesExpanded },
@@ -91,13 +47,116 @@ struct ScriptEditorView: View {
         .padding(WorkspaceLayout.contentInset(isFocusModeEnabled: appState.isFocusModeEnabled))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(theme.editorSurface)
-        .onAppear { applyInitialNotesVisibility() }
+        .onAppear {
+            applyInitialNotesVisibility()
+            appState.scheduleSceneMetricsUpdate(sceneID: scene.id, delay: .zero)
+            appState.scheduleRhythmReview(for: scene, delay: .zero)
+        }
         .onChange(of: scene.title) { _, _ in appState.touchProject() }
         .onChange(of: scene.notes) { _, _ in appState.touchProject() }
+        .onChange(of: scene.scriptText) { _, _ in
+            // Drop stale UTF-16 warning ranges immediately, even for text
+            // changes that do not go through the normal editor commit.
+            RhythmReviewCenter.shared.invalidate(sceneID: scene.id)
+            appState.scheduleRhythmReview(for: scene)
+        }
+        .onChange(of: scene.bRollItems.count) { _, _ in
+            appState.scheduleRhythmReview(for: scene)
+        }
+        .onChange(of: scene.editingItems.count) { _, _ in
+            appState.scheduleRhythmReview(for: scene)
+        }
+        .onChange(of: appState.settings.editorPreferences.rhythmReviewEnabled) { _, _ in
+            appState.scheduleRhythmReview(for: scene, delay: .zero)
+        }
+        .onChange(of: appState.settings.editorPreferences.markupPauseDefaults) { _, _ in
+            appState.refreshDurationEstimates()
+            appState.scheduleRhythmReview(for: scene)
+        }
+        .onChange(of: appState.settings.editorPreferences.wordsPerMinuteByLanguage) { _, _ in
+            appState.refreshDurationEstimates()
+            appState.scheduleRhythmReview(for: scene)
+        }
         .onChange(of: appState.settings.editorPreferences.defaultNotesVisibility) { _, newValue in
             guard !didManuallyToggleNotes else { return }
             notesExpanded = !appState.isFocusModeEnabled && newValue == .expanded
         }
+    }
+
+    private var rhythmUnderlines: [RhythmEditorUnderline] {
+        guard appState.settings.editorPreferences.rhythmReviewEnabled else { return [] }
+        let warnings = RhythmReviewCenter.shared.warnings(for: scene.id)
+        return RhythmUnderlinePlanner.underlines(
+            warnings: warnings,
+            textLength: (scene.scriptText as NSString).length,
+            message: appState.rhythmWarningText
+        )
+    }
+
+    private var scriptTextView: some View {
+        let preferences = appState.settings.editorPreferences
+        let textColor = NSColor(theme.primaryText)
+        let placeholderColor = NSColor(theme.secondaryText.opacity(0.58))
+        let backgroundColor = NSColor(theme.editorSurface)
+        let bRollColor = NSColor(theme.bRollMarker)
+        let editingColor = NSColor(theme.editingMarker)
+        let accentColor = NSColor(theme.accent.color)
+        let secondaryColor = NSColor(theme.secondaryText)
+        let rhythmColor = NSColor(theme.warning)
+        let sceneID = scene.id
+        let editorIdentity = editorSessionID
+
+        return LinkedScriptTextView(
+            text: $scene.scriptText,
+            sceneID: sceneID,
+            editorIdentity: editorIdentity,
+            sceneTitle: scene.title,
+            autocompleteProvider: appState.settings.aiPreferences.provider,
+            autocompleteConfigurationVersion: appState.autocompleteConfigurationVersion,
+            autocompleteConfigurationEligibility: appState.autocompleteConfigurationEligibility,
+            autocompleteDelay: appState.autocompleteCompletionDelay,
+            autocompleteFallbackLanguage: appState.currentLanguage,
+            autocompleteState: $autocompleteState,
+            loadRestorationState: {
+                appState.editorState.scriptEditorState(sceneID: sceneID, editorIdentity: editorIdentity)
+            },
+            saveRestorationState: { state in
+                appState.editorState.setScriptEditorState(state, sceneID: sceneID, editorIdentity: editorIdentity)
+            },
+            markers: productionMarkers,
+            fontSize: preferences.fontSize,
+            spellcheck: preferences.spellcheck,
+            smartQuotes: preferences.smartQuotes,
+            pauseDefaults: preferences.markupPauseDefaults,
+            rhythmUnderlines: rhythmUnderlines,
+            placeholder: appState.localized("script.placeholder"),
+            textColor: textColor,
+            placeholderColor: placeholderColor,
+            backgroundColor: backgroundColor,
+            bRollColor: bRollColor,
+            editingColor: editingColor,
+            accentColor: accentColor,
+            secondaryColor: secondaryColor,
+            rhythmColor: rhythmColor,
+            addBRollLabel: appState.localized("production.addBRollForSelection"),
+            addEditingLabel: appState.localized("production.addEditingForSelection"),
+            onTextCommitted: { previousText, text in
+                appState.commitScriptTextChange(sceneID: sceneID, previousText: previousText, text: text)
+            },
+            autocomplete: { context in await appState.autocompleteScript(context: context) },
+            onTeardown: { appState.flushActiveEditorBoundary(flushEditor: false) },
+            markerAction: appState.selectProductionItems,
+            addMarkerAction: { mode, anchor in
+                switch mode {
+                case .bRoll:
+                    appState.addBRollItem(sceneID: sceneID, anchor: anchor)
+                case .editing:
+                    appState.addEditingItem(sceneID: sceneID, anchor: anchor)
+                case .script:
+                    break
+                }
+            }
+        )
     }
 
     private var sceneHeader: some View {
@@ -149,7 +208,13 @@ struct ScriptEditorView: View {
         }
     }
 
-    private var wordCount: Int { scene.scriptText.split { $0.isWhitespace || $0.isNewline }.count }
+    /// Reads the debounced metrics cache. The whitespace split is only a
+    /// first-frame fallback before the off-main estimate lands; it never runs
+    /// on the normal typing path.
+    private var wordCount: Int {
+        SceneMetricsCache.shared.entry(for: scene.id)?.wordCount
+            ?? scene.scriptText.split(whereSeparator: \.isWhitespace).count
+    }
 
     private var activeAutocompleteIssue: AutocompleteProviderIssue? {
         guard let issue = appState.autocompleteIssue,
@@ -348,12 +413,17 @@ struct LinkedScriptTextView: NSViewRepresentable {
     let fontSize: Double
     let spellcheck: Bool
     let smartQuotes: Bool
+    var pauseDefaults: PauseDefaults = .standard
+    var rhythmUnderlines: [RhythmEditorUnderline] = []
     let placeholder: String
     let textColor: NSColor
     let placeholderColor: NSColor
     let backgroundColor: NSColor
     let bRollColor: NSColor
     let editingColor: NSColor
+    var accentColor: NSColor = .controlAccentColor
+    var secondaryColor: NSColor = .secondaryLabelColor
+    var rhythmColor: NSColor = .systemOrange
     let addBRollLabel: String
     let addEditingLabel: String
     let onTextCommitted: (String, String) -> Void
@@ -418,6 +488,20 @@ struct LinkedScriptTextView: NSViewRepresentable {
         view.editingColor = editingColor
         view.addBRollLabel = addBRollLabel
         view.addEditingLabel = addEditingLabel
+        view.markupStyler.configure(MarkupEditorStyler.Configuration(
+            isEnabled: true,
+            pauseDefaults: pauseDefaults,
+            palette: MarkupEditorPalette(
+                fontSize: fontSize,
+                textColor: textColor,
+                secondaryColor: secondaryColor,
+                accentColor: accentColor,
+                rhythmColor: rhythmColor,
+                backgroundColor: backgroundColor
+            )
+        ))
+        view.textView.rhythmUnderlineColor = rhythmColor
+        view.textView.rhythmUnderlines = rhythmUnderlines
         view.markerNeedsDisplay()
     }
 
@@ -455,11 +539,16 @@ struct LinkedScriptTextView: NSViewRepresentable {
         private var isApplyingProgrammaticUpdate = false
         private var pendingInitialRestorationState: ScriptEditorRestorationState?
         private var autocompleteTask: Task<Void, Never>?
+        private var markupRefreshTask: Task<Void, Never>?
         private(set) var autocompleteRequestGeneration = 0
         private var autocompleteSnapshot: AutocompleteRequestSnapshot?
         private var editTransaction: EditTransaction?
         private var lastSelectionRange: NSRange?
         private var escapeDismissalContext: EscapeDismissalContext?
+        /// Range captured from `shouldChangeTextIn`, which is reliable for
+        /// pastes, undo and typing while `NSTextStorage.editedRange` can be a
+        /// stale attribute range from the styler.
+        private var pendingEditRange: NSRange?
         private var observedAutocompleteProvider: AIProviderKind
         private var observedAutocompleteConfigurationVersion: Int
         private var observedAutocompleteConfigurationEligibility: AutocompleteConfigurationEligibility
@@ -480,6 +569,8 @@ struct LinkedScriptTextView: NSViewRepresentable {
         }
 
         func detach(from view: MarkerTextContainerView) {
+            markupRefreshTask?.cancel()
+            markupRefreshTask = nil
             if self.view === view { self.view = nil }
             if view.coordinator === self { view.coordinator = nil }
             view.textView.ghostAction = nil
@@ -546,6 +637,9 @@ struct LinkedScriptTextView: NSViewRepresentable {
             }
 
             cancelAutocomplete()
+            markupRefreshTask?.cancel()
+            markupRefreshTask = nil
+            pendingEditRange = nil
 
             modelRevision += 1
             textRevision += 1
@@ -566,6 +660,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
             view.scrollView.contentView.scroll(to: clampedVisibleOrigin(visibleOrigin, in: view))
             isApplyingProgrammaticUpdate = false
             changeOrigin = .externalModel
+            view.markupStyler.applyAll(in: textView)
             captureRestorationState()
         }
 
@@ -581,6 +676,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
             )
             lastSelectionRange = textView.selectedRange()
             scheduleAutocomplete(for: textView, requestGeneration: autocompleteRequestGeneration)
+            applyMarkupHighlightForEdit(in: textView)
             view?.markerTextRevision = textRevision
             view?.needsDisplay = true
         }
@@ -591,6 +687,19 @@ struct LinkedScriptTextView: NSViewRepresentable {
             _ = emitCurrentText(from: textView, origin: .user)
             cancelAutocomplete()
             captureRestorationState()
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            let insertedLength = (replacementString as NSString?)?.length ?? 0
+            pendingEditRange = NSRange(
+                location: affectedCharRange.location,
+                length: max(affectedCharRange.length, insertedLength)
+            )
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -788,6 +897,53 @@ struct LinkedScriptTextView: NSViewRepresentable {
             return isCurrent(snapshot, in: placeholderTextView)
         }
 
+        /// Highlights the edited block, or the whole document when an edit
+        /// (paste, multi-paragraph deletion) reaches outside the incremental
+        /// window around the caret.
+        private func applyMarkupHighlightForEdit(in textView: NSTextView) {
+            let text = textView.string as NSString
+            let caret = textView.selectedRange()
+            var edited = pendingEditRange ?? textView.textStorage?.editedRange ?? caret
+            pendingEditRange = nil
+            if edited.location == NSNotFound {
+                edited = caret
+            }
+            let covered = MarkupHighlightPlanner.incrementalWindowCoversEdit(
+                edited,
+                around: caret,
+                in: text
+            )
+            if covered {
+                view?.markupStyler.apply(around: caret, in: textView)
+                scheduleDeferredMarkupRefreshIfNeeded(in: textView)
+            } else {
+                view?.markupStyler.applyAll(in: textView)
+            }
+        }
+
+        /// A block larger than the incremental cap is highlighted in a
+        /// window around the caret. Once typing pauses, run one full pass so
+        /// markers outside that window (for example a distant emphasis closer)
+        /// settle correctly.
+        private func scheduleDeferredMarkupRefreshIfNeeded(in textView: NSTextView) {
+            markupRefreshTask?.cancel()
+            markupRefreshTask = nil
+            let text = textView.string as NSString
+            guard MarkupHighlightPlanner.needsDeferredFullRefresh(
+                around: textView.selectedRange(),
+                in: text
+            ) else { return }
+            let generation = textRevision
+            markupRefreshTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(650))
+                guard let self, !Task.isCancelled, generation == self.textRevision, let view = self.view else {
+                    return
+                }
+                view.markupStyler.applyAll(in: view.textView)
+                self.markupRefreshTask = nil
+            }
+        }
+
         private func isEscapeDismissed(at selectedRange: NSRange, in textView: NSTextView) -> Bool {
             escapeDismissalContext == EscapeDismissalContext(
                 sourceText: textView.string,
@@ -889,10 +1045,16 @@ struct LinkedScriptTextView: NSViewRepresentable {
 protocol ActiveScriptEditor: AnyObject {
     @discardableResult func commitMarkedTextAndFlush() -> Bool
     func cancelAutocomplete(clearStatus: Bool)
+    func selectRange(_ range: NSRange)
     var sceneID: UUID { get }
     var editorIdentity: UUID { get }
     var owningWindow: NSWindow? { get }
     var isActualFirstResponder: Bool { get }
+}
+
+extension ActiveScriptEditor {
+    /// Editors that do not support programmatic selection can ignore it.
+    func selectRange(_ range: NSRange) {}
 }
 
 extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
@@ -902,6 +1064,16 @@ extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
     var isActualFirstResponder: Bool {
         guard let textView = view?.textView else { return false }
         return textView.window?.firstResponder === textView
+    }
+
+    func selectRange(_ range: NSRange) {
+        guard let textView = view?.textView else { return }
+        let length = (textView.string as NSString).length
+        let clamped = TextAnchorGeometry.clamp(range, toLength: length)
+        textView.setSelectedRange(clamped)
+        textView.scrollRangeToVisible(clamped)
+        textView.window?.makeFirstResponder(textView)
+        captureRestorationState()
     }
 }
 
@@ -955,9 +1127,20 @@ final class ActiveScriptEditorSession {
             editor.cancelAutocomplete(clearStatus: true)
         }
     }
+
+    /// Selects a rhythm warning range in the editor showing `sceneID`.
+    @discardableResult
+    func selectRange(_ range: NSRange, inScene sceneID: UUID) -> Bool {
+        editors.removeAll { $0.value == nil }
+        guard let editor = editors.compactMap(\.value).first(where: { $0.sceneID == sceneID }) else {
+            return false
+        }
+        editor.selectRange(range)
+        return true
+    }
 }
 
-final class PlaceholderTextView: NSTextView {
+class PlaceholderTextView: NSTextView {
     enum GhostAction { case accept, dismiss, replace }
 
     struct GhostTextLayoutMetrics {
@@ -1379,7 +1562,8 @@ final class PlaceholderTextView: NSTextView {
 
 final class MarkerTextContainerView: NSView {
     let scrollView = NSScrollView()
-    let textView = PlaceholderTextView()
+    let textView = MarkupEditorTextView()
+    let markupStyler = MarkupEditorStyler()
     private let markerView = TextRangeMarkerView()
     weak var coordinator: LinkedScriptTextView.Coordinator?
     var markers: [ProductionTextMarker] = [] {
@@ -1419,6 +1603,7 @@ final class MarkerTextContainerView: NSView {
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        markupStyler.attach(to: textView)
         markerView.container = self
         addSubview(scrollView)
         addSubview(markerView)
