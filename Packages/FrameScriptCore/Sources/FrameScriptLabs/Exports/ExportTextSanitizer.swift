@@ -136,7 +136,18 @@ public enum ExportTextSanitizer {
 
     /// Transliterates to plain ASCII: á→a, ñ→n, ¿→?, ¡→!, —→-, emoji removed.
     public static func asciiSafe(_ value: String) -> String {
-        let withoutEmoji = stripEmoji(stripMarkdown(value))
+        var withoutEmoji = stripEmoji(stripMarkdown(value))
+        // Latin-script letters that neither .toLatin nor diacritic folding
+        // decomposes. They must be replaced *before* those transforms, which
+        // otherwise delete them from EDL titles.
+        let letterFallbacks: [Character: String] = [
+            "Ø": "O", "ø": "o", "Æ": "AE", "æ": "ae", "Œ": "OE", "œ": "oe",
+            "ß": "ss", "Ł": "L", "ł": "l", "Đ": "D", "đ": "d", "Ð": "D",
+            "ð": "d", "Þ": "Th", "þ": "th", "ı": "i", "Ŋ": "N", "ŋ": "n",
+            "Ŧ": "T", "ŧ": "t", "Ə": "E", "ə": "e",
+        ]
+        withoutEmoji = String(withoutEmoji.map { letterFallbacks[$0] ?? String($0) }.joined())
+
         let latin = withoutEmoji.applyingTransform(.toLatin, reverse: false) ?? withoutEmoji
         let folded = latin.folding(
             options: [.diacriticInsensitive, .widthInsensitive],
