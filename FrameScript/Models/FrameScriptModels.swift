@@ -6,6 +6,7 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable {
     case script = "Script"
     case bRoll = "B-Roll"
     case editing = "Editing"
+    case avScript = "AV Script"
 
     var id: String { rawValue }
 

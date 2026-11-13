@@ -184,7 +184,9 @@ final class AppState {
         exportFolderBookmarkResolver: @escaping ExportFolderBookmarkResolver = { data, isStale in
             try URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
         },
-        templates: [FrameTemplate] = SampleData.templates
+        templates: [FrameTemplate] = SampleData.templates,
+        customTemplates: [FrameTemplate]? = nil,
+        subscriptionRuntime: SubscriptionAIRuntime? = nil
     ) {
         self.projectStore = projectStore
         self.recentProjectStore = recentProjectStore
@@ -205,7 +207,10 @@ final class AppState {
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
-        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: Self.loadCustomTemplates())
+        self.templates = Self.mergedTemplates(
+            builtIns: templates.filter(\.builtIn),
+            customTemplates: customTemplates ?? Self.loadCustomTemplates()
+        )
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
@@ -217,7 +222,7 @@ final class AppState {
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
-        SubscriptionAIRuntime.shared.attach(appState: self)
+        (subscriptionRuntime ?? SubscriptionAIRuntime.shared).attach(appState: self)
         attachRecordingContext()
         self.recording.teleprompterHook = self
         TeleprompterPresenter.shared.readingSessionReporter = self
@@ -962,7 +967,7 @@ final class AppState {
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
-        case .script: []
+        case .script, .avScript: []
         }
         let anchorsByID = Dictionary(uniqueKeysWithValues: items)
         let selectedIDs = itemIDs.reduce(into: [UUID]()) { result, itemID in
@@ -1019,7 +1024,7 @@ final class AppState {
             scene.editingItems.enumerated().compactMap { index, item in
                 TextAnchorRepair.current(item.textAnchor, in: scene.scriptText).map { (item.id, $0, index) }
             }
-        case .script:
+        case .script, .avScript:
             []
         }
         let sorted = anchors.sorted {
@@ -1056,6 +1061,8 @@ final class AppState {
                 scene.editingItems.first(where: { $0.id == selectedID }).flatMap { TextAnchorRepair.current($0.textAnchor, in: scene.scriptText) }
             }.first
         case .script:
+            nil
+        case .avScript:
             nil
         }
         return selectedAnchor ?? TextAnchorRepair.anchor(

@@ -1,12 +1,20 @@
 import SwiftUI
 
 struct ModeSwitcher: View {
-    private static let buttonWidth: CGFloat = 112
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     @Binding var selection: WorkspaceMode
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            switcher(compact: false)
+            switcher(compact: true)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("mode-switcher")
+    }
+
+    private func switcher(compact: Bool) -> some View {
         HStack(spacing: 2) {
             ForEach(WorkspaceMode.allCases) { mode in
                 Button {
@@ -18,22 +26,24 @@ struct ModeSwitcher: View {
                         HStack(spacing: 5) {
                             Text(title(for: mode))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.88)
-                            Text(appState.shortcutDisplay(for: shortcutCommand(for: mode)))
-                                .font(.system(size: 9, weight: .medium, design: .rounded))
-                                .foregroundStyle(theme.tertiaryText)
-                                .padding(.horizontal, 4)
-                                .frame(height: 16)
-                                .background {
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(theme.hover)
-                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.divider))
-                                }
+                                .minimumScaleFactor(compact ? 0.82 : 0.88)
+                            if !compact {
+                                Text(appState.shortcutDisplay(for: shortcutCommand(for: mode)))
+                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .foregroundStyle(theme.tertiaryText)
+                                    .padding(.horizontal, 4)
+                                    .frame(height: 16)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(theme.hover)
+                                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.divider))
+                                    }
+                            }
                         }
                     }
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: compact ? 12 : 13, weight: .medium))
                     .foregroundStyle(selection == mode ? theme.primaryText : theme.secondaryText)
-                    .frame(width: Self.buttonWidth, height: 28)
+                    .frame(width: compact ? 76 : 96, height: 28)
                     .contentShape(Rectangle())
                     .background {
                         if selection == mode {
@@ -58,8 +68,7 @@ struct ModeSwitcher: View {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(theme.sidebar.opacity(0.82))
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("mode-switcher")
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func title(for mode: WorkspaceMode) -> String {
@@ -67,6 +76,7 @@ struct ModeSwitcher: View {
         case .script: appState.localized("mode.script")
         case .bRoll: appState.localized("mode.bRoll")
         case .editing: appState.localized("mode.editing")
+        case .avScript: appState.localized("mode.avScript")
         }
     }
 
@@ -75,6 +85,7 @@ struct ModeSwitcher: View {
         case .script: "mode-switcher-script"
         case .bRoll: "mode-switcher-broll"
         case .editing: "mode-switcher-editing"
+        case .avScript: "mode-switcher-avscript"
         }
     }
 
@@ -83,6 +94,7 @@ struct ModeSwitcher: View {
         case .script: .scriptMode
         case .bRoll: .visualsMode
         case .editing: .editingMode
+        case .avScript: .avScriptMode
         }
     }
 }

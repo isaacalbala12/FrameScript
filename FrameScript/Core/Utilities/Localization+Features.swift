@@ -18,6 +18,7 @@ extension L10n {
         editorMarkupStrings,
         durationStrings,
         recordingStrings,
-        voiceFollowStrings
+        voiceFollowStrings,
+        avScriptStrings
     ]
 }

@@ -138,6 +138,11 @@ struct FrameScriptApp: App {
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportEscaleta))
             .disabled(!appState.hasOpenProject)
+            Button(appState.localized("menu.exportAVScript")) {
+                appState.exportAVScript(format: .markdown)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportAVScript))
+            .disabled(!appState.hasOpenProject)
         }
 
         CommandGroup(replacing: .appSettings) {
@@ -157,6 +162,9 @@ struct FrameScriptApp: App {
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("mode.editing")) { appState.selectMode(.editing) }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
+                .disabled(!appState.hasOpenProject)
+            Button(appState.localized("mode.avScript")) { appState.selectMode(.avScript) }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .avScriptMode))
                 .disabled(!appState.hasOpenProject)
             Divider()
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }

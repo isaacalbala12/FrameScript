@@ -162,9 +162,9 @@ final class ResolvedThemeManager {
 
     private var appearanceObserver: NSObjectProtocol?
 
-    init() {
-        systemColorScheme = Self.currentSystemColorScheme()
-        resolvedColorScheme = systemColorScheme
+    init(systemColorScheme: ColorScheme? = nil) {
+        self.systemColorScheme = systemColorScheme ?? Self.currentSystemColorScheme()
+        resolvedColorScheme = self.systemColorScheme
         appearanceObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil,

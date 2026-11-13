@@ -152,7 +152,7 @@ struct ScriptEditorView: View {
                     appState.addBRollItem(sceneID: sceneID, anchor: anchor)
                 case .editing:
                     appState.addEditingItem(sceneID: sceneID, anchor: anchor)
-                case .script:
+                case .script, .avScript:
                     break
                 }
             }
@@ -1799,7 +1799,7 @@ enum TextAnchorGeometry {
         switch mode {
         case .bRoll: 2
         case .editing: 8
-        case .script: 2
+        case .script, .avScript: 2
         }
     }
 

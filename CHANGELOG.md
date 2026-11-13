@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the AV script workspace (F17): a two-column narration and visuals/editing sheet aligned paragraph by paragraph, with inline paragraph editing through the script commit path, visual and editing-note status controls, an "unanchored" recovery group for deleted paragraphs, and two-column Markdown/CSV exports.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.

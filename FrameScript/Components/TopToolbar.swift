@@ -108,6 +108,7 @@ struct TopToolbar: View {
                         Text(appState.shortcutDisplay(for: .commandPalette))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundStyle(theme.tertiaryText)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 4)
                             .frame(height: 17)
                             .background {

@@ -194,6 +194,8 @@ struct AppShellView: View {
                 BRollEditorView(scene: scene)
             case .editing:
                 EditingEditorView(scene: scene)
+            case .avScript:
+                AVScriptEditorView(scene: scene)
             }
         } else {
             EmptyProjectView()
