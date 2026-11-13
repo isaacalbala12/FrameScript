@@ -27,6 +27,7 @@ extension L10n {
             "voiceFollow.error.noMicrophone": "No microphone was found. Connect one and try again.",
             "voiceFollow.error.recognitionUnavailable": "Speech recognition is not available right now. Try again in a moment.",
             "voiceFollow.error.recognitionLost": "Speech recognition stopped. The teleprompter continues at the selected speed.",
+            "voiceFollow.error.audio": "The audio input changed or became unavailable. Reconnect it and try again.",
             "voiceFollow.error.unknown": "Voice follow could not start. Try again.",
             "voiceFollow.error.noText": "This project has no text to follow."
         ],
@@ -54,6 +55,7 @@ extension L10n {
             "voiceFollow.error.noMicrophone": "Микрофон не найден. Подключите его и повторите попытку.",
             "voiceFollow.error.recognitionUnavailable": "Распознавание речи сейчас недоступно. Попробуйте через мгновение.",
             "voiceFollow.error.recognitionLost": "Распознавание речи остановилось. Телесуфлёр продолжает с выбранной скоростью.",
+            "voiceFollow.error.audio": "Аудиовход изменился или стал недоступен. Подключите его и повторите попытку.",
             "voiceFollow.error.unknown": "Не удалось включить следование за голосом. Повторите попытку.",
             "voiceFollow.error.noText": "В проекте нет текста для чтения."
         ],
@@ -81,6 +83,7 @@ extension L10n {
             "voiceFollow.error.noMicrophone": "No se ha encontrado ningún micrófono. Conecta uno y vuelve a intentarlo.",
             "voiceFollow.error.recognitionUnavailable": "El reconocimiento de voz no está disponible ahora mismo. Inténtalo de nuevo en un momento.",
             "voiceFollow.error.recognitionLost": "Se ha perdido el reconocimiento de voz. El teleprompter sigue a la velocidad elegida.",
+            "voiceFollow.error.audio": "La entrada de audio ha cambiado o ya no está disponible. Vuelve a conectarla e inténtalo de nuevo.",
             "voiceFollow.error.unknown": "No se ha podido activar el seguimiento por voz. Inténtalo de nuevo.",
             "voiceFollow.error.noText": "Este proyecto no tiene texto que seguir."
         ]

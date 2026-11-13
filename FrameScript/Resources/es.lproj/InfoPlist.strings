@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "FrameScript usa el micrófono para que el teleprompter siga tu voz mientras lees. El audio se procesa en este Mac y no se envía a ningún servidor.";
+"NSSpeechRecognitionUsageDescription" = "FrameScript usa el reconocimiento de voz en el dispositivo para alinear lo que lees con el guion del teleprompter. El audio no sale de este Mac.";

@@ -288,6 +288,9 @@ final class TeleprompterPresenter {
         fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
     ) {
         if let existing = controller {
+            Task { @MainActor in
+                await existing.model.updateSpeechLanguage(speechLanguage)
+            }
             existing.bringForward()
             return
         }

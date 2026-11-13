@@ -7,7 +7,7 @@ import FrameScriptCore
 struct VoiceFollowAlert: Identifiable {
     enum Kind {
         case explanation
-        case denied
+        case denied(speechDenied: Bool)
         case failure(VoiceFollowFailure)
         case noText
     }
@@ -21,18 +21,26 @@ struct VoiceFollowAlert: Identifiable {
 extension TeleprompterModel {
     // MARK: Toggle and permissions
 
+    /// A single synchronous transition flag makes the keyboard shortcut and the
+    /// button reentrant-safe: a second V while the first start is still
+    /// awaiting permissions is ignored instead of starting a second session.
     func toggleVoiceFollow() {
-        if voiceFollow.isEnabled {
-            stopVoiceFollowing(pausePlayback: true)
-        } else {
-            Task { @MainActor [weak self] in
-                await self?.beginVoiceFollowFlow()
+        guard !voiceTransitionInProgress else { return }
+        voiceTransitionInProgress = true
+        voiceStartCancelled = false
+        voiceTransitionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.voiceTransitionInProgress = false }
+            if self.voiceFollow.isEnabled {
+                await self.stopVoiceFollowingAndWait(pausePlayback: true)
+            } else {
+                await self.beginVoiceFollowFlow()
             }
         }
     }
 
     func beginVoiceFollowFlow() async {
-        guard !voiceFollow.isEnabled else { return }
+        guard !voiceFollow.isEnabled, !voiceStartCancelled else { return }
         guard speechLanguage != nil else {
             voiceFollowAlert = VoiceFollowAlert(kind: .failure(.unsupportedLanguage))
             return
@@ -41,14 +49,17 @@ extension TeleprompterModel {
             voiceFollowAlert = VoiceFollowAlert(kind: .noText)
             return
         }
-        refreshVoiceInputDevices()
+        await voiceFollow.refreshInputDevices()
+        guard !voiceStartCancelled else { return }
 
         let permissions = await voiceFollow.permissions()
+        guard !voiceStartCancelled else { return }
         if permissions.speech == .denied
             || permissions.speech == .restricted
             || permissions.microphone == .denied
             || permissions.microphone == .restricted {
-            voiceFollowAlert = VoiceFollowAlert(kind: .denied)
+            let speechDenied = permissions.speech == .denied || permissions.speech == .restricted
+            voiceFollowAlert = VoiceFollowAlert(kind: .denied(speechDenied: speechDenied))
         } else if permissions.speech == .notDetermined || permissions.microphone == .notDetermined {
             // Explain what the microphone is for before macOS shows its own
             // permission dialog.
@@ -59,12 +70,18 @@ extension TeleprompterModel {
     }
 
     func confirmVoiceFollowPermissions() {
-        guard !voiceFollow.isEnabled else { return }
-        Task { @MainActor [weak self] in
+        guard !voiceFollow.isEnabled, !voiceTransitionInProgress else { return }
+        voiceTransitionInProgress = true
+        voiceStartCancelled = false
+        voiceTransitionTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.voiceTransitionInProgress = false }
             let permissions = await self.voiceFollow.requestPermissions()
+            guard !self.voiceStartCancelled else { return }
             guard permissions.isGranted else {
-                self.voiceFollowAlert = VoiceFollowAlert(kind: .denied)
+                self.voiceFollowAlert = VoiceFollowAlert(
+                    kind: .denied(speechDenied: permissions.speech != .authorized)
+                )
                 return
             }
             await self.startVoiceFollowing()
@@ -72,9 +89,19 @@ extension TeleprompterModel {
     }
 
     func startVoiceFollowing() async {
-        guard !voiceFollow.isEnabled, let speechLanguage else { return }
-        refreshVoiceInputDevices()
-        let document = VoiceFollowDocument(sections: sections, language: speechLanguage)
+        guard !voiceFollow.isEnabled, !voiceStartCancelled, let speechLanguage else { return }
+        voiceFollow.fallbackPositionProvider = { [weak self] in
+            self?.currentVoicePosition()
+        }
+        await voiceFollow.refreshInputDevices()
+        // Tokenizing the whole document is expensive; never do it on the
+        // MainActor while the teleprompter is drawing.
+        let sectionsSnapshot = sections
+        let document = await Task.detached {
+            VoiceFollowDocument(sections: sectionsSnapshot, language: speechLanguage)
+        }.value
+        guard !voiceStartCancelled else { return }
+
         do {
             try await voiceFollow.start(
                 document: document,
@@ -82,6 +109,13 @@ extension TeleprompterModel {
                 startPosition: currentVoicePosition(),
                 inputDeviceUID: settings.preferredAudioInputUID
             )
+            guard !voiceStartCancelled else {
+                await voiceFollow.stopAndWait(
+                    now: ProcessInfo.processInfo.systemUptime,
+                    emitSession: false
+                )
+                return
+            }
             startPlaybackImmediately()
             voiceTargetOffset = offset
             voiceSmoother.reset(at: offset)
@@ -89,7 +123,9 @@ extension TeleprompterModel {
             lastVoicePhase = .listening
             showControlsTemporarily()
         } catch {
-            voiceFollowAlert = VoiceFollowAlert(kind: .failure(VoiceFollowFailure.from(error)))
+            let failure = VoiceFollowFailure.from(error)
+            guard failure != .cancelled else { return }
+            voiceFollowAlert = VoiceFollowAlert(kind: .failure(failure))
             stopVoiceFollowing(pausePlayback: true)
         }
     }
@@ -113,10 +149,32 @@ extension TeleprompterModel {
         }
     }
 
+    func stopVoiceFollowingAndWait(
+        pausePlayback: Bool,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) async {
+        stopVoiceFollowing(pausePlayback: pausePlayback, now: now)
+        await voiceFollow.waitForStop()
+    }
+
+    func waitForVoiceTransition() async {
+        await voiceTransitionTask?.value
+    }
+
+    func waitForVoiceFollowDocumentUpdate() async {
+        await voiceFollow.waitForDocumentUpdate()
+    }
+
+    func waitForVoiceFollowStop() async {
+        await voiceFollow.waitForStop()
+    }
+
     // MARK: Microphone
 
     func refreshVoiceInputDevices() {
-        voiceFollow.refreshInputDevices()
+        Task { @MainActor [weak self] in
+            await self?.voiceFollow.refreshInputDevices()
+        }
     }
 
     var selectedAudioInputName: String {
@@ -129,29 +187,65 @@ extension TeleprompterModel {
 
     func selectAudioInput(uid: String?) {
         settings.preferredAudioInputUID = uid
-        guard voiceFollow.isEnabled else { return }
-        Task { @MainActor [weak self] in
+        guard voiceFollow.isEnabled, !voiceTransitionInProgress else { return }
+        voiceTransitionInProgress = true
+        voiceTransitionTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.voiceTransitionInProgress = false }
             do {
                 try await self.voiceFollow.restart(inputDeviceUID: uid)
             } catch {
-                self.voiceFollowAlert = VoiceFollowAlert(
-                    kind: .failure(VoiceFollowFailure.from(error))
-                )
-                self.stopVoiceFollowing(pausePlayback: true)
+                let failure = VoiceFollowFailure.from(error)
+                guard failure != .cancelled else { return }
+                self.voiceFollowAlert = VoiceFollowAlert(kind: .failure(failure))
+                await self.stopVoiceFollowingAndWait(pausePlayback: true)
             }
+        }
+    }
+
+    // MARK: Project language
+
+    func updateSpeechLanguage(_ language: SpeechLanguage?) async {
+        guard language != speechLanguage, !voiceTransitionInProgress else { return }
+        voiceTransitionInProgress = true
+        defer { voiceTransitionInProgress = false }
+        speechLanguage = language
+        guard voiceFollow.isEnabled else { return }
+        guard let language else {
+            voiceFollowAlert = VoiceFollowAlert(kind: .failure(.unsupportedLanguage))
+            await stopVoiceFollowingAndWait(pausePlayback: true)
+            return
+        }
+
+        let sectionsSnapshot = sections
+        let document = await Task.detached {
+            VoiceFollowDocument(sections: sectionsSnapshot, language: language)
+        }.value
+        do {
+            try await voiceFollow.restart(
+                language: language,
+                document: document,
+                inputDeviceUID: settings.preferredAudioInputUID
+            )
+        } catch {
+            let failure = VoiceFollowFailure.from(error)
+            guard failure != .cancelled else { return }
+            voiceFollowAlert = VoiceFollowAlert(kind: .failure(failure))
+            await stopVoiceFollowingAndWait(pausePlayback: true)
         }
     }
 
     // MARK: Failures
 
     func handleVoiceFollowFailure(_ failure: VoiceFollowFailure) {
+        guard failure != .cancelled else { return }
         voiceFollowAlert = VoiceFollowAlert(kind: .failure(failure))
         showControlsTemporarily()
     }
 
-    func openPrivacySettings() {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    func openPrivacySettings(speechDenied: Bool) {
+        let pane = speechDenied ? "Privacy_SpeechRecognition" : "Privacy_Microphone"
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
         if let url {
             NSWorkspace.shared.open(url)
         }
@@ -166,7 +260,10 @@ extension TeleprompterModel {
         ) else {
             return nil
         }
-        return VoiceFollowPosition(sceneID: anchor.sceneID, characterOffset: anchor.characterOffset)
+        return VoiceFollowPosition(
+            sceneID: anchor.sceneID,
+            characterOffset: anchor.characterOffset
+        )
     }
 
     var voiceFallbackWordsPerMinute: Double {
@@ -216,7 +313,6 @@ extension TeleprompterModel {
 
         let delta = voiceLastTick.map { min(max(now - $0, 0), 0.25) } ?? 0
         voiceLastTick = now
-        voiceFollow.tick(now: now)
         let phase = voiceFollow.phase
 
         switch phase {
@@ -230,9 +326,6 @@ extension TeleprompterModel {
             }
         case .timedFallback:
             if lastVoicePhase != .timedFallback {
-                // Re-anchor at what is actually on screen so a long silent
-                // stretch does not leave the follower far behind.
-                voiceFollow.rebase(to: currentVoicePosition())
                 voiceTargetOffset = nil
             }
             engine.isPlaying = true
@@ -252,12 +345,19 @@ extension TeleprompterModel {
     }
 
     /// Test/debug entry point: inject a recognizer hypothesis through the same
-    /// path the live stream uses.
+    /// path the live stream uses. The alignment itself runs off-main.
     func ingestVoiceHypothesis(
         _ text: String,
         at timestamp: TimeInterval,
         segment: Int? = nil
-    ) {
-        voiceFollow.ingest(text: text, at: timestamp, segment: segment)
+    ) async {
+        await voiceFollow.ingest(text: text, at: timestamp, segment: segment)
+    }
+
+    /// Deterministic liveness advance for tests; production has a 4 Hz
+    /// liveness task inside the voice controller.
+    func advanceVoiceFollow(to timestamp: TimeInterval) async {
+        await voiceFollow.tick(now: timestamp)
+        tick(now: timestamp)
     }
 }

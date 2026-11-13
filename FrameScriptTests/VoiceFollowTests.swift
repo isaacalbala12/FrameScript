@@ -248,11 +248,11 @@ final class VoiceFollowTests: XCTestCase {
         await model.startVoiceFollowing()
         XCTAssertTrue(model.voiceFollow.isEnabled)
 
-        model.ingestVoiceHypothesis("uno dos tres", at: 100)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 100)
         XCTAssertEqual(model.voiceFollow.phase, .following)
         XCTAssertEqual(model.voiceFollow.currentLocation?.sectionIndex, 0)
 
-        model.ingestVoiceHypothesis("cuatro cinco seis", at: 100.5)
+        await model.ingestVoiceHypothesis("cuatro cinco seis", at: 100.5)
         XCTAssertEqual(model.voiceFollow.currentLocation?.sectionIndex, 1)
         XCTAssertEqual(model.voiceFollow.currentLocation?.sceneID, secondID)
 
@@ -263,6 +263,24 @@ final class VoiceFollowTests: XCTestCase {
         XCTAssertGreaterThan(model.offset, 300)
         XCTAssertEqual(model.currentSectionIndex, 1)
         XCTAssertNotNil(model.voiceTargetOffset)
+    }
+
+    func testEngineReanchorsToSecondScene() async {
+        let first = sceneSection(title: "One", text: "uno dos tres")
+        let second = sceneSection(title: "Two", text: "cuatro cinco seis")
+        let document = VoiceFollowDocument(sections: [first, second], language: .spanish)
+        let engine = VoiceFollowFollowerEngine(document: document)
+        let location = document.location(forTokenIndex: 3)
+        let update = await engine.process(
+            text: "cuatro cinco seis",
+            at: 1,
+            segment: nil,
+            reanchor: location.map {
+                VoiceFollowPosition(sceneID: $0.sceneID, characterOffset: $0.characterOffset)
+            }
+        )
+        XCTAssertEqual(update.state.tokenIndex, 5)
+        XCTAssertGreaterThanOrEqual(update.state.confidence, 0.4)
     }
 
     func testVoiceFollowFallsBackToTimedScrollingAndResumes() async throws {
@@ -276,11 +294,11 @@ final class VoiceFollowTests: XCTestCase {
         prepare(model, counts: [12, 17])
 
         await model.startVoiceFollowing()
-        model.ingestVoiceHypothesis("uno dos tres", at: 200)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 200)
         model.tick(now: 200.1)
         XCTAssertEqual(model.voiceFollow.phase, .following)
 
-        model.tick(now: 203.3)
+        await model.advanceVoiceFollow(to: 203.3)
         XCTAssertEqual(model.voiceFollow.phase, .timedFallback)
         XCTAssertNil(model.voiceTargetOffset)
         XCTAssertTrue(model.isPlaying)
@@ -289,9 +307,19 @@ final class VoiceFollowTests: XCTestCase {
         model.tick(now: 204.1)
         XCTAssertGreaterThan(model.offset, beforeFallbackScroll)
 
-        model.ingestVoiceHypothesis("uno dos tres", at: 204.2)
-        model.tick(now: 204.7)
+        let document = try XCTUnwrap(model.voiceFollow.document)
+        let resumeLocation = try XCTUnwrap(document.location(forTokenIndex: 3))
+        let resumeWords = document.script.tokens[3..<6].map(\.source).joined(separator: " ")
+        model.voiceFollow.fallbackPositionProvider = {
+            VoiceFollowPosition(
+                sceneID: resumeLocation.sceneID,
+                characterOffset: resumeLocation.characterOffset
+            )
+        }
+        await model.ingestVoiceHypothesis(resumeWords, at: 204.2)
+        await model.advanceVoiceFollow(to: 204.7)
         XCTAssertEqual(model.voiceFollow.phase, .following)
+
         XCTAssertNotNil(model.voiceTargetOffset)
     }
 
@@ -307,20 +335,27 @@ final class VoiceFollowTests: XCTestCase {
         prepare(model, counts: [12, 17])
 
         await model.startVoiceFollowing()
-        model.ingestVoiceHypothesis("uno dos tres", at: 300)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 300)
         let before = try XCTUnwrap(model.voiceFollow.currentLocation)
+        let beforeWord = model.voiceFollow.document?.script.token(at: before.tokenIndex)?.normalized
 
         scenes[0] = TeleprompterSceneText(
             id: firstID,
             title: "One",
             text: "cero uno dos tres"
         )
+        let documentBeforeRefresh = model.voiceFollow.document
         model.refreshFromProvider()
+        XCTAssertEqual(model.voiceFollow.document, documentBeforeRefresh)
+        await model.waitForVoiceFollowDocumentUpdate()
 
         let after = try XCTUnwrap(model.voiceFollow.currentLocation)
         XCTAssertEqual(after.sceneID, before.sceneID)
-        XCTAssertGreaterThanOrEqual(after.characterOffset, before.characterOffset - 1)
-        XCTAssertLessThanOrEqual(after.characterOffset, before.characterOffset + 1)
+        XCTAssertEqual(
+            model.voiceFollow.document?.script.token(at: after.tokenIndex)?.normalized,
+            beforeWord
+        )
+        XCTAssertEqual(after.localTokenIndex, before.localTokenIndex + 1)
         XCTAssertEqual(model.voiceFollow.phase, .following)
     }
 
@@ -338,12 +373,13 @@ final class VoiceFollowTests: XCTestCase {
         model.onReadingSessionFinished = { reported = $0 }
 
         await model.startVoiceFollowing()
-        model.ingestVoiceHypothesis("uno dos tres", at: 400)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 400)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 401)
         model.stopVoiceFollowing(pausePlayback: true, now: 405)
 
         let session = try XCTUnwrap(reported)
         XCTAssertEqual(session.spokenWords, 2)
-        XCTAssertEqual(session.duration, 5, accuracy: 0.000_001)
+        XCTAssertEqual(session.duration, 1, accuracy: 0.000_001)
         XCTAssertEqual(session.language, .spanish)
     }
 
@@ -366,12 +402,251 @@ final class VoiceFollowTests: XCTestCase {
 
         await model.startVoiceFollowing()
         for hypothesis in hypotheses {
-            model.ingestVoiceHypothesis(hypothesis.text, at: hypothesis.timestamp)
+            await model.ingestVoiceHypothesis(hypothesis.text, at: hypothesis.timestamp)
             model.tick(now: hypothesis.timestamp + 0.05)
         }
 
         XCTAssertEqual(model.voiceFollow.currentLocation?.sceneID, secondID)
         XCTAssertEqual(model.voiceFollow.phase, .following)
+    }
+
+
+    func testDeletionAboveReaderKeepsTheSameWord() {
+        let words = (1...60).map { "palabra\($0)" }
+        let sceneID = UUID()
+        let oldDocument = VoiceFollowDocument(
+            sections: [TeleprompterSection(
+                sceneID: sceneID,
+                title: "One",
+                runs: ScriptMarkup.runs(words.joined(separator: " "))
+            )],
+            language: .spanish
+        )
+        let oldToken = oldDocument.script.tokens.firstIndex { $0.normalized == "palabra40" }
+        let oldLocation = oldToken.flatMap { oldDocument.location(forTokenIndex: $0) }
+        let newDocument = VoiceFollowDocument(
+            sections: [TeleprompterSection(
+                sceneID: sceneID,
+                title: "One",
+                runs: ScriptMarkup.runs(words.dropFirst(10).joined(separator: " "))
+            )],
+            language: .spanish
+        )
+
+        let migrated = newDocument.migratedTokenIndex(
+            from: oldDocument,
+            location: oldLocation
+        )
+        XCTAssertEqual(
+            migrated.flatMap { newDocument.script.token(at: $0)?.normalized },
+            "palabra40"
+        )
+    }
+
+    func testAudioEngineFailureGetsItsOwnMessage() {
+        XCTAssertEqual(
+            VoiceFollowFailure.from(SpeechRecognitionError.audioEngineFailure("synthetic")),
+            .audioFailure
+        )
+    }
+
+    func testEditAboveReaderKeepsTheSameWord() {
+        let words = (1...60).map { "palabra\($0)" }.joined(separator: " ")
+        let scene = sceneSection(title: "One", text: words)
+        let oldDocument = VoiceFollowDocument(sections: [scene], language: .spanish)
+        let oldToken = oldDocument.script.tokens.firstIndex { $0.normalized == "palabra30" }
+        let oldLocation = oldToken.flatMap { oldDocument.location(forTokenIndex: $0) }
+        let newDocument = VoiceFollowDocument(
+            sections: [
+                TeleprompterSection(
+                    sceneID: scene.sceneID,
+                    title: "One",
+                    runs: ScriptMarkup.runs(
+                        "esta frase nueva se inserta antes del lector y cambia todos los offsets. " + words
+                    )
+                )
+            ],
+            language: .spanish
+        )
+
+        let migrated = newDocument.migratedTokenIndex(
+            from: oldDocument,
+            location: oldLocation
+        )
+        XCTAssertEqual(
+            migrated.flatMap { newDocument.script.token(at: $0)?.normalized },
+            "palabra30"
+        )
+    }
+
+    func testEngineAfterLongTicksResumes() async {
+        let words = (1...240).map { "palabra\($0)" }
+        let sentences = stride(from: 0, to: words.count, by: 6).map {
+            words[$0..<min($0 + 6, words.count)].joined(separator: " ")
+        }
+        let text = sentences.joined(separator: ". ")
+        let document = VoiceFollowDocument(
+            sections: [TeleprompterSection(sceneID: UUID(), title: "Long", runs: ScriptMarkup.runs(text))],
+            language: .spanish
+        )
+        let engine = VoiceFollowFollowerEngine(document: document)
+        _ = await engine.process(text: words.prefix(8).joined(separator: " "), at: 100, segment: nil)
+        let reanchor = document.location(forTokenIndex: 38).map {
+            VoiceFollowPosition(sceneID: $0.sceneID, characterOffset: $0.characterOffset)
+        }
+        for second in stride(from: 101.0, through: 171.0, by: 1) {
+            _ = await engine.tick(at: second, reanchor: reanchor)
+        }
+        let location = document.location(forTokenIndex: 38)
+        let resume = words[38..<50].joined(separator: " ")
+        let update = await engine.process(
+            text: resume,
+            at: 172,
+            segment: nil,
+            reanchor: location.map {
+                VoiceFollowPosition(sceneID: $0.sceneID, characterOffset: $0.characterOffset)
+            }
+        )
+        XCTAssertEqual(update.state.tokenIndex, 49)
+        XCTAssertGreaterThanOrEqual(update.state.confidence, 0.4)
+    }
+
+    func testLongTimedFallbackRebasesAtScreenAndResumes() async throws {
+        let words = (1...240).map { "palabra\($0)" }
+        let sentences = stride(from: 0, to: words.count, by: 6).map {
+            words[$0..<min($0 + 6, words.count)].joined(separator: " ")
+        }
+        let text = sentences.joined(separator: ". ")
+        let scene = TeleprompterSceneText(id: UUID(), title: "Long", text: text)
+        let model = try makeModel(scenes: [scene])
+        model.updateViewport(width: 1200, height: 600)
+        model.updateTextMetrics(
+            TeleprompterTextMetrics(
+                contentHeight: 6_000,
+                sectionStarts: [64],
+                sectionHeights: [5_900],
+                visibleCharacterCounts: [text.count]
+            )
+        )
+
+        await model.startVoiceFollowing()
+        await model.ingestVoiceHypothesis(words.prefix(8).joined(separator: " "), at: 100)
+        await model.advanceVoiceFollow(to: 100.2)
+
+        for second in stride(from: 101.0, through: 171.0, by: 1) {
+            await model.advanceVoiceFollow(to: second)
+        }
+        XCTAssertEqual(model.voiceFollow.phase, .timedFallback)
+
+        let document = try XCTUnwrap(model.voiceFollow.document)
+        let resumeLocation = try XCTUnwrap(document.location(forTokenIndex: 38))
+        let resumeWords = document.script.tokens[38..<50].map(\.source).joined(separator: " ")
+        model.voiceFollow.fallbackPositionProvider = {
+            VoiceFollowPosition(
+                sceneID: resumeLocation.sceneID,
+                characterOffset: resumeLocation.characterOffset
+            )
+        }
+        await model.ingestVoiceHypothesis(resumeWords, at: 172)
+        await model.advanceVoiceFollow(to: 172.6)
+        XCTAssertEqual(model.voiceFollow.phase, .following)
+    }
+
+    func testAwaitableStopPreventsStartRace() async throws {
+        let recognizer = SlowStopSpeechRecognizer()
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes, recognizer: recognizer)
+        prepare(model, counts: [12])
+
+        await model.startVoiceFollowing()
+        XCTAssertTrue(model.voiceFollow.isEnabled)
+
+        model.stopVoiceFollowing(pausePlayback: false)
+        await model.startVoiceFollowing()
+        XCTAssertTrue(model.voiceFollow.isEnabled)
+        XCTAssertNil(model.voiceFollow.lastFailure)
+        let startCount = await recognizer.startCountValue()
+        XCTAssertEqual(startCount, 2)
+    }
+
+    func testRapidToggleStartsExactlyOneSession() async throws {
+        let recognizer = CountingSpeechRecognizer()
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes, recognizer: recognizer)
+        prepare(model, counts: [12])
+
+        model.toggleVoiceFollow()
+        model.toggleVoiceFollow()
+        await model.waitForVoiceTransition()
+        XCTAssertTrue(model.voiceFollow.isEnabled)
+        let firstCount = await recognizer.startCountValue()
+        XCTAssertEqual(firstCount, 1)
+
+        model.toggleVoiceFollow()
+        await model.waitForVoiceTransition()
+        XCTAssertFalse(model.voiceFollow.isEnabled)
+        let finalCount = await recognizer.startCountValue()
+        XCTAssertEqual(finalCount, 1)
+    }
+
+    func testSessionDurationUsesActiveSpeechOnly() async throws {
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes)
+        prepare(model, counts: [12])
+        var reported: TeleprompterReadingSession?
+        model.onReadingSessionFinished = { reported = $0 }
+
+        await model.startVoiceFollowing()
+        await model.ingestVoiceHypothesis("uno dos tres", at: 500)
+        await model.ingestVoiceHypothesis("uno dos tres", at: 501)
+        await model.advanceVoiceFollow(to: 510)
+        model.stopVoiceFollowing(pausePlayback: true, now: 520)
+
+        let session = try XCTUnwrap(reported)
+        XCTAssertEqual(session.duration, 1, accuracy: 0.000_001)
+    }
+
+    func testSteadyFollowingDoesNotPublishPhaseChanges() async throws {
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes)
+        prepare(model, counts: [12])
+
+        await model.startVoiceFollowing()
+        await model.ingestVoiceHypothesis("uno dos tres", at: 600)
+        await model.advanceVoiceFollow(to: 600.1)
+        XCTAssertEqual(model.voiceFollow.phase, .following)
+        let changes = model.voiceFollow.phaseChangeCount
+
+        for step in 1...10 {
+            await model.advanceVoiceFollow(to: 600.1 + Double(step) * 0.1)
+        }
+        XCTAssertEqual(model.voiceFollow.phaseChangeCount, changes)
+    }
+
+    func testSpeechLanguageChangeRetokenizesAndRestarts() async throws {
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes)
+        prepare(model, counts: [12])
+
+        await model.startVoiceFollowing()
+        await model.updateSpeechLanguage(.english)
+
+        XCTAssertEqual(model.speechLanguage, .english)
+        XCTAssertEqual(model.voiceFollow.document?.script.language, .english)
+        XCTAssertTrue(model.voiceFollow.isEnabled)
+    }
+
+    func testDeniedFlowOffersTheSpeechPane() async throws {
+        let scenes = [TeleprompterSceneText(id: UUID(), title: "One", text: "uno dos tres")]
+        let model = try makeModel(scenes: scenes, recognizer: DeniedSpeechRecognizer())
+        prepare(model, counts: [12])
+
+        await model.beginVoiceFollowFlow()
+
+        guard case .denied(let speechDenied) = model.voiceFollowAlert?.kind else {
+            return XCTFail("Expected a denied alert")
+        }
+        XCTAssertTrue(speechDenied)
     }
 
     // MARK: - Permissions and settings
@@ -463,6 +738,7 @@ final class VoiceFollowTests: XCTestCase {
             speechRecognizer: recognizer,
             fallbackWordsPerMinuteProvider: { 120.0 }
         )
+        model.voiceFollow.runsLivenessTask = false
         addTeardownBlock {
             model.stop()
         }
@@ -544,4 +820,65 @@ private actor DeniedSpeechRecognizer: SpeechRecognizing {
     }
 
     func stop() async {}
+}
+
+private actor SlowStopSpeechRecognizer: SpeechRecognizing {
+    private var continuation: AsyncThrowingStream<SpeechRecognitionEvent, Error>.Continuation?
+    private var starts = 0
+
+    func permissions() async -> SpeechRecognitionPermissions {
+        SpeechRecognitionPermissions(speech: .authorized, microphone: .authorized)
+    }
+
+    func requestPermissions() async -> SpeechRecognitionPermissions {
+        await permissions()
+    }
+
+    func start(
+        language: SpeechLanguage,
+        inputDeviceID: AudioDeviceID?
+    ) async throws -> AsyncThrowingStream<SpeechRecognitionEvent, Error> {
+        starts += 1
+        let pair = AsyncThrowingStream<SpeechRecognitionEvent, Error>.makeStream()
+        continuation = pair.continuation
+        return pair.stream
+    }
+
+    func stop() async {
+        continuation?.finish()
+        continuation = nil
+        try? await Task.sleep(for: .milliseconds(200))
+    }
+
+    func startCountValue() async -> Int { starts }
+}
+
+private actor CountingSpeechRecognizer: SpeechRecognizing {
+    private var continuation: AsyncThrowingStream<SpeechRecognitionEvent, Error>.Continuation?
+    private var starts = 0
+
+    func permissions() async -> SpeechRecognitionPermissions {
+        SpeechRecognitionPermissions(speech: .authorized, microphone: .authorized)
+    }
+
+    func requestPermissions() async -> SpeechRecognitionPermissions {
+        await permissions()
+    }
+
+    func start(
+        language: SpeechLanguage,
+        inputDeviceID: AudioDeviceID?
+    ) async throws -> AsyncThrowingStream<SpeechRecognitionEvent, Error> {
+        starts += 1
+        let pair = AsyncThrowingStream<SpeechRecognitionEvent, Error>.makeStream()
+        continuation = pair.continuation
+        return pair.stream
+    }
+
+    func stop() async {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func startCountValue() async -> Int { starts }
 }

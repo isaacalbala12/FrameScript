@@ -46,12 +46,15 @@ final class TeleprompterModel {
     let language: AppLanguage
     /// Recognition language for voice following, derived from the project's
     /// primary language. `nil` when the project language has no F9 locale.
-    let speechLanguage: SpeechLanguage?
+    var speechLanguage: SpeechLanguage?
     let voiceFollow: TeleprompterVoiceFollow
     var voiceSmoother = TeleprompterVoiceSmoother()
     var voiceLastTick: TimeInterval?
     var lastVoicePhase: TeleprompterVoiceFollow.Phase = .off
     var voiceFollowAlert: VoiceFollowAlert?
+    var voiceTransitionInProgress = false
+    var voiceTransitionTask: Task<Void, Never>?
+    var voiceStartCancelled = false
     var onReadingSessionFinished: ((TeleprompterReadingSession) -> Void)?
     let fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)?
 
@@ -331,6 +334,8 @@ final class TeleprompterModel {
 
     func pause() {
         cancelCountdown()
+        voiceStartCancelled = true
+        voiceTransitionTask?.cancel()
         stopVoiceFollowing(pausePlayback: false)
         isPlaying = false
         engine.isPlaying = false
@@ -490,6 +495,8 @@ final class TeleprompterModel {
     // MARK: Lifecycle
 
     func stop() {
+        voiceStartCancelled = true
+        voiceTransitionTask?.cancel()
         voiceFollow.stop(now: ProcessInfo.processInfo.systemUptime, emitSession: true)
         voiceTargetOffset = nil
         voiceLastTick = nil
@@ -523,7 +530,12 @@ final class TeleprompterModel {
             : readingAnchor(mirrorVertical: settings.mirrorVertical, readingLineFraction: settings.readingLineFraction)
         let voicePosition: VoiceFollowPosition? = if voiceFollow.isEnabled {
             voiceFollow.currentLocation.map {
-                VoiceFollowPosition(sceneID: $0.sceneID, characterOffset: $0.characterOffset)
+                VoiceFollowPosition(
+                    sceneID: $0.sceneID,
+                    characterOffset: $0.characterOffset,
+                    localTokenIndex: $0.localTokenIndex,
+                    normalizedWord: voiceFollow.document?.script.token(at: $0.tokenIndex)?.normalized
+                )
             } ?? currentVoicePosition()
         } else {
             nil
@@ -531,8 +543,9 @@ final class TeleprompterModel {
 
         sections = newSections
         if voiceFollow.isEnabled, let speechLanguage {
-            voiceFollow.updateDocument(
-                VoiceFollowDocument(sections: newSections, language: speechLanguage),
+            voiceFollow.updateSections(
+                newSections,
+                language: speechLanguage,
                 preserving: voicePosition
             )
         }
@@ -621,7 +634,10 @@ final class TeleprompterModel {
         lastDisplayUpdate = CACurrentMediaTime()
         textRenderer?.setScrollOffset(offset)
         if voiceFollow.isEnabled {
-            voiceFollow.rebase(to: currentVoicePosition())
+            let position = currentVoicePosition()
+            Task { @MainActor [weak self] in
+                await self?.voiceFollow.rebase(to: position)
+            }
             voiceSmoother.reset(at: offset)
             voiceTargetOffset = offset
             voiceLastTick = nil

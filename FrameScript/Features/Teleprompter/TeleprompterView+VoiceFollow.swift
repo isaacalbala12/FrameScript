@@ -160,12 +160,12 @@ private struct VoiceFollowAlertModifier: ViewModifier {
                     },
                     secondaryButton: .cancel(Text(model.localized("voiceFollow.cancel")))
                 )
-            case .denied:
+            case .denied(let speechDenied):
                 Alert(
                     title: Text(model.localized("voiceFollow.denied.title")),
                     message: Text(model.localized("voiceFollow.error.permissions")),
                     primaryButton: .default(Text(model.localized("voiceFollow.openSettings"))) {
-                        model.openPrivacySettings()
+                        model.openPrivacySettings(speechDenied: speechDenied)
                     },
                     secondaryButton: .cancel(Text(model.localized("voiceFollow.cancel")))
                 )
