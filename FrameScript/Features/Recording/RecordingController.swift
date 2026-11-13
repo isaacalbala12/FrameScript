@@ -52,6 +52,9 @@ final class RecordingController {
     private(set) var testConnectionIssue: RecordingIssue?
     private(set) var scenesIssue: RecordingIssue?
     private(set) var lastIssue: RecordingIssue?
+    /// OBS is recording an output FrameScript did not start (for example a
+    /// gameplay capture started by hand). Never stop it from FrameScript.
+    private(set) var externalRecordingActive = false
     private(set) var scenes: [OBSScene] = []
     private(set) var elapsed: TimeInterval = 0
     private(set) var lastTakeID: UUID?
@@ -287,6 +290,10 @@ final class RecordingController {
 
     func startTake(sceneID: UUID, languageCode: String = "") async {
         guard phase == .idle, !isStopping else { return }
+        guard !externalRecordingActive else {
+            lastIssue = .externalRecordingActive
+            return
+        }
         guard let gateway else {
             lastIssue = .noScene
             return
@@ -399,13 +406,10 @@ final class RecordingController {
 
             let startedAt = now()
             try await client.startRecord()
-            guard startToken == token else {
-                // A stop/quit invalidated this attempt while StartRecord was in
-                // flight. OBS already started, so stop it instead of leaking a
-                // recording with no owner.
-                _ = try? await client.stopRecord()
-                return
-            }
+            // Only the current token proves FrameScript owns this output. A
+            // stale token may mean an external recording is running, so never
+            // stop it here; the next GetRecordStatus will treat it as unowned.
+            guard startToken == token else { return }
             if stopRequestedWhileStarting {
                 stopRequestedWhileStarting = false
                 await stopRecordingNow(startedAt: startedAt)
@@ -723,6 +727,13 @@ final class RecordingController {
             if let path = change.outputPath, !path.isEmpty {
                 lastKnownOutputPath = path
             }
+            if !change.isRecording {
+                externalRecordingActive = false
+            } else if phase == .idle, activeSceneID == nil {
+                // OBS started recording from outside FrameScript while we were
+                // connected.
+                externalRecordingActive = true
+            }
             // The user pressed Stop inside OBS itself.
             if !change.isRecording,
                case .recording(let startedAt) = phase,
@@ -762,12 +773,14 @@ final class RecordingController {
     }
 
     /// Called after a successful connect. OBS may still be recording from
-    /// before the disconnect; adopt that output into the interrupted take, or
-    /// stop an untracked orphan so it cannot keep writing in the background.
+    /// before the disconnect; adopt that output only when a matching
+    /// FrameScript take exists. An output started outside FrameScript is never
+    /// stopped: it is reported through `externalRecordingActive` instead.
     private func reconcileRecordStatus() async {
         guard await client.currentConnectionState().isConnected else { return }
         guard let status = try? await client.getRecordStatus() else { return }
         if !status.outputActive {
+            externalRecordingActive = false
             interruptedContext = nil
             recoveredTakeID = nil
             return
@@ -782,6 +795,7 @@ final class RecordingController {
             activeReadText = context.readText
             activeStartedAt = recoveredStart
             recoveredTakeID = context.takeID
+            externalRecordingActive = false
             phase = .recording(startedAt: recoveredStart)
             elapsed = max(0, Double(status.outputDuration) / 1_000)
             startTicker()
@@ -789,9 +803,8 @@ final class RecordingController {
             return
         }
 
-        // No FrameScript take owns this output, so stop it rather than leave an
-        // untracked recording running.
-        _ = try? await client.stopRecord()
+        // Unowned output: leave OBS, the connection and the take phase alone.
+        externalRecordingActive = true
         interruptedContext = nil
         recoveredTakeID = nil
     }

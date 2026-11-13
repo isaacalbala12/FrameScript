@@ -35,6 +35,7 @@ extension OBSClient: OBSRecordingClient {
 enum RecordingIssue: Error, Equatable, Sendable {
     case notConnected
     case busy
+    case externalRecordingActive
     case obsNotRunning(host: String, port: Int)
     case authenticationRequired
     case authenticationFailed
@@ -103,6 +104,8 @@ enum RecordingIssue: Error, Equatable, Sendable {
             L10n.tr("recording.error.notConnected", language: language)
         case .busy:
             L10n.tr("recording.error.busy", language: language)
+        case .externalRecordingActive:
+            L10n.tr("recording.externalRecordingActive", language: language)
         case let .obsNotRunning(host, port):
             String(
                 format: L10n.tr("recording.error.notRunning", language: language),

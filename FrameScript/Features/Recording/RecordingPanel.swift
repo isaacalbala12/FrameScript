@@ -133,7 +133,19 @@ struct RecordingPanel: View {
                 .foregroundStyle(theme.tertiaryText)
             }
 
-            if let issue = recording.lastIssue ?? recording.connectionIssue {
+            if recording.externalRecordingActive {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "record.circle.fill")
+                        .font(.system(size: 10))
+                    Text(appState.localized("recording.externalRecordingActive"))
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(theme.warning)
+            }
+
+            if let issue = recording.lastIssue ?? recording.connectionIssue,
+               issue != .externalRecordingActive {
                 Text(recording.issueMessage(issue))
                     .font(.system(size: 11))
                     .foregroundStyle(theme.destructive)
@@ -579,7 +591,11 @@ struct RecordingPanel: View {
             .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .disabled(recording.phase == .starting || recording.phase == .stopping)
+        .disabled(
+            recording.phase == .starting
+                || recording.phase == .stopping
+                || recording.externalRecordingActive
+        )
     }
 
     private func buttonFill(_ recording: RecordingController) -> Color {

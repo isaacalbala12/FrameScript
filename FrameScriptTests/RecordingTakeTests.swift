@@ -250,6 +250,26 @@ final class RecordingTakeTests: XCTestCase {
         XCTAssertEqual(loaded.scenes.first?.takes.first?.readText, "Cierre con guardado")
     }
 
+    func testStaleStartTokenNeverStopsOBSOnQuit() async {
+        let fixture = makeFixture(sceneText: "Token obsoleto")
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.client.setStartDelay(120_000_000)
+
+        let startTask = Task { await fixture.controller.startTake(sceneID: fixture.scene.id) }
+        await waitForStartInFlight(fixture.client)
+        // Invalidate the attempt before StartRecord resolves.
+        fixture.controller.handleConnectionState(.disconnected)
+        await fixture.controller.prepareForTermination()
+        await startTask.value
+
+        let startCount = await fixture.client.startCount
+        let stopCount = await fixture.client.stopCount
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(stopCount, 0)
+        XCTAssertEqual(fixture.controller.phase, .idle)
+    }
+
     func testReconnectAdoptsOBSRecordingInsteadOfDuplicatingTheTake() async throws {
         let fixture = makeFixture(sceneText: "Reconexión")
         let start = Date(timeIntervalSince1970: 1_700_000_000)
@@ -276,6 +296,55 @@ final class RecordingTakeTests: XCTestCase {
         XCTAssertEqual(take.filePath, "/tmp/framescript-fake-take.mov")
         XCTAssertEqual(take.duration, 30, accuracy: 0.001)
         XCTAssertFalse(take.note.hasPrefix(RecordingController.interruptedNoteMarker))
+    }
+
+    func testConnectWithUnownedExternalRecordingNeverStopsIt() async {
+        let fixture = makeFixture(sceneText: "Externa")
+        await fixture.client.setRecordStatus(outputActive: true, outputDuration: 20)
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+
+        let stopCount = await fixture.client.stopCount
+        let startCount = await fixture.client.startCount
+        XCTAssertEqual(stopCount, 0)
+        XCTAssertEqual(startCount, 0)
+        XCTAssertTrue(fixture.controller.externalRecordingActive)
+        XCTAssertEqual(fixture.controller.phase, .idle)
+        XCTAssertTrue(fixture.controller.connectionState.isConnected)
+
+        await fixture.controller.startTake(sceneID: fixture.scene.id)
+        let startsAfterRefusal = await fixture.client.startCount
+        XCTAssertEqual(startsAfterRefusal, 0)
+        XCTAssertEqual(fixture.controller.phase, .idle)
+        XCTAssertEqual(fixture.controller.lastIssue, .externalRecordingActive)
+
+        await fixture.controller.prepareForTermination()
+        let stopsAfterQuit = await fixture.client.stopCount
+        XCTAssertEqual(stopsAfterQuit, 0)
+    }
+
+    func testExternalStopAndInactiveStatusClearTheExternalRecordingFlag() async {
+        let fixture = makeFixture(sceneText: "Externa fin")
+        await fixture.client.setRecordStatus(outputActive: true, outputDuration: 20)
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        XCTAssertTrue(fixture.controller.externalRecordingActive)
+
+        await fixture.controller.handleEvent(.recordStateChanged(OBSRecordStateChanged(
+            outputActive: false,
+            outputState: .stopped,
+            outputPath: nil
+        )))
+        XCTAssertFalse(fixture.controller.externalRecordingActive)
+
+        await fixture.client.setRecordStatus(outputActive: true, outputDuration: 5)
+        await fixture.controller.connect()
+        XCTAssertTrue(fixture.controller.externalRecordingActive)
+        await fixture.client.setRecordStatus(outputActive: false, outputDuration: 0)
+        await fixture.controller.connect()
+        XCTAssertFalse(fixture.controller.externalRecordingActive)
+        let stopCount = await fixture.client.stopCount
+        XCTAssertEqual(stopCount, 0)
     }
 
     func testTestConnectionUsesASeparateClientAndLeavesTheLiveSessionAlone() async {
@@ -625,6 +694,7 @@ private actor FakeOBSClient: OBSRecordingClient {
     private var connectFailure: OBSError?
     private var stateCheckDelayNanos: UInt64?
     private var startDelayNanos: UInt64?
+    private var reportedActive: Bool?
     private var reportedDuration: TimeInterval = 0
     var outputPath = "/tmp/framescript-fake-take.mov"
     var sceneList = OBSSceneList(
@@ -648,7 +718,10 @@ private actor FakeOBSClient: OBSRecordingClient {
     func setConnectFailure(_ error: OBSError?) { connectFailure = error }
     func setStateCheckDelay(_ nanos: UInt64?) { stateCheckDelayNanos = nanos }
     func setStartDelay(_ nanos: UInt64?) { startDelayNanos = nanos }
-    func setRecordStatus(outputDuration: TimeInterval) { reportedDuration = outputDuration }
+    func setRecordStatus(outputActive: Bool? = nil, outputDuration: TimeInterval = 0) {
+        reportedActive = outputActive
+        reportedDuration = outputDuration
+    }
 
     func currentConnectionState() async -> OBSConnectionState {
         if let stateCheckDelayNanos {
@@ -698,7 +771,7 @@ private actor FakeOBSClient: OBSRecordingClient {
     func getRecordStatus() async throws -> OBSRecordStatus {
         getRecordStatusCount += 1
         return OBSRecordStatus(
-            outputActive: startCount > stopCount,
+            outputActive: reportedActive ?? (startCount > stopCount),
             outputPaused: false,
             outputTimecode: "",
             outputDuration: Int(reportedDuration * 1_000),

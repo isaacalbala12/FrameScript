@@ -73,6 +73,7 @@ extension L10n {
             "recording.countdown": "3-2-1 countdown",
             "recording.cancelCountdown": "Cancel countdown",
             "recording.needsConnection": "Connect OBS to record.",
+            "recording.externalRecordingActive": "OBS is already recording (started outside FrameScript).",
 
             "recording.take.justNow": "Latest take",
             "recording.take.number": "Take %d",
@@ -186,6 +187,7 @@ extension L10n {
             "recording.countdown": "Cuenta atrás 3-2-1",
             "recording.cancelCountdown": "Cancelar cuenta atrás",
             "recording.needsConnection": "Conecta OBS para grabar.",
+            "recording.externalRecordingActive": "OBS ya está grabando (iniciado fuera de FrameScript).",
 
             "recording.take.justNow": "Última toma",
             "recording.take.number": "Toma %d",
@@ -299,6 +301,7 @@ extension L10n {
             "recording.countdown": "Отсчёт 3-2-1",
             "recording.cancelCountdown": "Отменить отсчёт",
             "recording.needsConnection": "Подключи OBS для записи.",
+            "recording.externalRecordingActive": "OBS уже записывает (запись запущена вне FrameScript).",
 
             "recording.take.justNow": "Последний дубль",
             "recording.take.number": "Дубль %d",
