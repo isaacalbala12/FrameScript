@@ -11,7 +11,11 @@ struct BRollEditorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     EditorModeHeader(title: scene.title, subtitle: appState.localized("broll.linkedSubtitle"))
                     if scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && scene.bRollItems.isEmpty {
-                        EmptyProductionState(message: appState.localized("broll.writeScriptFirst"))
+                        EmptyProductionState(
+                            message: appState.localized("broll.writeScriptFirst"),
+                            actionTitle: appState.localized("production.goToScript"),
+                            action: { appState.selectMode(.script) }
+                        )
                     } else {
                         ForEach(anchorSections) { section in
                             anchorSection(section).id(section.id)
@@ -78,7 +82,7 @@ struct BRollEditorView: View {
                 EditorIconButton(systemName: "trash", accessibilityLabel: appState.localized("broll.deleteItem"), role: .destructive) { deleteItem(item) }
             }
             QuietField(appState.localized("broll.source")) {
-                Picker("", selection: Bindable(item).sourceType) {
+                Picker(appState.localized("broll.source"), selection: Bindable(item).sourceType) {
                     ForEach(BRollSourceType.allCases) { Text(appState.displayName($0)).tag($0) }
                 }.labelsHidden().frame(maxWidth: .infinity, alignment: .leading)
             }
