@@ -5,6 +5,10 @@ public enum MCPTransportError: Error, Sendable, Equatable {
     case embeddedNewline
     /// The channel was used after being closed.
     case closed
+    /// A second `receive()` was started while one is already waiting.
+    case concurrentReceiver
+    /// A second outbound reader was started while one is already waiting.
+    case concurrentOutboundReader
 }
 
 /// Byte-oriented, bidirectional message channel. The stdio channel uses the

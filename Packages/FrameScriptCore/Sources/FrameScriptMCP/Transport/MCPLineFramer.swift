@@ -43,8 +43,19 @@ public struct MCPLineFramer: Sendable {
     /// Appends a chunk and returns every complete line it contains (without
     /// the trailing newline). Empty lines are preserved; the server skips them.
     public mutating func append(_ chunk: Data) throws -> [Data] {
-        buffer.append(chunk)
         var lines: [Data] = []
+        try append(chunk, framedLines: &lines)
+        return lines
+    }
+
+    /// Appending variant for streaming transports.
+    ///
+    /// When a later line in the same chunk is oversized, the error is thrown
+    /// after the complete lines that preceded it have been appended to
+    /// `framedLines`, so the caller can still deliver them before reporting the
+    /// framing failure.
+    public mutating func append(_ chunk: Data, framedLines lines: inout [Data]) throws {
+        buffer.append(chunk)
 
         while scanOffset < buffer.count {
             let searchStart = buffer.index(buffer.startIndex, offsetBy: scanOffset)
@@ -81,7 +92,6 @@ public struct MCPLineFramer: Sendable {
         if buffer.count > maximumMessageSize {
             throw MCPFramingError.messageTooLarge(limit: maximumMessageSize)
         }
-        return lines
     }
 
     /// Returns and clears a final unterminated line at end of stream.

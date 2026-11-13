@@ -7,6 +7,13 @@ import Foundation
 ///
 /// The server never writes to stdout directly; all protocol output goes
 /// through the channel, and logging goes to stderr by default.
+/// How the stdio read loop ended. `endOfInput` is the normal shutdown path;
+/// `transportError` means framing or I/O failed and the CLI must exit non-zero.
+public enum MCPServerRunOutcome: Sendable, Equatable {
+    case endOfInput
+    case transportError
+}
+
 public final class MCPServer: Sendable {
     private let channel: any MCPMessageChannel
     private let configuration: MCPServerConfiguration
@@ -26,26 +33,34 @@ public final class MCPServer: Sendable {
         )
     }
 
-    /// Reads messages until stdin reaches EOF, then cancels in-flight work and
-    /// returns. This is the graceful stdio shutdown signal from the spec.
-    public func run() async {
+    /// Reads messages until stdin reaches EOF or the transport fails, then
+    /// drains in-flight work and returns how the loop ended. EOF is the
+    /// graceful stdio shutdown signal from the spec; a framing/read failure is
+    /// a protocol-level error the CLI turns into a non-zero exit code.
+    public func run() async -> MCPServerRunOutcome {
         configuration.log(
             "server \(configuration.serverInfo.name) \(configuration.serverInfo.version) "
                 + "listening on stdio (protocol \(MCPProtocolVersion.latest))"
         )
-        while true {
+        let outcome: MCPServerRunOutcome
+        loop: while true {
             let data: Data?
             do {
                 data = try await channel.receive()
             } catch {
                 configuration.log("transport read failed: \(error)")
-                break
+                outcome = .transportError
+                break loop
             }
-            guard let data else { break }
+            guard let data else {
+                outcome = .endOfInput
+                break loop
+            }
             await session.handleIncoming(data)
         }
         await session.drain(gracePeriod: configuration.shutdownGracePeriod)
         configuration.log("server stopped")
+        return outcome
     }
 }
 
@@ -144,6 +159,10 @@ private actor MCPSession {
 
     // MARK: Dispatch
 
+    /// Bound on concurrent tool executions. A local client can otherwise queue
+    /// an unbounded number of tasks and grow memory without limit.
+    private static let maximumInFlightRequests = 16
+
     private func dispatch(_ request: JSONRPCRequest) async {
         guard inFlight[request.id] == nil else {
             configuration.log("rejecting duplicate in-flight id \(request.id)")
@@ -152,6 +171,29 @@ private actor MCPSession {
                 error: JSONRPCErrorObject(
                     code: .invalidRequest,
                     message: "Invalid Request: request id \(request.id) is already in flight"
+                )
+            ))
+            return
+        }
+
+        // The initialize handshake is handled inline so the next pipelined
+        // message (notifications/initialized or tools/list) observes the new
+        // phase. Notifications are already processed inline on the session.
+        if request.method == "initialize" {
+            let slot = InFlightRequest()
+            inFlight[request.id] = slot
+            await execute(request, slot: slot)
+            finish(request.id, slot: slot)
+            return
+        }
+
+        guard inFlight.count < Self.maximumInFlightRequests else {
+            configuration.log("rejecting request \(request.id): too many in-flight requests")
+            await send(.error(
+                id: request.id,
+                error: JSONRPCErrorObject(
+                    code: .internalError,
+                    message: "Internal error: at most \(Self.maximumInFlightRequests) requests may be in flight"
                 )
             ))
             return
@@ -304,7 +346,7 @@ private actor MCPSession {
         }
 
         let arguments: JSONValue
-        if let rawArguments = object["arguments"] {
+        if let rawArguments = object["arguments"], !rawArguments.isNull {
             guard rawArguments.objectValue != nil else {
                 throw MCPProtocolError.invalidParams(
                     "Invalid params: tools/call params.arguments must be an object"
@@ -312,6 +354,8 @@ private actor MCPSession {
             }
             arguments = rawArguments
         } else {
+            // An absent optional is commonly serialized as null; a tool with no
+            // arguments must receive the same empty object either way.
             arguments = .object([:])
         }
 
