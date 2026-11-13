@@ -1043,12 +1043,25 @@
           "type": "string",
           "description": "Source URL. Empty when the source is offline."
         },
+        "kind": {
+          "$ref": "#/$defs/SourceKind",
+          "description": "What kind of source this is. Defaults to \"other\" when absent."
+        },
+        "reliability": {
+          "$ref": "#/$defs/SourceReliability",
+          "description": "How much weight the source carries. Defaults to \"medium\" when absent."
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional publication or consultation date. Omitted when unknown."
+        },
         "note": {
           "type": "string",
           "description": "Free-form note about the source."
         }
       },
-      "required": ["id", "title", "url", "note"],
+      "required": ["id", "title", "url", "kind", "reliability", "note"],
       "additionalProperties": true
     },
 
@@ -1084,9 +1097,30 @@
             "type": "string",
             "format": "uuid"
           }
+        },
+        "anchorSceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene that owns the anchored fragment. When absent, anchor is ignored."
+        },
+        "anchor": {
+          "$ref": "#/$defs/TextAnchor",
+          "description": "Optional fragment of the anchor scene's scriptText that states the claim."
+        },
+        "needsVerification": {
+          "type": "boolean",
+          "description": "True while the creator still has to fact-check the claim. Defaults to false."
+        },
+        "personalExperience": {
+          "type": "boolean",
+          "description": "True when the claim is first-hand experience rather than a checkable fact. Defaults to false."
+        },
+        "resolutionNote": {
+          "type": "string",
+          "description": "How the claim was resolved, or why it stays as it is. Empty means unset."
         }
       },
-      "required": ["id", "text", "status", "sourceIDs", "sceneIDs"],
+      "required": ["id", "text", "status", "sourceIDs", "sceneIDs", "needsVerification", "personalExperience", "resolutionNote"],
       "additionalProperties": true
     },
 
@@ -1119,6 +1153,11 @@
               "type": "string"
             }
           }
+        },
+        "sceneID": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional scene where the table is shown on screen."
         }
       },
       "required": ["id", "title", "header", "rows"],
@@ -1585,7 +1624,19 @@
     "ClaimStatus": {
       "type": "string",
       "description": "Verification state of a claim.",
-      "enum": ["confirmed", "probable", "rumor"]
+      "enum": ["confirmed", "probable", "rumor", "communityOpinion"]
+    },
+
+    "SourceKind": {
+      "type": "string",
+      "description": "Kind of research source.",
+      "enum": ["official", "press", "community", "video", "data", "other"]
+    },
+
+    "SourceReliability": {
+      "type": "string",
+      "description": "How much weight a research source carries in a fact check.",
+      "enum": ["high", "medium", "low"]
     },
 
     "ChecklistTaskKind": {

@@ -87,6 +87,17 @@ struct ExportService: ExportServicing {
                 output += "\n"
             }
         }
+
+        // F20: the Markdown handoff carries the research appendix and any
+        // missing-disclaimer warning. Plain text and CSV stay scene-only.
+        let coreProject = FrameScriptDocument.Project(project: project)
+        let appendix = ResearchExport.markdownAppendix(project: coreProject)
+        let warnings = ResearchExport.warningsMarkdown(project: coreProject)
+        output += appendix
+        if !appendix.isEmpty, !warnings.isEmpty {
+            output += "\n"
+        }
+        output += warnings
         return output
     }
 

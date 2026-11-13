@@ -241,20 +241,29 @@ final class DocumentMappingTests: XCTestCase {
             id: sourceID,
             title: "Source",
             url: "https://example.com",
+            kind: .data,
+            reliability: .low,
+            date: Date(timeIntervalSince1970: 1_700_000_100),
             note: "Note"
         )
         let claim = ProjectClaim(
             id: claimID,
             text: "Claim",
-            status: .confirmed,
+            status: .communityOpinion,
             sourceIDs: [sourceID],
-            sceneIDs: [sceneID]
+            sceneIDs: [sceneID],
+            anchorSceneID: sceneID,
+            anchor: anchor,
+            needsVerification: true,
+            personalExperience: true,
+            resolutionNote: "Resolved"
         )
         let table = ComparisonTable(
             id: tableID,
             title: "Table",
             header: ["A"],
-            rows: [["1"]]
+            rows: [["1"]],
+            sceneID: sceneID
         )
         let glossaryTerm = GlossaryTerm(
             id: glossaryID,

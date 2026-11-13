@@ -122,12 +122,15 @@ enum EscaletaProjectExporter {
             seoLayout: metadata?.coreSeoLayout ?? .sectioned,
             comparisonTables: project.comparisonTables.enumerated().map { index, table in
                 let tableMeta = tableMetadata(at: index, in: metadata?.comparisonTables)
+                let linkedSceneIndex = table.sceneID.flatMap { sceneID in
+                    project.scenes.sortedByOrder.firstIndex(where: { $0.id == sceneID })
+                }
                 return .init(
                     heading: table.title,
                     header: table.header,
                     alignments: coreAlignments(tableMeta?.alignments ?? []),
                     rows: table.rows,
-                    sceneIndex: tableMeta?.sceneIndex
+                    sceneIndex: tableMeta?.sceneIndex ?? linkedSceneIndex
                 )
             },
             tableSectionHeading: tableSectionHeading,
@@ -570,7 +573,9 @@ enum EscaletaProjectExporter {
         from project: FrameProject,
         metadata: [EscaletaRoundTripMetadata.VerificationMetadata]?
     ) -> [EscaletaVerificationItem] {
-        let tasks = project.checklistTasks.filter { $0.kind == .research }
+        // Done research tasks leave the "verify before recording" section, so a
+        // confirmed claim does not reappear as pending after a round trip.
+        let tasks = project.checklistTasks.filter { $0.kind == .research && !$0.isDone }
         if let metadata,
            metadata.count == tasks.count,
            zip(metadata, tasks).allSatisfy({ combinedVerification($0.0) == $0.1.text }) {

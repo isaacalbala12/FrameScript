@@ -181,6 +181,7 @@ enum AITask: String, Codable, Hashable {
     case editingGeneration
     case hook
     case rehook
+    case claimCheck
 }
 
 @MainActor
@@ -210,6 +211,10 @@ struct MockLLMProvider: LLMProviderProtocol {
                 : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
         case .rehook:
             return Self.rehookResponse(for: request.userPrompt, russian: russian)
+        case .claimCheck:
+            return LLMResponse(text: russian
+                ? #"{"claims":[{"text":"Патч выходит в мае.","status":"probable","reason":"Нужно проверить официальную дату."}]}"#
+                : #"{"claims":[{"text":"El parche sale en mayo.","status":"probable","reason":"Falta la fecha oficial."}]}"#)
         }
     }
 
@@ -819,7 +824,6 @@ struct PromptBuilder {
         case .rehook:
             """
             You write re-engagement bridges for a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, tuteo, short sentences, dry humour. Keep the script's language.
-
             Return exactly one JSON object:
             {"bridges":[{"text":"…","anchor":"…"}]}
 
@@ -831,6 +835,22 @@ struct PromptBuilder {
             - Do not repeat the anchor, do not summarise the previous block, and add no fact, number or experience that is not in the supplied material.
             - Create one concrete promise or open question that the next few sentences answer. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza…" are welcome only when they fit.
             - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
+            Respond only in \(languageName).
+            """
+        case .claimCheck:
+            """
+            You review a YouTube script for verifiable factual claims before recording. \(languageInstruction)
+            Return exactly one JSON object:
+            {"claims":[{"text":"…","status":"probable","reason":"…"}]}
+
+            Rules:
+            - A claim is a specific statement of fact a viewer could check: numbers, dates, prices, records, names, specifications, events or attributed statements.
+            - Do not list opinions, jokes, promises, calls to action, personal experience, or rhetorical questions.
+            - "status" must be exactly one of probable, rumor or communityOpinion. Never write confirmed: only the creator can confirm a claim.
+            - "text" copies the claim from the scene as closely as possible: one short sentence, no Markdown, no quotes, no prefixes.
+            - "reason" says in one short sentence what should be checked, or which kind of source would settle it.
+            - Return at most 8 claims, in the order they appear. If there is nothing checkable, return {"claims":[]}.
+            - Do not invent facts, sources, numbers or links.
             Respond only in \(languageName).
             """
         }

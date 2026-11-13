@@ -171,6 +171,9 @@ struct FrameScriptApp: App {
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleAIReview))
             .disabled(!appState.hasOpenProject)
+            Button(appState.localized("research.menu")) { appState.openResearchPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .researchPanel))
+                .disabled(!appState.hasOpenProject)
             Button(appState.localized("command.toggleFocus")) { appState.isFocusModeEnabled.toggle() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleFocusMode))
                 .disabled(!appState.hasOpenProject)

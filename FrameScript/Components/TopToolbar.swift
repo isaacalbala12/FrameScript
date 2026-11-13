@@ -80,6 +80,12 @@ struct TopToolbar: View {
                     action: appState.presentTeleprompter
                 )
 
+                toolbarButton(
+                    systemName: "books.vertical",
+                    help: appState.localized("research.toolbarHelp"),
+                    action: { appState.openResearchPanel() }
+                )
+
                 toolbarDivider
 
                 Button {

@@ -301,6 +301,9 @@ extension ProjectSource {
             id: context.sourceIDs[id] ?? UUID(),
             title: title,
             url: url,
+            kind: kind,
+            reliability: reliability,
+            date: date,
             note: note
         )
     }
@@ -313,14 +316,19 @@ extension ProjectClaim {
             text: text,
             status: status,
             sourceIDs: context.sourceIDs(sourceIDs),
-            sceneIDs: context.sceneIDs(sceneIDs)
+            sceneIDs: context.sceneIDs(sceneIDs),
+            anchorSceneID: context.sceneID(anchorSceneID),
+            anchor: anchor,
+            needsVerification: needsVerification,
+            personalExperience: personalExperience,
+            resolutionNote: resolutionNote
         )
     }
 }
 
 extension ComparisonTable {
     func copied() -> ComparisonTable {
-        ComparisonTable(id: UUID(), title: title, header: header, rows: rows)
+        ComparisonTable(id: UUID(), title: title, header: header, rows: rows, sceneID: sceneID)
     }
 }
 

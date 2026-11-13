@@ -49,6 +49,9 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("command.toggleAIReview"), detail: shortcut(.toggleAIReview)) {
                 appState.settings.editorPreferences.showAIReviewPanel.toggle()
             },
+            PaletteResult(title: appState.localized("research.menu"), detail: shortcut(.researchPanel)) {
+                appState.openResearchPanel()
+            },
             PaletteResult(title: appState.localized("recording.menu.recordTake"), detail: shortcut(.recordTake)) {
                 appState.toggleRecordingTake()
             },

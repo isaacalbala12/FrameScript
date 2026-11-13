@@ -128,7 +128,7 @@ enum EscaletaProjectMapper {
         )
         let sources = makeSources(document.sources)
         let verification = makeVerification(document.verificationItems)
-        let tables = makeTables(document)
+        let tables = makeTables(document, sceneIDs: scenes.map(\.id))
         let unparsed = makeUnparsedSections(document)
         let videoType = guessVideoType(document)
         let metadata = EscaletaRoundTripMetadata(document: document, scenes: sceneMetadata)
@@ -511,7 +511,7 @@ enum EscaletaProjectMapper {
         for item in items {
             let text = verificationText(item)
             guard !text.isEmpty else { continue }
-            claims.append(ProjectClaim(text: text, status: .probable))
+            claims.append(ProjectClaim(text: text, status: .probable, needsVerification: true))
             tasks.append(ChecklistTask(text: text, kind: .research))
         }
         return (claims, tasks)
@@ -525,12 +525,16 @@ enum EscaletaProjectMapper {
         return "\(label): \(body)"
     }
 
-    private static func makeTables(_ document: EscaletaDocument) -> [ComparisonTable] {
+    private static func makeTables(
+        _ document: EscaletaDocument,
+        sceneIDs: [UUID]
+    ) -> [ComparisonTable] {
         document.comparisonTables.map { table in
             ComparisonTable(
                 title: table.heading ?? document.tableSectionHeading ?? L10n.tr("escaleta.table.defaultTitle", language: .spanish),
                 header: table.header,
-                rows: table.rows
+                rows: table.rows,
+                sceneID: table.sceneIndex.flatMap { sceneIDs.indices.contains($0) ? sceneIDs[$0] : nil }
             )
         }
     }

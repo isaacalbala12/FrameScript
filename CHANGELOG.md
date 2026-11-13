@@ -8,6 +8,8 @@
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
 - Added `FrameScriptCore`, a UI-free Swift package linked into the app, with the `.fscr` document value types and codec.
+- Added a research panel (F20/F11): sources with type, reliability and date; claims with confirmation states, pending verification, personal-experience flags, scene anchors and resolution notes; scene badges, filters and counters; a "verify before recording" list that feeds the production checklist; optional AI claim suggestions that can never confirm a claim; comparison tables with a grid editor, Markdown/TSV/CSV paste, scene cues and Markdown/CSV export; and a "Fuentes y verificación" export appendix with missing-disclaimer warnings.
+- Added `sourceKind`, `sourceReliability`, `sourceDate`, claim verification/anchor fields and `comparisonTable.sceneID` to the v4 document, schema and format guide with backward-compatible defaults.
 - Added the v4 project schema for takes, learned speech rate, assets, per-language publishing packs, checklist tasks, sources and claims, comparison tables, language variants, short clips, version snapshots, T3 thread reuse, Markdown import leftovers, and published-video comparison.
 
 ### Fixed

@@ -5,13 +5,15 @@ struct SceneSidebar: View {
     @Environment(\.frameTheme) private var theme
 
     var body: some View {
-        VStack(spacing: 0) {
+        let unconfirmedCounts = appState.researchUnconfirmedCountsByScene()
+        return VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(appState.project.scenes.sortedByOrder) { scene in
                         SidebarRow(
                             scene: scene,
                             isSelected: scene.id == appState.selectedScene?.id,
+                            researchUnconfirmedCount: unconfirmedCounts[scene.id, default: 0],
                             renameAction: appState.renameSelectedScene,
                             duplicateAction: appState.duplicateSelectedScene,
                             addAfterAction: { appState.addScene(after: scene.id) },
@@ -46,6 +48,7 @@ struct SidebarRow: View {
     @Environment(\.frameTheme) private var theme
     let scene: Scene
     let isSelected: Bool
+    let researchUnconfirmedCount: Int
     let renameAction: () -> Void
     let duplicateAction: () -> Void
     let addAfterAction: () -> Void
@@ -56,39 +59,46 @@ struct SidebarRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(isSelected ? theme.accent.color : Color.clear)
-                    .frame(width: 2, height: 34)
+        ZStack(alignment: .trailing) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(isSelected ? theme.accent.color : Color.clear)
+                        .frame(width: 2, height: 34)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text(String(format: "%02d", scene.order + 1))
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(theme.secondaryText)
-                        Text(scene.title)
-                            .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                            .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
-                            .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 6) {
+                            Text(String(format: "%02d", scene.order + 1))
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(theme.secondaryText)
+                            Text(scene.title)
+                                .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                                .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
+                                .lineLimit(1)
+                        }
+
+                        SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
                     }
 
-                    SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
+                    RhythmSidebarBadge(sceneID: scene.id)
+
+                    Spacer(minLength: 0)
                 }
-
-                RhythmSidebarBadge(sceneID: scene.id)
-
-                Spacer(minLength: 0)
+                .padding(.vertical, 8)
+                .padding(.trailing, researchUnconfirmedCount > 0 ? 34 : 8)
+                .contentShape(Rectangle())
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(rowFill)
+                }
             }
-            .padding(.vertical, 8)
-            .padding(.trailing, 8)
-            .contentShape(Rectangle())
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(rowFill)
-            }
+            .buttonStyle(.cursorPlain)
+
+            // Sibling button, not nested inside the row button, so the badge
+            // opens the research panel instead of only selecting the scene.
+            ResearchSidebarBadge(sceneID: scene.id, count: researchUnconfirmedCount)
+                .padding(.trailing, 8)
         }
-        .buttonStyle(.cursorPlain)
         .onHover { isHovering = $0 }
         .contextMenu {
             Button(appState.localized("scene.rename")) {

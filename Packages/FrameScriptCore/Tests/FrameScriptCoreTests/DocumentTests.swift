@@ -375,6 +375,9 @@ struct DocumentFormatTests {
             id: sourceID,
             title: "Source title",
             url: "https://example.com",
+            kind: .press,
+            reliability: .high,
+            date: Date(timeIntervalSince1970: 1_700_000_100),
             note: "Source note"
         )
         let claim = FrameScriptDocument.Claim(
@@ -382,13 +385,19 @@ struct DocumentFormatTests {
             text: "The claim",
             status: .confirmed,
             sourceIDs: [sourceID],
-            sceneIDs: [sceneID]
+            sceneIDs: [sceneID],
+            anchorSceneID: sceneID,
+            anchor: anchor,
+            needsVerification: true,
+            personalExperience: true,
+            resolutionNote: "Checked against the timing sheet."
         )
         let table = FrameScriptDocument.ComparisonTable(
             id: tableID,
             title: "Comparison",
             header: ["A", "B"],
-            rows: [["1", "2"], ["3", "4"]]
+            rows: [["1", "2"], ["3", "4"]],
+            sceneID: sceneID
         )
         let glossaryTerm = FrameScriptDocument.GlossaryTerm(
             id: glossaryID,
