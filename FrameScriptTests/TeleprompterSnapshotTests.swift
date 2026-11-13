@@ -108,6 +108,16 @@ final class TeleprompterSnapshotTests: XCTestCase {
             XCTAssertEqual(harness.model.currentSectionIndex, 0)
             XCTAssertEqual(harness.model.sections.count, 7)
         }
+
+        try snapshot(
+            name: "11-markup-tokens",
+            scenes: Fixtures.markupTokens(),
+            start: 0
+        ) { harness in
+            // Every token on one screen: 36 pt keeps the four pause lines, two
+            // cue lines and the closing sentence above the bottom HUD.
+            harness.model.settings.fontSize = 36
+        }
     }
 
     // MARK: Harness
@@ -420,6 +430,18 @@ private enum Fixtures {
             scene("05 PRUEBA", ""),
             scene("06 RESULTADO", ""),
             scene("07 CTA", "")
+        ]
+    }
+
+    /// Every markup token the editor and teleprompter share: short and long
+    /// slashes, bracketed pauses with and without a decimal comma, both
+    /// emphasis levels and two cue lines.
+    static func markupTokens() -> [TeleprompterSceneText] {
+        [
+            scene(
+                "01 MARKUP",
+                "*Énfasis suave* y **fuerza fuerte**. / // [pausa 2s] [1,5 s]\n[CAM: Plano medio]\n[IMAGEN: Gráfico de resultados]"
+            )
         ]
     }
 

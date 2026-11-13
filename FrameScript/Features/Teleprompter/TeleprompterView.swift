@@ -31,6 +31,7 @@ struct TeleprompterRootView: View {
                     y: model.settings.mirrorVertical ? -1 : 1
                 )
 
+                topScrim
                 readingLine(viewport: proxy.size)
                 statusBar
 
@@ -66,6 +67,24 @@ struct TeleprompterRootView: View {
     }
 
     // MARK: Guides and status
+
+    /// Protects the status bar from script lines scrolling underneath it.
+    /// Solid at the very top, fading to transparent after 120 pt.
+    private var topScrim: some View {
+        VStack(spacing: 0) {
+            Color.black
+                .frame(height: 60)
+            LinearGradient(
+                colors: [.black, .black.opacity(0)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 60)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .allowsHitTesting(false)
+    }
 
     private func readingLine(viewport: CGSize) -> some View {
         let y = viewport.height * model.settings.readingLineFraction
@@ -243,19 +262,24 @@ private struct TeleprompterControls: View {
         .padding(.top, 38)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity)
-        .background {
-            LinearGradient(
-                stops: [
-                    .init(color: .black.opacity(0), location: 0),
-                    .init(color: .black.opacity(0.80), location: 0.30),
-                    .init(color: .black.opacity(0.97), location: 0.62),
-                    .init(color: .black.opacity(0.99), location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .background(alignment: .bottom) {
+            // A 200 pt solid band plus a 30 pt fade. The band has to cover the
+            // full HUD content *and* the tallest script line behind it (64–120
+            // pt); otherwise the top of a scene header peeks out above the
+            // buttons as a partial glyph.
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [.black.opacity(0), .black],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 30)
+                Color.black
+            }
+            .frame(height: 230)
+            .allowsHitTesting(false)
         }
-        .frame(maxHeight: .infinity, alignment: .bottom)
     }
 
     private var transportRow: some View {

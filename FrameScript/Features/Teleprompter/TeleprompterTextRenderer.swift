@@ -31,7 +31,7 @@ enum TeleprompterAttributedStringBuilder {
         static let emphasis = NSColor(srgbRed: 1.0, green: 0.84, blue: 0.36, alpha: 1)
         static let strongEmphasis = NSColor(srgbRed: 1.0, green: 0.94, blue: 0.62, alpha: 1)
         static let cue = NSColor.white.withAlphaComponent(0.38)
-        static let pause = NSColor.white.withAlphaComponent(0.30)
+        static let pause = NSColor.white.withAlphaComponent(0.34)
         static let header = NSColor.white.withAlphaComponent(0.42)
         static let placeholder = NSColor.white.withAlphaComponent(0.34)
     }
@@ -172,7 +172,7 @@ enum TeleprompterAttributedStringBuilder {
             guard !rawText.isEmpty else { return }
             var text = rawText
             if pendingBlockBreak {
-                stripOneLeadingLineBreak(from: &text)
+                text = TeleprompterBlockText.normalizedAfterBlockBreak(text)
                 pendingBlockBreak = false
             }
             guard !text.isEmpty else { return }
@@ -195,7 +195,8 @@ enum TeleprompterAttributedStringBuilder {
                 .kern: 1.1,
                 .paragraphStyle: style
             ]
-            append("▸ \(label.uppercased())", attributes: attributes)
+            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            append("▸ \(trimmedLabel.uppercased())", attributes: attributes)
             appendNewline(attributes: attributes)
             pendingBlockBreak = true
         }
@@ -208,13 +209,15 @@ enum TeleprompterAttributedStringBuilder {
             style.paragraphSpacing = fontSize * 0.40
             style.lineBreakMode = .byWordWrapping
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: roundedFont(size: fontSize * 0.28, weight: .semibold),
+                .font: roundedFont(size: fontSize * 0.34, weight: .semibold),
                 .foregroundColor: Palette.pause,
                 .paragraphStyle: style
             ]
-            var label = "❚❚"
+            // `·` is covered by both system fonts. The old `❚❚` (U+275A) was
+            // absent and rendered as a tofu box on its own line.
+            var label = "·  ·  ·"
             if seconds >= 1 {
-                label += String(format: "  %.1fs", seconds)
+                label += String(format: "  %.1f s", seconds)
             }
             append(label, attributes: attributes)
             appendNewline(attributes: attributes)

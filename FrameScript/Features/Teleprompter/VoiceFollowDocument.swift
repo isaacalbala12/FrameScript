@@ -50,7 +50,7 @@ enum TeleprompterVisibleText {
                 guard !value.isEmpty else { continue }
                 var text = value
                 if pendingBlockBreak {
-                    stripOneLeadingLineBreak(from: &text)
+                    text = TeleprompterBlockText.normalizedAfterBlockBreak(text)
                     pendingBlockBreak = false
                 }
                 guard !text.isEmpty else { continue }
@@ -60,14 +60,6 @@ enum TeleprompterVisibleText {
             }
         }
         return result
-    }
-
-    private static func stripOneLeadingLineBreak(from text: inout String) {
-        if text.hasPrefix("\r\n") {
-            text.removeFirst(2)
-        } else if text.hasPrefix("\n") || text.hasPrefix("\r") {
-            text.removeFirst()
-        }
     }
 }
 

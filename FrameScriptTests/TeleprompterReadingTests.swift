@@ -456,6 +456,74 @@ final class TeleprompterReadingTests: XCTestCase {
         )
     }
 
+    func testEveryMarkupTokenRendersCleanly() {
+        let text = """
+        *Énfasis suave* y **fuerza fuerte** antes de las pausas. / Pausa corta // pausa larga. [pausa 2s] Pausa explícita. [1,5 s] Otra pausa.
+        [CAM: Plano medio]
+        [IMAGEN: Gráfico de resultados]
+        Cierre limpio sin marcas.
+        """
+        let runs = ScriptMarkup.runs(text)
+        XCTAssertTrue(runs.contains { if case .emphasis = $0 { return true } else { return false } })
+        XCTAssertTrue(runs.contains { if case .pause = $0 { return true } else { return false } })
+        XCTAssertTrue(runs.contains { if case .cue = $0 { return true } else { return false } })
+
+        let document = TeleprompterAttributedStringBuilder.build(
+            sections: [
+                TeleprompterSection(sceneID: UUID(), title: "01 MARKUP", runs: runs)
+            ],
+            fontSize: 64,
+            emptyScenePlaceholder: "(escena vacía)"
+        )
+        let rendered = document.attributedString.string
+
+        // No object-replacement or tofu character can reach the text view.
+        XCTAssertFalse(rendered.contains("\u{FFFC}"))
+        XCTAssertFalse(rendered.contains("\u{FFFD}"))
+        XCTAssertFalse(rendered.contains("❚"), "The old pause glyph is not in the system fonts")
+
+        // No marker character survives parsing.
+        XCTAssertFalse(rendered.contains("*"))
+        XCTAssertFalse(rendered.contains("/"))
+        XCTAssertFalse(rendered.contains("["))
+        XCTAssertFalse(rendered.contains("]"))
+        XCTAssertFalse(rendered.lowercased().contains("[pausa"))
+        XCTAssertFalse(rendered.lowercased().contains("[pause"))
+
+        // Every line starts with a visible, non-marker character.
+        let lines = rendered.split(separator: "\n", omittingEmptySubsequences: false)
+        for line in lines {
+            XCTAssertFalse(line.hasPrefix(" "), "Line starts with a space: \(line)")
+            XCTAssertFalse(line.hasPrefix("\t"), "Line starts with a tab: \(line)")
+        }
+        let pauseLines = lines.filter { $0.hasPrefix("·  ·  ·") }
+        XCTAssertFalse(pauseLines.isEmpty, "Pauses must render as an intentional marker line")
+        for (index, line) in lines.enumerated() where line.hasPrefix("·  ·  ·") {
+            if index + 1 < lines.count {
+                XCTAssertFalse(
+                    lines[index + 1].hasPrefix(" "),
+                    "The sentence after a pause must not start with a space"
+                )
+            }
+        }
+
+        // Every glyph the renderer asks AppKit to draw must exist in its font,
+        // otherwise TextKit falls back to a tofu box.
+        document.attributedString.enumerateAttributes(
+            in: NSRange(location: 0, length: document.attributedString.length),
+            options: []
+        ) { attributes, range, _ in
+            guard let font = attributes[.font] as? NSFont else { return }
+            let content = (document.attributedString.string as NSString).substring(with: range)
+            for scalar in content.unicodeScalars where scalar != "\n" && scalar != "\r" {
+                XCTAssertTrue(
+                    font.coveredCharacterSet.contains(scalar),
+                    "\(font.fontName) does not cover U+\(String(scalar.value, radix: 16, uppercase: true)) in \(content)"
+                )
+            }
+        }
+    }
+
     // MARK: Language
 
     func testSpanishTeleprompterStringsResolveFromSystemLanguage() {

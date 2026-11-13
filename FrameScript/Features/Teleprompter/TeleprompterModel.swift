@@ -46,6 +46,35 @@ struct TeleprompterSceneText: Equatable, Sendable {
     let text: String
 }
 
+/// Normalizes the text that follows a cue/pause block break. The renderer and
+/// the voice follower must apply exactly the same rule or their character
+/// offsets drift.
+enum TeleprompterBlockText {
+    /// Drops one separator line break and any indentation at the start of every
+    /// line, so a parser run like `" / Es la fricción"` does not render a
+    /// leading space and `"\n\nAfter"` keeps its intentional blank line.
+    static func normalizedAfterBlockBreak(_ text: String) -> String {
+        var value = text
+        if value.hasPrefix("\r\n") {
+            value.removeFirst(2)
+        } else if value.hasPrefix("\n") || value.hasPrefix("\r") {
+            value.removeFirst()
+        }
+        guard !value.isEmpty else { return value }
+
+        var lines: [Substring] = []
+        lines.reserveCapacity(8)
+        for line in value.split(separator: "\n", omittingEmptySubsequences: false) {
+            var trimmed = line
+            while let first = trimmed.first, first == " " || first == "\t" {
+                trimmed = trimmed.dropFirst()
+            }
+            lines.append(trimmed)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 enum TeleprompterContentBuilder {
     static func sections(from scenes: [TeleprompterSceneText]) -> [TeleprompterSection] {
         scenes.map { scene in
