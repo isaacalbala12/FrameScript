@@ -414,7 +414,8 @@ struct DocumentFormatTests {
             sceneSourceHashes: [
                 FrameScriptDocument.ShortClip.SceneSourceHash(
                     sceneID: sceneID,
-                    hash: FrameScriptDocument.TextHash.hash("alpha target omega")
+                    hash: FrameScriptDocument.TextHash.hash("alpha target omega"),
+                    sourceText: "alpha target omega"
                 )
             ],
             status: .ready

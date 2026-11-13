@@ -622,7 +622,11 @@ extension FrameScriptDocument.ShortClip {
             sourceHash: clip.sourceHash,
             languageCode: clip.languageCode,
             sceneSourceHashes: clip.sceneSourceHashes.map {
-                FrameScriptDocument.ShortClip.SceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+                FrameScriptDocument.ShortClip.SceneSourceHash(
+                    sceneID: $0.sceneID,
+                    hash: $0.hash,
+                    sourceText: $0.sourceText
+                )
             },
             status: FrameScriptDocument.ShortClipStatus(rawValue: clip.status.rawValue) ?? .idea
         )
@@ -645,7 +649,7 @@ extension FrameScriptDocument.ShortClip {
             sourceHash: sourceHash,
             languageCode: languageCode,
             sceneSourceHashes: sceneSourceHashes.map {
-                AppClipSceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+                AppClipSceneSourceHash(sceneID: $0.sceneID, hash: $0.hash, sourceText: $0.sourceText)
             },
             status: AppShortClipStatus(rawValue: status.rawValue) ?? .idea
         )

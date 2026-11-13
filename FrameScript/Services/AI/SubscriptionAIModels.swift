@@ -41,6 +41,7 @@ enum SubscriptionAITask: String, CaseIterable, Codable, Identifiable, Sendable {
         case "rewrite": self = .rewrite
         case "brollgeneration", "broll": self = .bRoll
         case "editinggeneration", "editing": self = .editing
+        case "clipadaptation", "clip": self = .rewrite
         case "titles", "titlesseo", "seo": self = .titlesSEO
         case "translation", "translate": self = .translation
         case "hooks", "hook": self = .hooks

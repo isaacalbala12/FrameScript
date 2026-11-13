@@ -152,6 +152,17 @@ extension FrameScriptDocument {
             if let anchorSceneID = project.clips[index].anchorSceneID, !sceneIDs.contains(anchorSceneID) {
                 project.clips[index].anchorSceneID = nil
                 project.clips[index].anchor = nil
+            } else if let anchorSceneID = project.clips[index].anchorSceneID,
+                      !project.clips[index].sourceSceneIDs.contains(anchorSceneID) {
+                project.clips[index].sourceSceneIDs.insert(anchorSceneID, at: 0)
+            }
+            // F24's diff baseline is optional; older files may have hashes
+            // without `sourceText`, and hand-edited files may list hashes for
+            // scenes that are no longer part of the clip.
+            let clipSceneIDs = Set(project.clips[index].sourceSceneIDs)
+            var seenHashes: Set<UUID> = []
+            project.clips[index].sceneSourceHashes = project.clips[index].sceneSourceHashes.filter {
+                clipSceneIDs.contains($0.sceneID) && seenHashes.insert($0.sceneID).inserted
             }
         }
     }

@@ -158,6 +158,12 @@ struct FrameScriptApp: App {
             Button(appState.localized("mode.editing")) { appState.selectMode(.editing) }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
                 .disabled(!appState.hasOpenProject)
+            Button(appState.localized("mode.clips")) { appState.selectMode(.clips) }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .clipsMode))
+                .disabled(!appState.hasOpenProject)
+            Button(appState.localized("clips.command.create")) { appState.createClipFromEditorSelection() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .createClip))
+                .disabled(!appState.hasOpenProject)
             Divider()
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))

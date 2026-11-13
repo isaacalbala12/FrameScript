@@ -1219,21 +1219,40 @@ extension FrameScriptDocument {
         public struct SceneSourceHash: Codable, Sendable, Equatable {
             public var sceneID: UUID
             public var hash: String
+            /// The source text (scene or anchored fragment) the clip was
+            /// derived from. Optional so files written before F24's diff view
+            /// still open; those clips simply show a coarser stale warning
+            /// until they are reviewed once.
+            public var sourceText: String
 
-            public init(sceneID: UUID, hash: String) {
+            public init(sceneID: UUID, hash: String, sourceText: String = "") {
                 self.sceneID = sceneID
                 self.hash = hash
+                self.sourceText = sourceText
             }
 
             enum CodingKeys: String, CodingKey {
                 case sceneID
                 case hash
+                case sourceText
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 sceneID = try container.decode(UUID.self, forKey: .sceneID)
                 hash = try container.decodeIfPresent(String.self, forKey: .hash) ?? ""
+                sourceText = try container.decodeIfPresent(String.self, forKey: .sourceText) ?? ""
+            }
+
+            /// Omit an empty baseline so old and new sparse documents still
+            /// encode exactly the schema's required keys.
+            public func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(sceneID, forKey: .sceneID)
+                try container.encode(hash, forKey: .hash)
+                if !sourceText.isEmpty {
+                    try container.encode(sourceText, forKey: .sourceText)
+                }
             }
         }
 

@@ -348,7 +348,11 @@ extension ShortClip {
             sourceHash: sourceHash,
             languageCode: languageCode,
             sceneSourceHashes: sceneSourceHashes.map {
-                ClipSceneSourceHash(sceneID: context.sceneID($0.sceneID) ?? $0.sceneID, hash: $0.hash)
+                ClipSceneSourceHash(
+                    sceneID: context.sceneID($0.sceneID) ?? $0.sceneID,
+                    hash: $0.hash,
+                    sourceText: $0.sourceText
+                )
             },
             status: status
         )

@@ -140,6 +140,7 @@ struct ScriptEditorView: View {
             rhythmColor: rhythmColor,
             addBRollLabel: appState.localized("production.addBRollForSelection"),
             addEditingLabel: appState.localized("production.addEditingForSelection"),
+            createClipLabel: appState.localized("clips.command.create"),
             onTextCommitted: { previousText, text in
                 appState.commitScriptTextChange(sceneID: sceneID, previousText: previousText, text: text)
             },
@@ -152,9 +153,12 @@ struct ScriptEditorView: View {
                     appState.addBRollItem(sceneID: sceneID, anchor: anchor)
                 case .editing:
                     appState.addEditingItem(sceneID: sceneID, anchor: anchor)
-                case .script:
+                case .script, .clips:
                     break
                 }
+            },
+            createClipAction: { anchor in
+                appState.createClipFromAnchor(sceneID: sceneID, anchor: anchor)
             }
         )
     }
@@ -425,11 +429,13 @@ struct LinkedScriptTextView: NSViewRepresentable {
     var rhythmColor: NSColor = .systemOrange
     let addBRollLabel: String
     let addEditingLabel: String
+    var createClipLabel: String = ""
     let onTextCommitted: (String, String) -> Void
     let autocomplete: @MainActor (AutocompleteContext) async -> AutocompleteResult
     let onTeardown: () -> Void
     let markerAction: ([UUID], WorkspaceMode) -> Void
     let addMarkerAction: (WorkspaceMode, TextAnchor) -> Void
+    var createClipAction: (TextAnchor) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -487,6 +493,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         view.editingColor = editingColor
         view.addBRollLabel = addBRollLabel
         view.addEditingLabel = addEditingLabel
+        view.createClipLabel = createClipLabel
         view.markupStyler.configure(MarkupEditorStyler.Configuration(
             isEnabled: true,
             pauseDefaults: pauseDefaults,
@@ -1015,6 +1022,10 @@ struct LinkedScriptTextView: NSViewRepresentable {
                 return menu
             }
             menu.insertItem(NSMenuItem.separator(), at: 0)
+            let clipItem = NSMenuItem(title: parent.createClipLabel, action: #selector(createClipForSelection(_:)), keyEquivalent: "")
+            clipItem.target = self
+            clipItem.representedObject = anchor
+            menu.insertItem(clipItem, at: 0)
             let editingItem = NSMenuItem(title: parent.addEditingLabel, action: #selector(addEditingForSelection(_:)), keyEquivalent: "")
             editingItem.target = self
             editingItem.representedObject = anchor
@@ -1024,6 +1035,11 @@ struct LinkedScriptTextView: NSViewRepresentable {
             bRollItem.representedObject = anchor
             menu.insertItem(bRollItem, at: 0)
             return menu
+        }
+
+        @MainActor @objc private func createClipForSelection(_ sender: NSMenuItem) {
+            guard let anchor = sender.representedObject as? TextAnchor else { return }
+            parent.createClipAction(anchor)
         }
 
         @MainActor @objc private func addBRollForSelection(_ sender: NSMenuItem) {
@@ -1045,6 +1061,9 @@ protocol ActiveScriptEditor: AnyObject {
     @discardableResult func commitMarkedTextAndFlush() -> Bool
     func cancelAutocomplete(clearStatus: Bool)
     func selectRange(_ range: NSRange)
+    /// The current non-empty selection as an anchor, or nil when the caret is
+    /// collapsed. Used by the "create clip" command.
+    func currentSelectionAnchor() -> TextAnchor?
     var sceneID: UUID { get }
     var editorIdentity: UUID { get }
     var owningWindow: NSWindow? { get }
@@ -1054,6 +1073,8 @@ protocol ActiveScriptEditor: AnyObject {
 extension ActiveScriptEditor {
     /// Editors that do not support programmatic selection can ignore it.
     func selectRange(_ range: NSRange) {}
+
+    func currentSelectionAnchor() -> TextAnchor? { nil }
 }
 
 extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
@@ -1073,6 +1094,13 @@ extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
         textView.scrollRangeToVisible(clamped)
         textView.window?.makeFirstResponder(textView)
         captureRestorationState()
+    }
+
+    func currentSelectionAnchor() -> TextAnchor? {
+        guard let textView = view?.textView else { return nil }
+        let range = textView.selectedRange()
+        guard range.length > 0 else { return nil }
+        return TextAnchorRepair.anchor(in: textView.string, range: range)
     }
 }
 
@@ -1136,6 +1164,15 @@ final class ActiveScriptEditorSession {
         }
         editor.selectRange(range)
         return true
+    }
+
+    /// The live selection of the editor showing `sceneID`, if it has one.
+    func currentSelectionAnchor(inScene sceneID: UUID) -> TextAnchor? {
+        editors.removeAll { $0.value == nil }
+        let liveEditors = editors.compactMap(\.value)
+        let editor = liveEditors.first(where: { $0.sceneID == sceneID && $0.isActualFirstResponder })
+            ?? liveEditors.first(where: { $0.sceneID == sceneID })
+        return editor?.currentSelectionAnchor()
     }
 }
 
@@ -1575,6 +1612,7 @@ final class MarkerTextContainerView: NSView {
     var editingColor = NSColor.systemGreen
     var addBRollLabel = ""
     var addEditingLabel = ""
+    var createClipLabel = ""
     var cachedFontSize: Double?
     var markerTextRevision = 0 {
         didSet {
@@ -1799,7 +1837,7 @@ enum TextAnchorGeometry {
         switch mode {
         case .bRoll: 2
         case .editing: 8
-        case .script: 2
+        case .script, .clips: 2
         }
     }
 

@@ -304,6 +304,10 @@ the user decides whether to re-translate.
 - Migration cleans dangling references from v1–v3 files. A v4 file is trusted:
   readers should tolerate a missing target instead of rewriting the file.
 - `sceneSourceHashes[].hash` and `ShortClip.sourceHash` are FNV-1a 64-bit hashes.
+  `sceneSourceHashes[].sourceText` is the optional baseline text captured when the
+  clip was created; the clip editor uses it to show a word diff after a scene
+  changes. Files written before this field existed decode it as an empty string
+  and fall back to a coarser stale warning until the clip is reviewed once.
   `Take.sceneTextHash` uses the same function. The hash is computed over the UTF-8
   bytes of the text, then rendered as **lowercase hexadecimal without zero
   padding** (so the empty string hashes to `cbf29ce484222325`). Parameters:
@@ -664,7 +668,8 @@ payload decompresses to the minimal document above.
         "sceneSourceHashes": [
           {
             "sceneID": "22222222-2222-4222-8222-222222222222",
-            "hash": "f0e1d2c3b4a59687"
+            "hash": "f0e1d2c3b4a59687",
+            "sourceText": "alpha target omega"
           }
         ],
         "status": "ready"
