@@ -48,6 +48,38 @@ final class WP1ProjectFileSafetyTests: FrameScriptTestCase {
         XCTAssertTrue(appState.projectStore.needsCloseConfirmation)
     }
 
+    // MARK: - Launch reopen
+
+    /// Fails before the fix: launch-time reopen swallowed read errors, so the
+    /// last project silently failed to open.
+    func testLaunchReopenFailurePresentsAnError() throws {
+        let url = try makeBrokenProjectFile(named: "Broken Launch")
+        let suite = makeDefaults()
+        var settings = AppSettings.defaults
+        settings.generalPreferences.launchBehavior = .restoreLastProject
+        settings.generalPreferences.autosaveEnabled = false
+        let codec = WP1BookmarkCodec(redirects: [:], stalePaths: [])
+        let recents = RecentProjectStore(
+            userDefaults: suite,
+            storageKey: "recents",
+            legacyPathsKey: "legacy",
+            bookmarkCreator: codec.createBookmark(for:),
+            bookmarkResolver: codec.resolveBookmark(data:isStale:),
+            entriesEncoder: { try JSONEncoder().encode($0) },
+            securityScope: SecurityScopedResourceAccess(start: { _ in false }, stop: { _ in })
+        )
+        try recents.add(url: url)
+        let appState = AppState(
+            projectStore: ProjectStore(project: SampleData.defaultProject),
+            recentProjectStore: recents,
+            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings")
+        )
+
+        appState.configure()
+
+        XCTAssertEqual(appState.errorCenter.presentedError?.kind, .corruptedProject)
+    }
+
     // MARK: - External change
 
     /// Fails before the fix: Reload was the default (Return) button.
@@ -583,6 +615,13 @@ final class WP1ProjectFileSafetyTests: FrameScriptTestCase {
         let directory = try temporaryDirectory()
         let url = directory.appendingPathComponent("\(title.replacingOccurrences(of: " ", with: "-")).fscr")
         try FrameScriptFileStore.write(project: makeProject(title: title, text: text), to: url)
+        return url
+    }
+
+    private func makeBrokenProjectFile(named name: String) throws -> URL {
+        let directory = try temporaryDirectory()
+        let url = directory.appendingPathComponent("\(name.replacingOccurrences(of: " ", with: "-")).fscr")
+        try Data("{ not a project".utf8).write(to: url)
         return url
     }
 
