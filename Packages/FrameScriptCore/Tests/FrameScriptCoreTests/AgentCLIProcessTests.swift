@@ -288,7 +288,10 @@ struct SystemAgentProcessLauncherTests {
         let output = try await launcher.launch(
             AgentProcessRequest(
                 executableURL: URL(fileURLWithPath: "/bin/sh"),
-                arguments: ["-c", "sleep 6 & echo parent-done"],
+                // The background child keeps the output pipe open for far longer
+                // than the request timeout. A launcher that waits for EOF would
+                // block for the full 30 s.
+                arguments: ["-c", "sleep 30 & echo parent-done"],
                 timeout: 0.6
             )
         )
@@ -296,7 +299,12 @@ struct SystemAgentProcessLauncherTests {
 
         #expect(output.standardOutputText.contains("parent-done"))
         #expect(output.standardOutputTruncated)
-        #expect(elapsed < .seconds(1.5))
+        // The behavioural claim is "bounded drain, not EOF": returning well
+        // before the 30 s child lifetime proves it. The old 1.5 s bound also
+        // measured process launch and scheduling, which intermittently exceed
+        // it under heavy CPU load, so keep a wide margin that no slower machine
+        // can mistake for waiting for the child.
+        #expect(elapsed < .seconds(5))
     }
 
     @Test("cancellation returns promptly even when the child ignores SIGTERM")
