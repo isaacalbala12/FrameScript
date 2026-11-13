@@ -401,6 +401,14 @@ final class ResearchSnapshotTests: XCTestCase {
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
 
+        let recording = RecordingController(
+            preferences: OBSPreferencesStore(
+                defaults: defaults,
+                secretStore: ResearchSnapshotOBSSecretStore()
+            ),
+            defaults: defaults
+        )
+
         return AppState(
             projectStore: store,
             recentProjectStore: RecentProjectStore(userDefaults: defaults),
@@ -412,6 +420,7 @@ final class ResearchSnapshotTests: XCTestCase {
                 llmProvider: MockLLMProvider(),
                 providerCredentials: ProviderCredentialSession(reader: { _ in "test-key" })
             ),
+            recording: recording,
             aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
         )
     }
@@ -564,4 +573,9 @@ extension String {
             .lowercased()
         return String(folded.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
     }
+}
+
+private struct ResearchSnapshotOBSSecretStore: OBSSecretStoring {
+    func readPassword() throws -> String? { nil }
+    func savePassword(_ password: String) throws {}
 }

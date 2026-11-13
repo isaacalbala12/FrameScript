@@ -376,6 +376,13 @@ final class ResearchFeatureTests: XCTestCase {
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
 
         let llm = provider ?? ResearchTestProvider(LLMResponse(text: "{}"))
+        let recording = RecordingController(
+            preferences: OBSPreferencesStore(
+                defaults: defaults,
+                secretStore: ResearchTestOBSSecretStore()
+            ),
+            defaults: defaults
+        )
         let dependencies = AppDependencies(
             rewriteService: RewriteService(provider: llm),
             analysisService: AnalysisService(provider: llm),
@@ -389,6 +396,7 @@ final class ResearchFeatureTests: XCTestCase {
             recentProjectStore: RecentProjectStore(userDefaults: defaults),
             settingsStore: SettingsStore(settings: settings, userDefaults: defaults, key: "settings"),
             dependencies: dependencies,
+            recording: recording,
             aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
         )
     }
@@ -407,4 +415,9 @@ private final class ResearchTestProvider: LLMProviderProtocol {
         requests.append(request)
         return response
     }
+}
+
+private struct ResearchTestOBSSecretStore: OBSSecretStoring {
+    func readPassword() throws -> String? { nil }
+    func savePassword(_ password: String) throws {}
 }
