@@ -22,7 +22,9 @@ struct FrameScriptApp: App {
             ThemedSceneRoot {
                 AppRootView()
             }
+            .escaletaImportSheet()
             .environment(appState)
+            .environment(escaletaImport)
             .backupsSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
@@ -48,6 +50,7 @@ struct FrameScriptApp: App {
     }
 
     @State private var shortcutRouter = AppKitPhysicalShortcutCommandRouter()
+    @State private var escaletaImport = EscaletaImportCoordinator()
 
     @CommandsBuilder
     private var appCommands: some Commands {
@@ -125,6 +128,16 @@ struct FrameScriptApp: App {
             Button(appState.localized("project.export")) { appState.exportProject() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .export))
                 .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("menu.importEscaleta")) {
+                escaletaImport.chooseFile(appState: appState)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .importEscaleta))
+            Button(appState.localized("menu.exportEscaleta")) {
+                appState.exportEscaletaMarkdown()
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportEscaleta))
+            .disabled(!appState.hasOpenProject)
         }
 
         CommandGroup(replacing: .appSettings) {

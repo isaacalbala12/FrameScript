@@ -12,6 +12,7 @@ extension L10n {
         [.spanish: backupsSpanish],
         teleprompterStrings,
         [.spanish: teleprompterSpanish],
-        hooksStrings
+        hooksStrings,
+        markdownImportStrings
     ]
 }

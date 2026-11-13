@@ -194,6 +194,7 @@ enum ShortcutCategory: String, CaseIterable, Hashable {
 
 enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
+    case importEscaleta, exportEscaleta
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
@@ -256,7 +257,11 @@ enum ShortcutRegistry {
         .init(command: .saveAs, localizationKey: "project.saveAs", category: .project, factoryDefault: .init("s", modifiers: [.command, .shift]), order: 4),
         .init(command: .import, localizationKey: "menu.import", category: .project, factoryDefault: .init("i", modifiers: [.command, .shift]), order: 5),
         .init(command: .export, localizationKey: "project.export", category: .project, factoryDefault: .init("e", modifiers: [.command]), order: 6),
-        .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 7),
+        // ⇧⌘I is already the project-import shortcut, so the escaleta keeps a
+        // separate, conflict-free binding.
+        .init(command: .importEscaleta, localizationKey: "menu.importEscaleta", category: .project, factoryDefault: .init("m", modifiers: [.command, .shift]), order: 7),
+        .init(command: .exportEscaleta, localizationKey: "menu.exportEscaleta", category: .project, factoryDefault: .init("e", modifiers: [.command, .shift]), order: 8),
+        .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 9),
         .init(command: .addScene, localizationKey: "scene.add", category: .scenes, factoryDefault: .init("n", modifiers: [.command, .option]), order: 0),
         .init(command: .duplicateScene, localizationKey: "scene.duplicate", category: .scenes, factoryDefault: .init("d", modifiers: [.command]), order: 1),
         .init(command: .deleteScene, localizationKey: "scene.delete", category: .scenes, factoryDefault: .init(key: .delete, modifiers: [.command]), order: 2),

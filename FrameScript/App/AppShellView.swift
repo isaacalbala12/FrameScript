@@ -75,6 +75,7 @@ struct AppRootView: View {
 
 struct AppShellView: View {
     @Environment(AppState.self) private var appState
+    @Environment(EscaletaImportCoordinator.self) private var escaletaImport
     @Environment(\.frameTheme) private var theme
     @Environment(\.openSettings) private var openSettings
     @State private var sidebarDragStartWidth: Double?
@@ -119,6 +120,13 @@ struct AppShellView: View {
         .background(theme.background)
         .foregroundStyle(theme.primaryText)
         .frame(minWidth: 980, minHeight: 680)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "md" }) else {
+                return false
+            }
+            escaletaImport.present(url: url, appState: appState)
+            return true
+        }
         .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
             CommandPaletteView()
                 .environment(appState)
@@ -194,6 +202,7 @@ private struct SidebarResizeHandle: View {
 
 struct WelcomeView: View {
     @Environment(AppState.self) private var appState
+    @Environment(EscaletaImportCoordinator.self) private var escaletaImport
     @Environment(\.frameTheme) private var theme
     @State private var isTemplatePickerPresented = false
     @FocusState private var focusedRecentID: UUID?
@@ -218,7 +227,16 @@ struct WelcomeView: View {
                         isTemplatePickerPresented = true
                     })
                     WelcomeAction(title: appState.localized("welcome.openProject"), systemImage: "folder", accessibilityIdentifier: "welcome-open-project", action: appState.openProject)
+                    WelcomeAction(title: appState.localized("welcome.importEscaleta"), systemImage: "square.and.arrow.down", accessibilityIdentifier: "welcome-import-escaleta", action: {
+                        escaletaImport.chooseFile(appState: appState)
+                    })
                     WelcomeAction(title: appState.localized("welcome.openDemo"), systemImage: "play.rectangle", accessibilityIdentifier: "welcome-open-demo", action: appState.openDemoProject)
+
+                    Text(appState.localized("welcome.dropEscaleta"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.tertiaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
                 }
                 .frame(width: 260)
 
@@ -265,6 +283,13 @@ struct WelcomeView: View {
             TemplatePickerView()
                 .environment(appState)
                 .environment(\.frameTheme, theme)
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "md" }) else {
+                return false
+            }
+            escaletaImport.present(url: url, appState: appState)
+            return true
         }
         .task {
             await appState.recentProjectStore.validateEntries()
