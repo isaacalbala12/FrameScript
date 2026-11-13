@@ -86,10 +86,12 @@ final class RecentProjectsUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         try FileManager.default.removeItem(at: projectURL)
 
-        // Re-enter the project browser the way a user would. The browser runs
-        // its recents validation on appear, so no activation of Finder or the
-        // app is needed (which would foreground other apps on this Mac).
-        app.buttons["welcome-new-blank-project"].click()
+        // Re-enter the project browser the way a user would. The demo opens
+        // without unsaved changes, so Back to Project List needs no
+        // confirmation. The browser runs its recents validation on appear, so
+        // no activation of Finder or the app is needed (which would foreground
+        // other apps on this Mac).
+        app.buttons["welcome-open-demo"].click()
         app.menuBars.menuBarItems["File"].click()
         app.menuItems["Back to Project List"].click()
 
