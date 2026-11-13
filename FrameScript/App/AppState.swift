@@ -157,6 +157,9 @@ final class AppState {
     var autocompleteNow: () -> Date = Date.init
 #if DEBUG
     private var didApplyUITestLaunchArguments = false
+    /// UI-test-only interface language. Kept out of `settings` so launching a
+    /// test never rewrites the user's persisted app language.
+    private var uiTestLanguageOverride: AppLanguage?
 #endif
     private var appActivationObserver: NSObjectProtocol?
     private var appResignationObserver: NSObjectProtocol?
@@ -250,11 +253,11 @@ final class AppState {
         )
 #if DEBUG
         if arguments.contains("--framescript-ui-test-language-english") {
-            settings.generalPreferences.language = .english
+            uiTestLanguageOverride = .english
         } else if arguments.contains("--framescript-ui-test-language-spanish") {
-            settings.generalPreferences.language = .spanish
+            uiTestLanguageOverride = .spanish
         } else if arguments.contains("--framescript-ui-test-language-russian") {
-            settings.generalPreferences.language = .russian
+            uiTestLanguageOverride = .russian
         }
         if arguments.contains("--framescript-ui-test-show-browser") {
             settings.generalPreferences.launchBehavior = .showProjectBrowser
@@ -344,7 +347,10 @@ final class AppState {
     }
 
     var currentLanguage: AppLanguage {
-        settings.generalPreferences.language
+#if DEBUG
+        if let uiTestLanguageOverride { return uiTestLanguageOverride }
+#endif
+        return settings.generalPreferences.language
     }
 
     var autocompleteConfigurationEligibility: AutocompleteConfigurationEligibility {
@@ -2467,7 +2473,17 @@ final class SettingsStore {
     typealias SettingsDecoder = (Data) throws -> AppSettings
 
     var settings: AppSettings {
-        didSet { save() }
+        didSet {
+            let languageChanged = oldValue.generalPreferences.language
+                != settings.generalPreferences.language
+            save()
+            if languageChanged {
+                NotificationCenter.default.post(
+                    name: .frameScriptInterfaceLanguageDidChange,
+                    object: self
+                )
+            }
+        }
     }
 
     private(set) var errorEvent: AppError?

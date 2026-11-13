@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 private enum TeleprompterPalette {
@@ -22,7 +23,8 @@ struct TeleprompterRootView: View {
                     columnWidth: model.effectiveColumnWidth,
                     viewportSize: proxy.size,
                     readingLineFraction: model.settings.readingLineFraction,
-                    mirrorVertical: model.settings.mirrorVertical
+                    mirrorVertical: model.settings.mirrorVertical,
+                    emptyScenePlaceholder: model.emptyScenePlaceholder
                 )
                 .scaleEffect(
                     x: model.settings.mirrorHorizontal ? -1 : 1,
@@ -57,6 +59,9 @@ struct TeleprompterRootView: View {
             model.showControlsTemporarily()
         }
         .onExitCommand { model.close() }
+        .onReceive(NotificationCenter.default.publisher(for: .frameScriptInterfaceLanguageDidChange)) { _ in
+            model.refreshLocalization()
+        }
         .voiceFollowAlerts(model: model)
     }
 
@@ -86,19 +91,61 @@ struct TeleprompterRootView: View {
     }
 
     private var statusBar: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Text(sceneLabel)
                 .lineLimit(1)
             VoiceFollowStatusIndicator(model: model)
+            mirrorBadges
             Spacer(minLength: 24)
             Text(timeLabel)
                 .monospacedDigit()
+                .fixedSize()
         }
         .font(.system(size: 12, weight: .medium, design: .monospaced))
         .foregroundStyle(TeleprompterPalette.status)
         .padding(.horizontal, 28)
-        .padding(.top, 18)
+        .padding(.top, 16)
         .allowsHitTesting(false)
+    }
+
+    /// A persistent, high-contrast reminder that the canvas is mirrored. Without
+    /// it an accidental H/M press makes the prompter look broken rather than
+    /// intentionally mirrored.
+    @ViewBuilder
+    private var mirrorBadges: some View {
+        if model.settings.mirrorHorizontal || model.settings.mirrorVertical {
+            HStack(spacing: 6) {
+                if model.settings.mirrorHorizontal {
+                    mirrorBadge(
+                        icon: "arrow.left.and.right",
+                        key: "teleprompter.mirrorHorizontalBadge"
+                    )
+                }
+                if model.settings.mirrorVertical {
+                    mirrorBadge(
+                        icon: "arrow.up.and.down",
+                        key: "teleprompter.mirrorVerticalBadge"
+                    )
+                }
+            }
+        }
+    }
+
+    private func mirrorBadge(icon: String, key: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .bold))
+            Text(model.localized(key))
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(.black.opacity(0.86))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background {
+            Capsule().fill(Color(red: 1.0, green: 0.84, blue: 0.36).opacity(0.94))
+        }
+        .fixedSize()
+        .accessibilityLabel(model.localized(key))
     }
 
     private var sceneLabel: String {
@@ -140,6 +187,7 @@ private struct TeleprompterTextCanvas: NSViewRepresentable {
     let viewportSize: CGSize
     let readingLineFraction: Double
     let mirrorVertical: Bool
+    let emptyScenePlaceholder: String
 
     func makeNSView(context: Context) -> TeleprompterTextRenderer {
         let renderer = TeleprompterTextRenderer(frame: .zero)
@@ -165,6 +213,7 @@ private struct TeleprompterTextCanvas: NSViewRepresentable {
             viewportSize: viewportSize,
             readingLineFraction: readingLineFraction,
             mirrorVertical: mirrorVertical,
+            emptyScenePlaceholder: emptyScenePlaceholder,
             onMetrics: { metrics in
                 Task { @MainActor in
                     model.updateTextMetrics(metrics)
@@ -362,13 +411,19 @@ private struct TeleprompterControls: View {
                 .font(.system(size: size > 40 ? 18 : 13, weight: .semibold))
                 .frame(width: size, height: size)
                 .background {
-                    Circle().fill(isActive ? Color.white.opacity(0.9) : Color.white.opacity(0.10))
+                    Circle().fill(isActive ? Color.white.opacity(0.92) : Color.white.opacity(0.10))
+                }
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.white.opacity(isActive ? 0.95 : 0), lineWidth: 1.5)
+                        .padding(-2.5)
                 }
                 .foregroundStyle(isActive ? Color.black : Color.white.opacity(0.88))
         }
         .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
+        .accessibilityValue(model.localized(isActive ? "teleprompter.active" : "teleprompter.inactive"))
     }
 }
 

@@ -2,6 +2,31 @@ import AppKit
 import FrameScriptCore
 import SwiftUI
 
+/// Pure shortcut-focus gate, kept separate so it can be tested without a
+/// window server: the teleprompter only consumes keys when its own window is
+/// key and the first responder is not a text input.
+enum TeleprompterKeyRouting {
+    static func isTextInput(_ responder: NSResponder?) -> Bool {
+        guard let responder else { return false }
+        if responder is NSTextView || responder is NSTextField || responder is NSText {
+            return true
+        }
+        // The field editor of an NSTextField is an NSTextView, but be defensive
+        // about custom controls that wrap one.
+        if let view = responder as? NSView, view is NSTextView {
+            return true
+        }
+        return false
+    }
+
+    static func shouldHandleShortcut(
+        windowIsKey: Bool,
+        firstResponder: NSResponder?
+    ) -> Bool {
+        windowIsKey && !isTextInput(firstResponder)
+    }
+}
+
 /// Hosts the teleprompter in its own AppKit window so it can be moved to any
 /// display, taken full screen, and closed without disturbing the main window.
 @MainActor
@@ -23,7 +48,8 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         resumeAnchor: TeleprompterReadingAnchor?,
         speechLanguage: SpeechLanguage? = .spanish,
         speechRecognizer: (any SpeechRecognizing)? = nil,
-        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
+        languageProvider: (@MainActor () -> AppLanguage)? = nil
     ) {
         let model = TeleprompterModel(
             sections: sections,
@@ -34,7 +60,8 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             resumeAnchor: resumeAnchor,
             speechLanguage: speechLanguage,
             speechRecognizer: speechRecognizer,
-            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider
+            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider,
+            languageProvider: languageProvider
         )
         self.model = model
 
@@ -93,6 +120,10 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         model.onToggleFullScreen = { [weak self] in self?.toggleFullScreen() }
         model.onMoveToDisplay = { [weak self] displayID in
             self?.move(to: displayID)
+        }
+        model.onLanguageChanged = { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.title = L10n.tr("teleprompter.windowTitle", language: self.model.language)
         }
     }
 
@@ -168,13 +199,27 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
 
     /// Returns true when the event was consumed by the teleprompter.
     private func handleKey(_ event: NSEvent) -> Bool {
+        guard let window, event.window === window else { return false }
+        // Single-letter shortcuts (H/M mirror, V voice, C countdown, [ ] ; ')
+        // must never fire while the user is typing, and only while this window
+        // owns the keyboard. A local monitor sees events before the responder
+        // chain, so without this gate an accidental "m" typed into any focused
+        // text control mirrors the whole prompter.
+        let windowIsKey = window.isKeyWindow && NSApp.keyWindow === window
+        guard TeleprompterKeyRouting.shouldHandleShortcut(
+            windowIsKey: windowIsKey,
+            firstResponder: window.firstResponder
+        ) else {
+            return false
+        }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers.contains(.command) || modifiers.contains(.control) || modifiers.contains(.option) {
             return false
         }
 
-        // Let focused AppKit controls keep Space and arrow-key behaviour.
-        if isControlFocused(in: event), [49, 123, 124, 125, 126, 115, 116, 121].contains(event.keyCode) {
+        // Let a focused slider keep Space and arrow-key behaviour.
+        if isSliderFocused(in: window), [49, 123, 124, 125, 126, 115, 116, 121].contains(event.keyCode) {
             return false
         }
 
@@ -250,9 +295,8 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         return true
     }
 
-    private func isControlFocused(in event: NSEvent) -> Bool {
-        guard let responder = event.window?.firstResponder else { return false }
-        return responder is NSSlider || responder is NSTextField
+    private func isSliderFocused(in window: NSWindow) -> Bool {
+        window.firstResponder is NSSlider
     }
 
     // MARK: Lifecycle
@@ -279,15 +323,24 @@ final class TeleprompterPresenter {
         controller?.model
     }
 
+    /// Filled by `AppState` so every teleprompter (toolbar or recording) reads
+    /// the live interface language instead of a value captured at open time.
+    var languageProvider: (@MainActor () -> AppLanguage)?
+
     func show(
         source: TeleprompterSource,
         provider: TeleprompterSceneProvider?,
         startingSectionIndex: Int,
         language: AppLanguage,
         speechLanguage: SpeechLanguage? = .spanish,
-        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
+        languageProvider: (@MainActor () -> AppLanguage)? = nil
     ) {
+        let resolvedProvider = languageProvider ?? self.languageProvider
         if let existing = controller {
+            if let resolvedProvider {
+                existing.model.updateLanguageProvider(resolvedProvider)
+            }
             Task { @MainActor in
                 await existing.model.updateSpeechLanguage(speechLanguage)
             }
@@ -313,7 +366,8 @@ final class TeleprompterPresenter {
             resumeAnchor: lastAnchor,
             speechLanguage: speechLanguage,
             speechRecognizer: simulatedRecognizer,
-            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider
+            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider,
+            languageProvider: resolvedProvider
         )
         controller.presenter = self
         controller.model.onReadingSessionFinished = { [weak self] session in

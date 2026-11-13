@@ -75,6 +75,9 @@ extension AppState: RecordingTeleprompterHook {
         let sections = teleprompterSceneTexts(forLanguageCode: languageCode)
         guard !sections.isEmpty else { return }
 
+        TeleprompterPresenter.shared.languageProvider = { [weak self] in
+            self?.currentLanguage ?? .english
+        }
         recordingTeleprompter.present(
             sections: sections,
             startingSectionIndex: startIndex,
