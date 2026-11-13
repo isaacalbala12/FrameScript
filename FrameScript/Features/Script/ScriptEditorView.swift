@@ -123,6 +123,7 @@ struct ScriptEditorView: View {
             saveRestorationState: { state in
                 appState.editorState.setScriptEditorState(state, sceneID: sceneID, editorIdentity: editorIdentity)
             },
+            selectionRequest: TimelineNavigation.shared.pendingRequest,
             markers: productionMarkers,
             fontSize: preferences.fontSize,
             spellcheck: preferences.spellcheck,
@@ -152,7 +153,7 @@ struct ScriptEditorView: View {
                     appState.addBRollItem(sceneID: sceneID, anchor: anchor)
                 case .editing:
                     appState.addEditingItem(sceneID: sceneID, anchor: anchor)
-                case .script:
+                case .script, .timeline:
                     break
                 }
             }
@@ -408,6 +409,8 @@ struct LinkedScriptTextView: NSViewRepresentable {
     @Binding var autocompleteState: AutocompleteEditorState
     let loadRestorationState: () -> ScriptEditorRestorationState?
     let saveRestorationState: (ScriptEditorRestorationState) -> Void
+    /// Paragraph/selection jump coming from the timeline (F18).
+    var selectionRequest: TimelineJumpRequest? = nil
     let markers: [ProductionTextMarker]
     let fontSize: Double
     let spellcheck: Bool
@@ -443,6 +446,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         ActiveScriptEditorSession.shared.register(context.coordinator)
         DispatchQueue.main.async {
             context.coordinator.restoreEditorStateIfAvailable()
+            context.coordinator.applyTimelineJumpIfNeeded()
             view.textView.window?.makeFirstResponder(view.textView)
         }
         return view
@@ -453,6 +457,12 @@ struct LinkedScriptTextView: NSViewRepresentable {
         context.coordinator.applyModelTextIfNeeded()
         configureAppearance(view)
         view.markerTextRevision = context.coordinator.textRevision
+        if selectionRequest != nil {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async {
+                coordinator.applyTimelineJumpIfNeeded()
+            }
+        }
     }
 
     static func dismantleNSView(_ view: MarkerTextContainerView, coordinator: Coordinator) {
@@ -544,6 +554,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         private var editTransaction: EditTransaction?
         private var lastSelectionRange: NSRange?
         private var escapeDismissalContext: EscapeDismissalContext?
+        private var lastAppliedTimelineJumpID: UUID?
         /// Range captured from `shouldChangeTextIn`, which is reliable for
         /// pastes, undo and typing while `NSTextStorage.editedRange` can be a
         /// stale attribute range from the styler.
@@ -606,6 +617,26 @@ struct LinkedScriptTextView: NSViewRepresentable {
             view.scrollView.contentView.scroll(to: clampedVisibleOrigin(state.visibleOrigin, in: view))
             view.scrollView.reflectScrolledClipView(view.scrollView.contentView)
             pendingInitialRestorationState = nil
+        }
+
+        /// Applies a pending timeline paragraph jump once per request. The
+        /// request is consumed asynchronously so observation changes never
+        /// happen inside `updateNSView`.
+        func applyTimelineJumpIfNeeded() {
+            guard let view,
+                  let request = parent.selectionRequest,
+                  request.sceneID == parent.sceneID,
+                  request.id != lastAppliedTimelineJumpID else { return }
+            lastAppliedTimelineJumpID = request.id
+            let length = (view.textView.string as NSString).length
+            let range = TextAnchorGeometry.clamp(request.range, toLength: length)
+            view.textView.setSelectedRange(range)
+            view.textView.scrollRangeToVisible(range)
+            view.textView.window?.makeFirstResponder(view.textView)
+            let requestID = request.id
+            DispatchQueue.main.async {
+                TimelineNavigation.shared.consume(requestID)
+            }
         }
 
         func applyModelTextIfNeeded() {
@@ -1799,7 +1830,7 @@ enum TextAnchorGeometry {
         switch mode {
         case .bRoll: 2
         case .editing: 8
-        case .script: 2
+        case .script, .timeline: 2
         }
     }
 

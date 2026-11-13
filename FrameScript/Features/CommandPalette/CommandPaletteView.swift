@@ -20,6 +20,9 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("command.switchEditing"), detail: shortcut(.editingMode)) {
                 appState.selectMode(.editing)
             },
+            PaletteResult(title: appState.localized("command.switchTimeline"), detail: shortcut(.timelineMode)) {
+                appState.selectMode(.timeline)
+            },
             PaletteResult(title: appState.localized("menu.teleprompter"), detail: shortcut(.teleprompter)) {
                 appState.presentTeleprompter()
             },

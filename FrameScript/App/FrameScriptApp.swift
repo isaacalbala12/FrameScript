@@ -158,6 +158,16 @@ struct FrameScriptApp: App {
             Button(appState.localized("mode.editing")) { appState.selectMode(.editing) }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
                 .disabled(!appState.hasOpenProject)
+            Button(appState.localized("mode.timeline")) { appState.selectMode(.timeline) }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineMode))
+                .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("timeline.zoomIn")) { appState.timelineZoomIn() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineZoomIn))
+                .disabled(appState.selectedMode != .timeline)
+            Button(appState.localized("timeline.zoomOut")) { appState.timelineZoomOut() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineZoomOut))
+                .disabled(appState.selectedMode != .timeline)
             Divider()
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))

@@ -1,7 +1,11 @@
 import SwiftUI
 
 struct ModeSwitcher: View {
-    private static let buttonWidth: CGFloat = 112
+    /// Four modes no longer fit the 980 pt minimum window at the original
+    /// width; the compact width still leaves room for the shortcut badges.
+    private var buttonWidth: CGFloat {
+        WorkspaceMode.allCases.count >= 4 ? 88 : 112
+    }
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     @Binding var selection: WorkspaceMode
@@ -33,7 +37,7 @@ struct ModeSwitcher: View {
                     }
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(selection == mode ? theme.primaryText : theme.secondaryText)
-                    .frame(width: Self.buttonWidth, height: 28)
+                    .frame(width: buttonWidth, height: 28)
                     .contentShape(Rectangle())
                     .background {
                         if selection == mode {
@@ -67,6 +71,7 @@ struct ModeSwitcher: View {
         case .script: appState.localized("mode.script")
         case .bRoll: appState.localized("mode.bRoll")
         case .editing: appState.localized("mode.editing")
+        case .timeline: appState.localized("mode.timeline")
         }
     }
 
@@ -75,6 +80,7 @@ struct ModeSwitcher: View {
         case .script: "mode-switcher-script"
         case .bRoll: "mode-switcher-broll"
         case .editing: "mode-switcher-editing"
+        case .timeline: "mode-switcher-timeline"
         }
     }
 
@@ -83,6 +89,7 @@ struct ModeSwitcher: View {
         case .script: .scriptMode
         case .bRoll: .visualsMode
         case .editing: .editingMode
+        case .timeline: .timelineMode
         }
     }
 }
