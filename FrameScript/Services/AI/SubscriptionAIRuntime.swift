@@ -59,14 +59,14 @@ final class SubscriptionAIRuntime {
 
     private weak var appState: AppState?
     private let store: SubscriptionAISettingsStore
-    private let routerFactory: SubscriptionAIRouterFactory
+    private let routerFactory: any SubscriptionAIRouterProviding
     private let inspector: SubscriptionAIT3ThreadInspector
     private var cancelCurrentWork: (() -> Void)?
     private var didRequestCancellation = false
 
     init(
         store: SubscriptionAISettingsStore = .shared,
-        routerFactory: SubscriptionAIRouterFactory = SubscriptionAIRouterFactory(),
+        routerFactory: any SubscriptionAIRouterProviding = SubscriptionAIRouterFactory(),
         inspector: SubscriptionAIT3ThreadInspector = SubscriptionAIT3ThreadInspector()
     ) {
         self.store = store
@@ -115,11 +115,11 @@ final class SubscriptionAIRuntime {
         let prober = SubscriptionAIProber(
             settings: settings,
             context: context,
-            routerProvider: { [routerFactory] selection in
+            routerProvider: { [routerFactory] selection, mapping in
                 try await routerFactory.makeRouter(
                     selection: selection,
                     settings: settings,
-                    threadMapping: context.threadMapping
+                    threadMapping: mapping
                 )
             }
         )
@@ -132,9 +132,15 @@ final class SubscriptionAIRuntime {
         } catch SubscriptionAIError.pendingQuestion {
             return .pending
         } catch is CancellationError {
-            return .failure("The AI request was cancelled.")
+            return .failure(SubscriptionAIErrorDescription.localized(
+                for: CancellationError(),
+                language: appState?.currentLanguage ?? .english
+            ))
         } catch {
-            return .failure(error.localizedDescription)
+            return .failure(SubscriptionAIErrorDescription.localized(
+                for: error,
+                language: appState?.currentLanguage ?? .english
+            ))
         }
     }
 
@@ -162,6 +168,9 @@ final class SubscriptionAIRuntime {
     }
 
     func resetThread(for selection: SubscriptionAISelection) {
+        // The router records the returned thread when the run finishes. Reset
+        // while busy would be undone by that record, so it is refused.
+        guard !isRunning else { return }
         appState?.subscriptionAIResetThread(for: selection)
     }
 
@@ -175,9 +184,13 @@ final class SubscriptionAIRuntime {
     func openThread(threadID: String) async -> SubscriptionAIOpenResult {
         openError = nil
         let settings = store.settings
+        let language = appState?.currentLanguage ?? .english
         let binaries = await SubscriptionAIToolchain.shared.binaries()
         guard let executable = binaries.t3 else {
-            let message = AgentCLIError.binaryNotFound(.t3).localizedDescription
+            let message = SubscriptionAIErrorDescription.localized(
+                for: AgentCLIError.binaryNotFound(.t3),
+                language: language
+            )
             openError = message
             return .failed(message)
         }
@@ -188,7 +201,8 @@ final class SubscriptionAIRuntime {
         if await inspector.openApplication(projectPath: settings.t3Project.path, executable: executable) {
             return .opened
         }
-        let message = "Could not open the T3 thread \(threadID). Open T3 Code and find it manually."
+        let message = appState?.localized("settings.ai.subscription.threadOpenFailed")
+            ?? "Could not open the T3 thread. Open T3 Code and find it manually."
         openError = message
         return .failed(message)
     }
@@ -217,6 +231,11 @@ final class SubscriptionAIRuntime {
         activity: SubscriptionAIActivity,
         _ operation: @escaping @MainActor () async throws -> T
     ) async throws -> T {
+        // One observable activity/cancel slot: refuse a second run instead of
+        // letting it overwrite the first run's cancel closure and progress.
+        guard self.activity == nil else {
+            throw SubscriptionAIError.busy
+        }
         self.activity = activity
         lastOutcome = nil
         didRequestCancellation = false

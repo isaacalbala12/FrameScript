@@ -98,26 +98,35 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
         modelSlug.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Switches the provider kind while guaranteeing that the provider
+    /// instance and model belong to the new CLI. Keeping a T3 slug on a
+    /// Claude/Codex selection would run `claude --model opencode-go/...`.
+    func selecting(kind newKind: AgentCLIKind) -> SubscriptionAISelection {
+        guard newKind != kind else { return self }
+        return .defaultSelection(for: newKind)
+    }
+
     /// Nil when the selection is usable. T3 rejects a provider without a model
-    /// and a model without a provider.
-    var validationMessage: String? {
+    /// and a model without a provider; the direct CLIs need their own model.
+    var validationIssue: SubscriptionAIConfigurationIssue? {
         switch kind {
         case .t3:
             guard !trimmedProviderInstanceID.isEmpty, !trimmedModelSlug.isEmpty else {
-                return "T3 Code needs both a provider instance id and a model slug."
+                return .t3SelectionIncomplete
             }
             return nil
         case .claude:
-            guard !trimmedModelSlug.isEmpty else {
-                return "Choose a Claude model alias, for example sonnet or opus."
-            }
+            guard !trimmedModelSlug.isEmpty else { return .claudeModelMissing }
             return nil
         case .codex:
-            guard !trimmedModelSlug.isEmpty else {
-                return "Choose a Codex model, for example gpt-5.3-codex."
-            }
+            guard !trimmedModelSlug.isEmpty else { return .codexModelMissing }
             return nil
         }
+    }
+
+    /// Kept for tests and for callers that only need a diagnostic.
+    var validationMessage: String? {
+        validationIssue?.englishDescription
     }
 
     var agentModel: AgentCLIModelSelection {
@@ -220,10 +229,32 @@ struct SubscriptionAISettings: Codable, Equatable, Sendable {
     }
 
     mutating func setUseForAllTasks(_ value: Bool) {
+        // Per-task overrides are expensive to recreate, so they survive a
+        // round trip through the "use for all" switch. `selection(for:)`
+        // already ignores them while the switch is on.
         useForAllTasks = value
-        if value {
-            taskSelections.removeAll()
-        }
+    }
+
+    /// Keeps the default selection coherent when the global provider picker
+    /// changes. The previous selection for the other CLI is not reused because
+    /// its model slug is meaningless there.
+    mutating func setDefaultKind(_ kind: AgentCLIKind) {
+        defaultSelection = defaultSelection.selecting(kind: kind)
+    }
+
+    /// Replaces the T3 folder. A manually edited folder must not keep the old
+    /// project id: `T3Runner` prefers the id, which would silently keep using
+    /// the previous project.
+    mutating func updateProjectPath(_ path: String?) {
+        let normalized = Self.nonBlank(path)
+        guard normalized != Self.nonBlank(t3Project.path) else { return }
+        t3Project.path = normalized
+        t3Project.id = nil
+        t3Project.name = nil
+    }
+
+    mutating func updateProjectID(_ identifier: String?) {
+        t3Project.id = Self.nonBlank(identifier)
     }
 
     /// Every task/selection pair the UI should offer thread controls for.
@@ -333,12 +364,41 @@ enum SubscriptionAIElapsedFormat {
 
 // MARK: - Errors
 
+/// Configuration problems that have a localized UI string. The English text is
+/// only a diagnostic fallback; the app renders `localizationKey` in the current
+/// interface language.
+enum SubscriptionAIConfigurationIssue: String, Equatable, Sendable, CaseIterable {
+    case t3SelectionIncomplete
+    case claudeModelMissing
+    case codexModelMissing
+    case t3ProjectMissing
+
+    var localizationKey: String { "aiError.issue.\(rawValue)" }
+
+    var englishDescription: String {
+        switch self {
+        case .t3SelectionIncomplete:
+            "T3 Code needs both a provider instance id and a model slug."
+        case .claudeModelMissing:
+            "Choose a Claude model alias, for example sonnet or opus."
+        case .codexModelMissing:
+            "Choose a Codex model, for example gpt-5.3-codex."
+        case .t3ProjectMissing:
+            "No T3 Code project is configured. Choose the T3 project id or folder in Settings."
+        }
+    }
+}
+
 enum SubscriptionAIError: Error, Equatable, LocalizedError, Sendable {
     /// Inline autocomplete never uses a subscription: CLIs take seconds.
     case autocompleteNotSupported
     /// Exit code 2: the agent asked a question. The thread keeps running in T3.
     case pendingQuestion(AgentCLIPendingQuestion)
-    case notConfigured(String)
+    case notConfigured(SubscriptionAIConfigurationIssue)
+    /// One global progress slot: refusing the second request keeps cancel and
+    /// elapsed time pointing at the run the user is actually watching.
+    case busy
+    case emptyReply
 
     var errorDescription: String? {
         switch self {
@@ -346,9 +406,77 @@ enum SubscriptionAIError: Error, Equatable, LocalizedError, Sendable {
             return "Inline autocomplete stays on API providers and never uses a subscription."
         case let .pendingQuestion(question):
             return "The AI agent is waiting for an answer in T3 Code: \(question.question)"
-        case let .notConfigured(detail):
-            return detail
+        case let .notConfigured(issue):
+            return issue.englishDescription
+        case .busy:
+            return "Another AI request is already running. Wait for it to finish or cancel it."
+        case .emptyReply:
+            return "The AI command returned an empty reply."
         }
+    }
+}
+
+enum SubscriptionAIErrorDescription {
+    /// Localization key and `%@` arguments for a typed AI error. Only typed
+    /// errors are mapped; unknown errors keep their existing description.
+    static func mapping(for error: Error) -> (key: String, arguments: [String])? {
+        if error is CancellationError {
+            return ("aiError.cancelled", [])
+        }
+        if let error = error as? SubscriptionAIError {
+            switch error {
+            case .autocompleteNotSupported:
+                return ("aiError.autocompleteNotSupported", [])
+            case .pendingQuestion:
+                return ("aiError.pendingQuestion", [])
+            case let .notConfigured(issue):
+                return (issue.localizationKey, [])
+            case .busy:
+                return ("aiError.busy", [])
+            case .emptyReply:
+                return ("aiError.emptyReply", [])
+            }
+        }
+        if let error = error as? AgentCLIError {
+            switch error {
+            case let .invalidConfiguration(detail):
+                return ("aiError.invalidConfiguration", [detail])
+            case let .binaryNotFound(kind):
+                return ("aiError.binaryNotFound", [kind.executableName])
+            case let .launchFailed(detail):
+                return ("aiError.launchFailed", [detail])
+            case let .timedOut(seconds):
+                return ("aiError.timedOut", [String(Int(seconds.rounded()))])
+            case .cancelled:
+                return ("aiError.cancelled", [])
+            case let .runFailed(_, message, _):
+                return ("aiError.runFailed", [message])
+            case let .malformedOutput(_, detail):
+                return ("aiError.malformedOutput", [detail])
+            case let .outputTruncated(limit):
+                return ("aiError.outputTruncated", [String(limit)])
+            case let .projectNotFound(identifier):
+                return ("aiError.projectNotFound", [identifier])
+            case let .projectAlreadyExists(path):
+                return ("aiError.projectAlreadyExists", [path])
+            case let .projectNameLookupUnsupported(detail):
+                return ("aiError.projectNameLookupUnsupported", [detail])
+            case let .serverUnavailable(detail):
+                return ("aiError.serverUnavailable", [detail])
+            case .noProviderAvailable:
+                return ("aiError.noProviderAvailable", [])
+            }
+        }
+        return nil
+    }
+
+    static func localized(for error: Error, language: AppLanguage) -> String {
+        guard let mapping = mapping(for: error) else {
+            return error.localizedDescription
+        }
+        let format = L10n.tr(mapping.key, language: language)
+        guard !mapping.arguments.isEmpty else { return format }
+        return String(format: format, arguments: mapping.arguments.map { $0 as CVarArg })
     }
 }
 

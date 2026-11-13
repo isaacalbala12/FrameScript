@@ -77,7 +77,7 @@ struct SubscriptionAISettingsView: View {
                         Text(appState.localized("settings.ai.subscription.t3ProjectID"))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.secondaryText)
-                        TextField("", text: optionalText($store.settings.t3Project.id), prompt: Text(verbatim: "a1b2c3d4-…"))
+                        TextField("", text: projectIDBinding, prompt: Text(verbatim: "a1b2c3d4-…"))
                             .textFieldStyle(QuietTextFieldStyle())
                             .frame(width: 230)
                     }
@@ -86,7 +86,7 @@ struct SubscriptionAISettingsView: View {
                         Text(appState.localized("settings.ai.subscription.t3ProjectPath"))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.secondaryText)
-                        TextField("", text: optionalText($store.settings.t3Project.path), prompt: Text(verbatim: "~/Documents/FrameScript IA"))
+                        TextField("", text: projectPathBinding, prompt: Text(verbatim: "~/Documents/FrameScript IA"))
                             .textFieldStyle(QuietTextFieldStyle())
                             .frame(width: 230)
                         Button(appState.localized("settings.ai.subscription.chooseFolder")) {
@@ -155,7 +155,12 @@ struct SubscriptionAISettingsView: View {
                 Text(appState.localized("settings.ai.subscription.kind"))
                     .font(.system(size: 11))
                     .foregroundStyle(theme.secondaryText)
-                Picker("", selection: selection.kind) {
+                Picker("", selection: Binding(
+                    get: { selection.wrappedValue.kind },
+                    set: { newKind in
+                        selection.wrappedValue = selection.wrappedValue.selecting(kind: newKind)
+                    }
+                )) {
                     ForEach(AgentCLIKind.allCases, id: \.self) { kind in
                         Text(appState.localized("cliKind.\(kind.rawValue)")).tag(kind)
                     }
@@ -259,10 +264,17 @@ struct SubscriptionAISettingsView: View {
         }
     }
 
-    private func optionalText(_ binding: Binding<String?>) -> Binding<String> {
+    private var projectIDBinding: Binding<String> {
         Binding(
-            get: { binding.wrappedValue ?? "" },
-            set: { binding.wrappedValue = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            get: { store.settings.t3Project.id ?? "" },
+            set: { store.settings.updateProjectID($0) }
+        )
+    }
+
+    private var projectPathBinding: Binding<String> {
+        Binding(
+            get: { store.settings.t3Project.path ?? "" },
+            set: { store.settings.updateProjectPath($0) }
         )
     }
 
@@ -276,10 +288,7 @@ struct SubscriptionAISettingsView: View {
         panel.canCreateDirectories = true
         panel.prompt = appState.localized("settings.ai.subscription.chooseFolder")
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        store.settings.t3Project.path = url.path
-        if (store.settings.t3Project.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            store.settings.t3Project.name = "FrameScript IA"
-        }
+        store.settings.updateProjectPath(url.path)
     }
 
     private func requestCreateProject() {
@@ -324,35 +333,35 @@ struct SubscriptionAISettingsView: View {
     // MARK: Probe
 
     private func testConnection() async {
-        guard let problem = store.settings.defaultSelection.validationMessage else {
-            isTesting = true
-            defer { isTesting = false }
-            status = appState.localized("settings.ai.subscription.testing")
-            let result = await runtime.probe()
-            switch result {
-            case let .reply(text):
-                if text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().contains("OK") {
-                    status = appState.localized("settings.ai.subscription.probeSuccess")
-                } else {
-                    status = String(
-                        format: appState.localized("settings.ai.subscription.probeReply"),
-                        String(text.prefix(200))
-                    )
-                }
-            case .pending:
-                status = appState.localized("settings.ai.subscription.probePending")
-            case let .failure(message):
-                status = String(
-                    format: appState.localized("settings.ai.subscription.probeFailure"),
-                    message
-                )
-            }
+        if let issue = store.settings.defaultSelection.validationIssue {
+            status = String(
+                format: appState.localized("settings.ai.subscription.probeFailure"),
+                appState.localized(issue.localizationKey)
+            )
             return
         }
-        status = String(
-            format: appState.localized("settings.ai.subscription.probeFailure"),
-            problem
-        )
+        isTesting = true
+        defer { isTesting = false }
+        status = appState.localized("settings.ai.subscription.testing")
+        let result = await runtime.probe()
+        switch result {
+        case let .reply(text):
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().contains("OK") {
+                status = appState.localized("settings.ai.subscription.probeSuccess")
+            } else {
+                status = String(
+                    format: appState.localized("settings.ai.subscription.probeReply"),
+                    String(text.prefix(200))
+                )
+            }
+        case .pending:
+            status = appState.localized("settings.ai.subscription.probePending")
+        case let .failure(message):
+            status = String(
+                format: appState.localized("settings.ai.subscription.probeFailure"),
+                message
+            )
+        }
     }
 }
 
@@ -394,12 +403,14 @@ struct SubscriptionAIThreadControls: View {
                     .clickableCursor()
 
                     Button(appState.localized("settings.ai.subscription.newThread")) {
-                        appState.subscriptionAIResetThread(for: selection)
+                        runtime.resetThread(for: selection)
                         message = appState.localized("settings.ai.subscription.threadReset")
                     }
                     .font(.system(size: 11))
                     .buttonStyle(.borderless)
-                    .clickableCursor()
+                    .clickableCursor(enabled: !runtime.isRunning)
+                    .disabled(runtime.isRunning)
+                    .help(appState.localized("settings.ai.subscription.newThreadHelp"))
                 }
             } else {
                 Text(appState.localized("settings.ai.subscription.threadNone"))

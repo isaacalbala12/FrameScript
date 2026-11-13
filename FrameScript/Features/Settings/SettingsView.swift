@@ -775,20 +775,12 @@ private struct AISettings: View {
 
             SubscriptionAISettingsView()
         }
-        .task {
-            loadKeyMetadata()
-            // Keep the subscription default aligned with the provider picked
-            // above. Per-task overrides remain untouched.
-            if let kind = settings.aiPreferences.provider.agentCLIKind,
-               SubscriptionAISettingsStore.shared.settings.defaultSelection.kind != kind {
-                SubscriptionAISettingsStore.shared.settings.defaultSelection.kind = kind
-            }
-        }
+        .task { loadKeyMetadata() }
         .onChange(of: settings.aiPreferences.provider) { oldProvider, newProvider in
             saveProviderConfiguration(oldProvider)
             appState.autocompleteProviderDidChange(from: oldProvider, to: newProvider)
             if let kind = newProvider.agentCLIKind {
-                SubscriptionAISettingsStore.shared.settings.defaultSelection.kind = kind
+                SubscriptionAISettingsStore.shared.settings.setDefaultKind(kind)
             }
             apiKey = ""
             status = ""

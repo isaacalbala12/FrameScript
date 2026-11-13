@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import Observation
 @testable import FrameScript
 import XCTest
 
@@ -31,6 +32,36 @@ struct SubscriptionRecordingRunner: AgentCLIRunner {
 struct SubscriptionStubProbe: T3AvailabilityChecking {
     let available: Bool
     func isAvailable() async -> Bool { available }
+}
+
+@MainActor
+final class StaticSubscriptionRouterProvider: SubscriptionAIRouterProviding {
+    private let router: AgentCLIRouter
+
+    init(router: AgentCLIRouter) {
+        self.router = router
+    }
+
+    func makeRouter(
+        selection: SubscriptionAISelection,
+        settings: SubscriptionAISettings,
+        threadMapping: any T3ThreadMapping
+    ) async throws -> AgentCLIRouter {
+        router
+    }
+}
+
+actor SubscriptionObservationFlag {
+    private(set) var count = 0
+
+    func increment() {
+        count += 1
+    }
+}
+
+@MainActor
+final class BinariesCallCounter {
+    var calls: [Bool] = []
 }
 
 actor SubscriptionFakeLauncher: AgentProcessLaunching {
@@ -204,6 +235,61 @@ final class SubscriptionAIProviderTests: XCTestCase {
         XCTAssertEqual(settings.selection(for: .review).kind, .t3)
         XCTAssertEqual(settings.selection(for: .review).modelSlug, "default-model")
         XCTAssertFalse(settings.hasOverride(for: .review))
+    }
+
+    func testUseForAllRoundTripKeepsPerTaskOverrides() {
+        var settings = SubscriptionAISettings()
+        settings.setUseForAllTasks(false)
+        settings.setSelection(SubscriptionAISelection(kind: .claude, modelSlug: "opus"), for: .review)
+
+        settings.setUseForAllTasks(true)
+        XCTAssertEqual(settings.selection(for: .review).kind, .t3)
+
+        settings.setUseForAllTasks(false)
+        XCTAssertEqual(settings.selection(for: .review).kind, .claude)
+        XCTAssertEqual(settings.selection(for: .review).modelSlug, "opus")
+        XCTAssertTrue(settings.hasOverride(for: .review))
+    }
+
+    func testSwitchingProviderKindReplacesTheForeignModelBeforeLaunching() async throws {
+        var settings = SubscriptionAISettings()
+        settings.setDefaultKind(.claude)
+
+        XCTAssertEqual(settings.defaultSelection.kind, .claude)
+        XCTAssertEqual(settings.defaultSelection.trimmedModelSlug, "sonnet")
+        XCTAssertTrue(settings.defaultSelection.trimmedProviderInstanceID.isEmpty)
+        XCTAssertNil(settings.defaultSelection.validationIssue)
+
+        let recorder = SubscriptionRunnerRecorder()
+        let builder = SubscriptionTestRouterBuilder()
+        builder.claudeRunner = SubscriptionRecordingRunner(kind: .claude, recorder: recorder) { _ in
+            .completed(AgentCLIReply(provider: .claude, text: "rewrite"))
+        }
+        let subject = provider(settings: settings, builder: builder)
+
+        _ = try await subject.complete(request: llmRequest(task: .rewrite), apiKey: "")
+
+        let requests = await recorder.recordedRequests()
+        XCTAssertEqual(requests.first?.model.modelSlug, "sonnet")
+        XCTAssertNil(requests.first?.model.providerInstanceID)
+        XCTAssertFalse(requests.first?.model.modelSlug?.contains("/") == true)
+    }
+
+    func testChangingTheT3FolderClearsTheOldProjectIdentity() {
+        var settings = SubscriptionAISettings(
+            t3Project: T3ProjectReference(
+                id: "old-project",
+                path: "/tmp/old",
+                name: "Old"
+            )
+        )
+
+        settings.updateProjectPath("/tmp/new")
+
+        XCTAssertNil(settings.t3Project.id)
+        XCTAssertNil(settings.t3Project.name)
+        XCTAssertEqual(settings.t3Project.path, "/tmp/new")
+        XCTAssertEqual(settings.t3ProjectIdentifier, "/tmp/new")
     }
 
     func testAutocompleteNeverRoutesToACLI() async {
@@ -439,13 +525,59 @@ final class SubscriptionAIProviderTests: XCTestCase {
         let prober = SubscriptionAIProber(
             settings: SubscriptionAISettings(),
             context: .standalone(),
-            routerProvider: { selection in try await builder.make(selection) }
+            routerProvider: { selection, mapping in
+                builder.threadMapping = mapping
+                return try await builder.make(selection)
+            }
         )
 
         let reply = try await prober.probe(selection: .defaultT3)
         XCTAssertEqual(reply, "OK")
         let requests = await recorder.recordedRequests()
         XCTAssertEqual(requests.first?.prompt, "Reply with exactly: OK")
+    }
+
+    func testProbeUsesAThrowawayThreadAndNeverReusesOrRecordsAProjectThread() async throws {
+        let recorder = SubscriptionRunnerRecorder()
+        let builder = SubscriptionTestRouterBuilder()
+        builder.t3Runner = SubscriptionRecordingRunner(kind: .t3, recorder: recorder) { _ in
+            .completed(AgentCLIReply(provider: .t3, text: "OK", threadID: "probe-thread"))
+        }
+        let project = SampleData.defaultProject
+        var reads = 0
+        var writes = 0
+        let projectMapping = SubscriptionAIThreadMapping(
+            read: { _ in
+                reads += 1
+                return "project-thread"
+            },
+            write: { _, _ in writes += 1 }
+        )
+        XCTAssertNotNil(projectMapping)
+
+        var usedMappings: [any T3ThreadMapping] = []
+        let prober = SubscriptionAIProber(
+            settings: SubscriptionAISettings(),
+            context: SubscriptionAIContext(projectTitle: project.title, threadMapping: projectMapping),
+            routerProvider: { selection, mapping in
+                usedMappings.append(mapping)
+                builder.threadMapping = mapping
+                return try await builder.make(selection)
+            }
+        )
+
+        _ = try await prober.probe(selection: .defaultT3)
+        _ = try await prober.probe(selection: .defaultT3)
+
+        let requests = await recorder.recordedRequests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertNil(requests[0].threadID)
+        XCTAssertNil(requests[1].threadID, "A probe must never continue the project's review thread")
+        XCTAssertEqual(reads, 0, "A probe must not read the project's aiThreadMap")
+        XCTAssertEqual(writes, 0, "A probe must not record its test thread in the project")
+        XCTAssertEqual(usedMappings.count, 2)
+        XCTAssertTrue(usedMappings[0] is T3ThreadMapStore)
+        XCTAssertTrue(usedMappings[1] is T3ThreadMapStore)
     }
 
     func testThreadInspectorDecodesTheDeepLink() async throws {
@@ -462,6 +594,276 @@ final class SubscriptionAIProviderTests: XCTestCase {
             executable: URL(fileURLWithPath: "/usr/bin/t3")
         )
         XCTAssertEqual(url?.absoluteString, "https://app.t3.codes/threads/thread-1")
+    }
+
+    // MARK: Factory fallback
+
+    func testFactoryFallsBackToAnInstalledClaudeWhenT3IsMissing() async throws {
+        let launcher = SubscriptionFakeLauncher([Self.claudeSuccess("OK")])
+        let factory = SubscriptionAIRouterFactory(
+            binariesProvider: { _ in
+                AgentCLIBinaries(claude: URL(fileURLWithPath: "/usr/bin/claude"))
+            },
+            launcher: launcher
+        )
+        let settings = SubscriptionAISettings(
+            t3Project: T3ProjectReference(id: "t3-project", name: "FrameScript IA")
+        )
+
+        let router = try await factory.makeRouter(
+            selection: .defaultT3,
+            settings: settings,
+            threadMapping: T3ThreadMapStore()
+        )
+        let result = try await router.run(AgentCLIRequest(
+            prompt: "Reply with exactly: OK",
+            model: SubscriptionAISelection.defaultT3.agentModel,
+            timeout: 5
+        ))
+
+        XCTAssertEqual(result.reply?.text, "OK")
+        let requests = await launcher.recordedRequests()
+        XCTAssertEqual(requests.first?.arguments.first, "-p")
+    }
+
+    func testFactoryRefreshesBinaryDiscoveryOnceWhenTheSelectedCLIIsMissing() async throws {
+        let launcher = SubscriptionFakeLauncher([Self.claudeSuccess("OK")])
+        let counter = BinariesCallCounter()
+        let claudeURL = URL(fileURLWithPath: "/usr/bin/claude")
+        let factory = SubscriptionAIRouterFactory(
+            binariesProvider: { refresh in
+                counter.calls.append(refresh)
+                return refresh
+                    ? AgentCLIBinaries(claude: claudeURL)
+                    : AgentCLIBinaries()
+            },
+            launcher: launcher
+        )
+
+        let router = try await factory.makeRouter(
+            selection: .defaultT3,
+            settings: SubscriptionAISettings(t3Project: T3ProjectReference(id: "t3-project")),
+            threadMapping: T3ThreadMapStore()
+        )
+        _ = try await router.run(AgentCLIRequest(prompt: "OK", model: SubscriptionAISelection.defaultT3.agentModel, timeout: 5))
+
+        XCTAssertEqual(counter.calls, [false, true])
+    }
+
+    func testFactoryFallsBackWhenTheT3ProjectIsMissingButClaudeExists() async throws {
+        let launcher = SubscriptionFakeLauncher([Self.claudeSuccess("OK")])
+        let factory = SubscriptionAIRouterFactory(
+            binariesProvider: { _ in
+                AgentCLIBinaries(
+                    t3: URL(fileURLWithPath: "/usr/bin/t3"),
+                    claude: URL(fileURLWithPath: "/usr/bin/claude")
+                )
+            },
+            launcher: launcher
+        )
+
+        let router = try await factory.makeRouter(
+            selection: .defaultT3,
+            settings: SubscriptionAISettings(),
+            threadMapping: T3ThreadMapStore()
+        )
+        let result = try await router.run(AgentCLIRequest(
+            prompt: "OK",
+            model: SubscriptionAISelection.defaultT3.agentModel,
+            timeout: 5
+        ))
+
+        XCTAssertEqual(result.reply?.text, "OK")
+        let requests = await launcher.recordedRequests()
+        XCTAssertEqual(requests.first?.arguments.first, "-p")
+    }
+
+    func testFactoryReportsTheMissingT3ProjectWhenNoFallbackExists() async throws {
+        let factory = SubscriptionAIRouterFactory(
+            binariesProvider: { _ in
+                AgentCLIBinaries(t3: URL(fileURLWithPath: "/usr/bin/t3"))
+            },
+            launcher: SubscriptionFakeLauncher([])
+        )
+
+        do {
+            _ = try await factory.makeRouter(
+                selection: .defaultT3,
+                settings: SubscriptionAISettings(),
+                threadMapping: T3ThreadMapStore()
+            )
+            XCTFail("Expected a configuration error")
+        } catch let error as SubscriptionAIError {
+            XCTAssertEqual(error, .notConfigured(.t3ProjectMissing))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testFactoryWithNoBinariesLetsTheRouterReportNoProvider() async throws {
+        let factory = SubscriptionAIRouterFactory(
+            binariesProvider: { _ in AgentCLIBinaries() },
+            launcher: SubscriptionFakeLauncher([])
+        )
+        let router = try await factory.makeRouter(
+            selection: .defaultT3,
+            settings: SubscriptionAISettings(t3Project: T3ProjectReference(id: "t3-project")),
+            threadMapping: T3ThreadMapStore()
+        )
+
+        do {
+            _ = try await router.run(AgentCLIRequest(prompt: "OK", model: SubscriptionAISelection.defaultT3.agentModel, timeout: 5))
+            XCTFail("Expected noProviderAvailable")
+        } catch let error as AgentCLIError {
+            XCTAssertEqual(error, .noProviderAvailable)
+        }
+    }
+
+    // MARK: Runtime concurrency and exit-2
+
+    func testConcurrentRequestIsRejectedAndTheFirstRunKeepsItsCancelSlot() async throws {
+        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SubscriptionAISettingsStore(userDefaults: defaults)
+
+        let recorder = SubscriptionRunnerRecorder()
+        let runner = SubscriptionRecordingRunner(kind: .t3, recorder: recorder) { _ in
+            try await Task.sleep(for: .seconds(30))
+            return .completed(AgentCLIReply(provider: .t3, text: "late"))
+        }
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: runner,
+            t3Probe: SubscriptionStubProbe(available: true),
+            t3Model: SubscriptionAISelection.defaultT3.agentModel
+        )
+        let runtime = SubscriptionAIRuntime(
+            store: store,
+            routerFactory: StaticSubscriptionRouterProvider(router: router),
+            inspector: SubscriptionAIT3ThreadInspector(launcher: SubscriptionFakeLauncher([]))
+        )
+
+        let first = Task {
+            try await runtime.complete(request: llmRequest(task: .analyze))
+        }
+        let started = await waitUntil { runtime.isRunning }
+        XCTAssertTrue(started)
+
+        do {
+            _ = try await runtime.complete(request: llmRequest(task: .bRollGeneration))
+            XCTFail("Expected the second run to be refused")
+        } catch let error as SubscriptionAIError {
+            XCTAssertEqual(error, .busy)
+        }
+        XCTAssertTrue(runtime.isRunning, "The second run must not clear the first run's progress")
+
+        runtime.cancel()
+        do {
+            _ = try await first.value
+            XCTFail("Expected the first run to be cancelled")
+        } catch is CancellationError {
+            // Expected.
+        }
+        XCTAssertFalse(runtime.isRunning)
+        XCTAssertEqual(runtime.lastOutcome, .cancelled)
+    }
+
+    func testNewThreadIsRefusedWhileARunIsActive() async throws {
+        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let project = SampleData.defaultProject
+        let selection = SubscriptionAISettings.defaults.defaultSelection
+        let key = try XCTUnwrap(SubscriptionAIThreadKey.storageKey(for: selection))
+        project.aiThreadMap.threadIDsByProviderModel[key] = "thread-1"
+        let projectStore = ProjectStore(project: project)
+        projectStore.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
+        let appState = AppState(
+            projectStore: projectStore,
+            recentProjectStore: RecentProjectStore(userDefaults: defaults),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: defaults, key: "settings"),
+            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
+        )
+
+        let store = SubscriptionAISettingsStore(userDefaults: defaults)
+        let runner = SubscriptionRecordingRunner(kind: .t3, recorder: SubscriptionRunnerRecorder()) { _ in
+            try await Task.sleep(for: .seconds(30))
+            return .completed(AgentCLIReply(provider: .t3, text: "late"))
+        }
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: runner,
+            t3Probe: SubscriptionStubProbe(available: true),
+            t3Model: selection.agentModel
+        )
+        let runtime = SubscriptionAIRuntime(
+            store: store,
+            routerFactory: StaticSubscriptionRouterProvider(router: router),
+            inspector: SubscriptionAIT3ThreadInspector(launcher: SubscriptionFakeLauncher([]))
+        )
+        runtime.attach(appState: appState)
+
+        XCTAssertEqual(runtime.threadID(for: selection), "thread-1")
+        let run = Task {
+            try await runtime.complete(request: llmRequest(task: .analyze))
+        }
+        let started = await waitUntil { runtime.isRunning }
+        XCTAssertTrue(started)
+
+        runtime.resetThread(for: selection)
+        XCTAssertEqual(runtime.threadID(for: selection), "thread-1", "The in-flight run would record its thread again")
+
+        runtime.cancel()
+        _ = try? await run.value
+        XCTAssertFalse(runtime.isRunning)
+        runtime.resetThread(for: selection)
+        XCTAssertNil(runtime.threadID(for: selection))
+    }
+
+    func testExitTwoPopulatesTheObservedPendingPrompt() async throws {
+        let suiteName = "SubscriptionRuntime-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = SubscriptionAISettingsStore(userDefaults: defaults)
+
+        let question = AgentCLIPendingQuestion(
+            threadID: "pending-thread",
+            question: "Keep the cold open?"
+        )
+        let runner = SubscriptionRecordingRunner(kind: .t3, recorder: SubscriptionRunnerRecorder()) { _ in
+            .awaitingAnswer(question)
+        }
+        let router = AgentCLIRouter(
+            configuredProvider: .t3,
+            t3: runner,
+            t3Probe: SubscriptionStubProbe(available: true),
+            t3Model: SubscriptionAISelection.defaultT3.agentModel
+        )
+        let runtime = SubscriptionAIRuntime(
+            store: store,
+            routerFactory: StaticSubscriptionRouterProvider(router: router),
+            inspector: SubscriptionAIT3ThreadInspector(launcher: SubscriptionFakeLauncher([]))
+        )
+
+        let flag = SubscriptionObservationFlag()
+        withObservationTracking {
+            _ = runtime.pendingPrompt
+        } onChange: {
+            Task { await flag.increment() }
+        }
+
+        do {
+            _ = try await runtime.complete(request: llmRequest(task: .analyze))
+            XCTFail("Expected a pending question")
+        } catch SubscriptionAIError.pendingQuestion {
+            // Expected.
+        }
+
+        XCTAssertEqual(runtime.pendingPrompt?.question.question, "Keep the cold open?")
+        let observed = await waitForObservation(flag)
+        XCTAssertTrue(observed, "SwiftUI only presents the sheet when pendingPrompt is observable")
     }
 
     // MARK: Pure helpers
@@ -487,6 +889,24 @@ final class SubscriptionAIProviderTests: XCTestCase {
         XCTAssertTrue(russian.values.allSatisfy { !$0.isEmpty })
         XCTAssertTrue(spanish.values.allSatisfy { !$0.isEmpty })
         XCTAssertFalse(english["settings.ai.subscription.privacy", default: ""].isEmpty)
+    }
+
+    func testCLIErrorsAreLocalizedInTheAppLanguage() throws {
+        let russian = SubscriptionAIErrorDescription.localized(
+            for: AgentCLIError.binaryNotFound(.t3),
+            language: .russian
+        )
+        XCTAssertTrue(russian.contains("Не удалось найти"))
+        XCTAssertFalse(russian.contains("Could not find"))
+
+        let appError = try XCTUnwrap(AppError.ai(AgentCLIError.binaryNotFound(.t3)))
+        let presentation = appError.presentation(language: .russian)
+        XCTAssertTrue(presentation.message.contains("Не удалось найти"))
+        XCTAssertFalse(presentation.message.contains("Could not find"))
+
+        let configuration = try XCTUnwrap(AppError.ai(SubscriptionAIError.notConfigured(.t3ProjectMissing)))
+        XCTAssertTrue(configuration.presentation(language: .spanish).message.contains("No hay un proyecto"))
+        XCTAssertTrue(configuration.presentation(language: .russian).message.contains("Проект T3 Code не настроен"))
     }
 
     func testThreadStorageKeyRoundTrips() {
@@ -537,6 +957,30 @@ final class SubscriptionAIProviderTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("Runner was not called", file: file, line: line)
+    }
+
+    private func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if predicate() { return true }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private func waitForObservation(_ flag: SubscriptionObservationFlag) async -> Bool {
+        for _ in 0..<200 {
+            if await flag.count > 0 { return true }
+            await Task.yield()
+        }
+        return false
+    }
+
+    private static func claudeSuccess(_ text: String) -> AgentProcessOutput {
+        AgentProcessOutput(
+            standardOutput: Data(#"{"type":"result","subtype":"success","is_error":false,"result":"\#(text)","session_id":"session-1"}"#.utf8),
+            standardError: Data(),
+            exitCode: 0
+        )
     }
 
     private func makeProjectMapping(

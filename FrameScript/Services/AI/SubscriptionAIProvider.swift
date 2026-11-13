@@ -25,8 +25,8 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
 
         let task = SubscriptionAITask(request.task)
         let selection = settings.selection(for: task)
-        if let problem = selection.validationMessage {
-            throw SubscriptionAIError.notConfigured(problem)
+        if let issue = selection.validationIssue {
+            throw SubscriptionAIError.notConfigured(issue)
         }
 
         let router = try await routerProvider(selection)
@@ -49,7 +49,7 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
         case let .completed(reply):
             let text = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
-                throw LLMProviderError.malformedResponse("The AI command returned an empty reply.")
+                throw SubscriptionAIError.emptyReply
             }
             return LLMResponse(text: text)
         case let .awaitingAnswer(question):
@@ -76,15 +76,23 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
 
 @MainActor
 struct SubscriptionAIProber {
+    typealias RouterProvider = @MainActor (
+        SubscriptionAISelection,
+        any T3ThreadMapping
+    ) async throws -> AgentCLIRouter
+
     var settings: SubscriptionAISettings
     var context: SubscriptionAIContext
-    var routerProvider: SubscriptionAIProvider.RouterProvider
+    var routerProvider: RouterProvider
 
     func probe(selection: SubscriptionAISelection) async throws -> String {
-        if let problem = selection.validationMessage {
-            throw SubscriptionAIError.notConfigured(problem)
+        if let issue = selection.validationIssue {
+            throw SubscriptionAIError.notConfigured(issue)
         }
-        let router = try await routerProvider(selection)
+        // A probe is a throwaway conversation. It must never send "OK" into the
+        // project's review thread or store a test thread in `aiThreadMap`.
+        let probeMapping = T3ThreadMapStore()
+        let router = try await routerProvider(selection, probeMapping)
         let request = AgentCLIRequest(
             prompt: SubscriptionAIProvider.probePrompt,
             model: selection.agentModel,
@@ -110,18 +118,41 @@ struct SubscriptionAIProber {
 
 // MARK: - Router factory
 
-/// Builds a router per request from the configured selection. Binary discovery
-/// runs off the main thread and is cached for the process lifetime.
 @MainActor
-final class SubscriptionAIRouterFactory {
+protocol SubscriptionAIRouterProviding {
+    func makeRouter(
+        selection: SubscriptionAISelection,
+        settings: SubscriptionAISettings,
+        threadMapping: any T3ThreadMapping
+    ) async throws -> AgentCLIRouter
+}
+
+/// Builds a router per request from the configured selection. Binary discovery
+/// runs off the main thread and is cached; a missing selected binary triggers
+/// one refresh so installing a CLI does not need an app restart.
+@MainActor
+final class SubscriptionAIRouterFactory: SubscriptionAIRouterProviding {
+    typealias BinariesProvider = @MainActor (_ refresh: Bool) async -> AgentCLIBinaries
+
+    private let binariesProvider: BinariesProvider
     private let launcher: any AgentProcessLaunching
-    private let toolchain: SubscriptionAIToolchain
 
     init(
         toolchain: SubscriptionAIToolchain = .shared,
         launcher: any AgentProcessLaunching = SystemAgentProcessLauncher()
     ) {
-        self.toolchain = toolchain
+        self.binariesProvider = { refresh in
+            await toolchain.binaries(refresh: refresh)
+        }
+        self.launcher = launcher
+    }
+
+    /// Test seam: fixed or scripted binaries without touching the filesystem.
+    init(
+        binariesProvider: @escaping BinariesProvider,
+        launcher: any AgentProcessLaunching = SystemAgentProcessLauncher()
+    ) {
+        self.binariesProvider = binariesProvider
         self.launcher = launcher
     }
 
@@ -130,13 +161,19 @@ final class SubscriptionAIRouterFactory {
         settings: SubscriptionAISettings,
         threadMapping: any T3ThreadMapping
     ) async throws -> AgentCLIRouter {
-        if let problem = selection.validationMessage {
-            throw SubscriptionAIError.notConfigured(problem)
+        if let issue = selection.validationIssue {
+            throw SubscriptionAIError.notConfigured(issue)
         }
-        let binaries = await toolchain.binaries()
 
+        var binaries = await binariesProvider(false)
+        if binaries.url(for: selection.kind) == nil {
+            // One refresh catches a CLI installed after launch.
+            binaries = await binariesProvider(true)
+        }
+
+        let projectConfigured = settings.t3ProjectIdentifier != nil
         let t3Runner: T3Runner? = {
-            guard let executable = binaries.t3 else { return nil }
+            guard let executable = binaries.t3, projectConfigured else { return nil }
             return T3Runner(
                 configuration: T3Configuration(
                     executable: executable,
@@ -149,59 +186,65 @@ final class SubscriptionAIRouterFactory {
         let claudeRunner = binaries.claude.map { ClaudeCLIRunner(executable: $0, launcher: launcher) }
         let codexRunner = binaries.codex.map { CodexCLIRunner(executable: $0, launcher: launcher) }
         let probe: T3ServerProbe? = {
-            guard let executable = binaries.t3, settings.t3ProjectIdentifier != nil else { return nil }
+            guard let executable = binaries.t3, projectConfigured else { return nil }
             return T3ServerProbe(executable: executable, project: settings.t3Project)
         }()
 
-        switch selection.kind {
-        case .t3:
-            guard settings.t3ProjectIdentifier != nil else {
-                throw SubscriptionAIError.notConfigured(
-                    "No T3 Code project is configured. Choose the T3 project id or folder in Settings."
-                )
+        let available: [AgentCLIKind: Bool] = [
+            .t3: t3Runner != nil,
+            .claude: claudeRunner != nil,
+            .codex: codexRunner != nil
+        ]
+        let configuredProvider: AgentCLIKind
+        if available[selection.kind] == true {
+            configuredProvider = selection.kind
+        } else if let fallback = [AgentCLIKind.t3, .claude, .codex].first(where: { available[$0] == true }) {
+            // The selected CLI is missing: let the router use another installed
+            // subscription instead of failing before it can fall back.
+            configuredProvider = fallback
+        } else {
+            guard !(selection.kind == .t3 && binaries.t3 != nil && !projectConfigured) else {
+                throw SubscriptionAIError.notConfigured(.t3ProjectMissing)
             }
-            guard let t3Runner else {
-                throw AgentCLIError.binaryNotFound(.t3)
-            }
-            return AgentCLIRouter(
-                configuredProvider: .t3,
-                t3: t3Runner,
-                claude: claudeRunner,
-                codex: codexRunner,
-                t3Probe: probe,
-                t3ThreadMap: threadMapping,
-                t3Model: selection.agentModel,
-                claudeModelSlug: claudeModelSlug(settings: settings),
-                codexModelSlug: codexModelSlug(settings: settings),
-                fallbackOrder: [.claude, .codex]
-            )
-
-        case .claude:
-            guard let claudeRunner else {
-                throw AgentCLIError.binaryNotFound(.claude)
-            }
-            return AgentCLIRouter(
-                configuredProvider: .claude,
-                claude: claudeRunner,
-                codex: codexRunner,
-                claudeModelSlug: selection.trimmedModelSlug,
-                codexModelSlug: codexModelSlug(settings: settings),
-                fallbackOrder: [.claude, .codex]
-            )
-
-        case .codex:
-            guard let codexRunner else {
-                throw AgentCLIError.binaryNotFound(.codex)
-            }
-            return AgentCLIRouter(
-                configuredProvider: .codex,
-                claude: claudeRunner,
-                codex: codexRunner,
-                claudeModelSlug: claudeModelSlug(settings: settings),
-                codexModelSlug: selection.trimmedModelSlug,
-                fallbackOrder: [.codex, .claude]
-            )
+            configuredProvider = selection.kind
         }
+
+        let t3Model: AgentCLIModelSelection? = {
+            let base: SubscriptionAISelection = {
+                if selection.kind == .t3 { return selection }
+                if settings.defaultSelection.kind == .t3 { return settings.defaultSelection }
+                return .defaultT3
+            }()
+            return base.agentModel
+        }()
+
+        let claudeSlug = selection.kind == .claude
+            ? selection.trimmedModelSlug
+            : claudeModelSlug(settings: settings)
+        let codexSlug = selection.kind == .codex
+            ? selection.trimmedModelSlug
+            : codexModelSlug(settings: settings)
+
+        let fallbackOrder: [AgentCLIKind] = {
+            switch configuredProvider {
+            case .claude: [.claude, .codex]
+            case .codex: [.codex, .claude]
+            case .t3: [.claude, .codex]
+            }
+        }()
+
+        return AgentCLIRouter(
+            configuredProvider: configuredProvider,
+            t3: t3Runner,
+            claude: claudeRunner,
+            codex: codexRunner,
+            t3Probe: probe,
+            t3ThreadMap: configuredProvider == .t3 ? threadMapping : nil,
+            t3Model: t3Model,
+            claudeModelSlug: claudeSlug,
+            codexModelSlug: codexSlug,
+            fallbackOrder: fallbackOrder
+        )
     }
 
     private func claudeModelSlug(settings: SubscriptionAISettings) -> String? {
@@ -242,8 +285,8 @@ final class SubscriptionAIToolchain {
         return located
     }
 
-    func requireT3() async throws -> URL {
-        guard let executable = await binaries().t3 else {
+    func requireT3(refresh: Bool = true) async throws -> URL {
+        guard let executable = await binaries(refresh: refresh).t3 else {
             throw AgentCLIError.binaryNotFound(.t3)
         }
         return executable
