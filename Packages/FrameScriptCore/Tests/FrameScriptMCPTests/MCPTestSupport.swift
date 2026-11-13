@@ -86,7 +86,7 @@ extension JSONValue {
 
 final class MCPTestHarness {
     let channel: MCPInMemoryChannel
-    let serverTask: Task<Void, Never>
+    let serverTask: Task<MCPServerRunOutcome, Never>
 
     init(
         registry: MCPToolRegistry,

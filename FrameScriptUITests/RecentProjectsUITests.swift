@@ -2,21 +2,24 @@ import XCTest
 
 @MainActor
 final class RecentProjectsUITests: XCTestCase {
+    nonisolated(unsafe) private var projectDirectory: URL!
     nonisolated(unsafe) private var projectURL: URL!
     nonisolated(unsafe) private var projectName: String!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         projectName = "RecentUITest-\(UUID().uuidString.prefix(8))"
-        let appDocumentsDirectory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Containers/com.drashko.FrameScript/Data/Documents", isDirectory: true)
-        try FileManager.default.createDirectory(at: appDocumentsDirectory, withIntermediateDirectories: true)
-        projectURL = appDocumentsDirectory.appendingPathComponent("\(projectName!).fscr")
+        // The UI test must never write into the real app container. The app
+        // reads this path from --framescript-ui-test-recent-path.
+        projectDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FrameScriptRecentProjectsUITests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        projectURL = projectDirectory.appendingPathComponent("\(projectName!).fscr")
         try Data("FrameScript UI test".utf8).write(to: projectURL)
     }
 
     override func tearDownWithError() throws {
-        if let projectURL { try? FileManager.default.removeItem(at: projectURL) }
+        if let projectDirectory { try? FileManager.default.removeItem(at: projectDirectory) }
     }
 
     func testContextMenuRemovalUpdatesWelcomeAndOpenRecentWithoutDeletingFile() throws {
@@ -77,16 +80,20 @@ final class RecentProjectsUITests: XCTestCase {
         XCTAssertTrue(focused.evaluate(with: row), row.debugDescription)
     }
 
-    func testExternalDeletionIsRemovedOnReactivationWithoutGenericOpenError() throws {
+    func testExternalDeletionIsRemovedWhenTheBrowserReturnsWithoutGenericOpenError() throws {
         let app = launchApp()
         let row = recentRow(in: app)
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        XCUIApplication(bundleIdentifier: "com.apple.finder").activate()
         try FileManager.default.removeItem(at: projectURL)
 
-        app.activate()
+        // Re-enter the project browser the way a user would. The browser runs
+        // its recents validation on appear, so no activation of Finder or the
+        // app is needed (which would foreground other apps on this Mac).
+        app.buttons["welcome-new-blank-project"].click()
+        app.menuBars.menuBarItems["File"].click()
+        app.menuItems["Back to Project List"].click()
 
-        XCTAssertFalse(row.waitForExistence(timeout: 3))
+        XCTAssertFalse(row.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Could not open project."].exists)
         assertOpenRecentDoesNotContainProject(in: app)
     }

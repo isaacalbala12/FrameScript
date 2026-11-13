@@ -839,18 +839,4 @@ final class DurationTests: FrameScriptTestCase {
             .appendingPathComponent("DurationTests-\(UUID().uuidString).fscr")
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        _ condition: @escaping @MainActor () -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let start = clock.now
-        while !condition() {
-            guard clock.now - start < timeout else {
-                XCTFail("Timed out waiting for condition")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 }

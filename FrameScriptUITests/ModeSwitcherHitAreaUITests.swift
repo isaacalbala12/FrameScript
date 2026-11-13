@@ -26,6 +26,13 @@ final class ModeSwitcherHitAreaUITests: XCTestCase {
         )
     }
 
+    func testSpanishHitAreasAndMetrics() throws {
+        try verifyHitAreasAndMetrics(
+            languageArgument: "--framescript-ui-test-language-spanish",
+            expectedVisualsTitle: "Visuales"
+        )
+    }
+
     private func verifyHitAreasAndMetrics(languageArgument: String, expectedVisualsTitle: String) throws {
         let app = XCUIApplication()
         app.launchArguments = ["--framescript-ui-test-open-demo", languageArgument]

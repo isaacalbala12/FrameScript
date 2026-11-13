@@ -48,7 +48,9 @@ final class AutosaveTests: FrameScriptTestCase {
         XCTAssertEqual(appState.saveState, .edited)
         XCTAssertTrue(appState.projectStore.hasUnsavedFileChanges)
 
-        try await Task.sleep(for: .milliseconds(5_000))
+        try await waitUntil("autosave after the configured interval", timeout: .seconds(15)) {
+            recorder.count == 1
+        }
 
         XCTAssertEqual(recorder.count, 1)
         XCTAssertEqual(appState.saveState, .saved)
@@ -76,10 +78,9 @@ final class AutosaveTests: FrameScriptTestCase {
 
         appState.selectScene(second.id)
 
-        XCTAssertEqual(
-            first.estimatedDuration,
-            DurationEstimator.estimate(text: "one two three four", wordsPerMinute: 150)
-        )
+        // 4 words at 150 wpm = 1.6 s. Keep a literal so the assertion does not
+        // move with a broken DurationEstimator.
+        XCTAssertEqual(first.estimatedDuration, 1.6, accuracy: 0.0001)
         XCTAssertEqual(recorder.count, 1)
         XCTAssertEqual(appState.saveState, .saved)
         XCTAssertEqual(recorder.lastWrittenProject?.scenes.first(where: { $0.id == first.id })?.scriptText, "one two three four")

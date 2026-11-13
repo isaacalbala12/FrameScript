@@ -126,12 +126,20 @@ struct TimecodeTests {
     func roundTripProperty() {
         for rate in FrameRate.all {
             for drop in [false, true] where !drop || rate.supportsDropFrame {
-                for frame in stride(from: 0, through: 30_000, by: 1) {
-                    let text = Timecode(frames: frame).string(rate: rate, dropFrame: drop)
-                    let parsed = Timecode(string: text, rate: rate)
-                    #expect(parsed?.frames == frame, "\(rate) drop=\(drop) frame=\(frame) text=\(text)")
+                // Sample the range plus every second/minute/hour boundary.
+                // Exhaustively checking all 30,001 values made this test 60–90 %
+                // of the Core suite runtime; the boundary math is what matters.
+                let fps = rate.nominalFPS
+                var samples = Set(stride(from: 0, through: 30_000, by: 7))
+                for boundary in [
+                    fps, 1_799, 1_800, 60 * fps, 3_600 * fps,
+                    90_000, 107_891, 107_892, 215_784,
+                ] {
+                    for offset in -2...2 where boundary + offset >= 0 {
+                        samples.insert(boundary + offset)
+                    }
                 }
-                for frame in [90_000, 107_892, 215_784] {
+                for frame in samples.sorted() {
                     let text = Timecode(frames: frame).string(rate: rate, dropFrame: drop)
                     let parsed = Timecode(string: text, rate: rate)
                     #expect(parsed?.frames == frame, "\(rate) drop=\(drop) frame=\(frame) text=\(text)")

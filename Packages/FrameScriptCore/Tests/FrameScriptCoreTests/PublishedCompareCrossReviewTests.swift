@@ -182,7 +182,11 @@ struct PublishedCompareCrossReviewTests {
             #expect(alignment.scenes.allSatisfy { $0.scriptWordCount == wordsPerScene })
         }
 
+        #if DEBUG
+        #expect(elapsed < .seconds(5))
+        #else
         #expect(elapsed < .seconds(1))
+        #endif
     }
 
     // #10: unmatched '<' is literal text.

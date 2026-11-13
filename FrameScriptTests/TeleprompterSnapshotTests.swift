@@ -12,7 +12,7 @@ import XCTest
 /// `/tmp/fs-snapshots/teleprompter/`. The PNGs are the visual evidence for a
 /// human reviewer; the assertions below run with or without them.
 @MainActor
-final class TeleprompterSnapshotTests: XCTestCase {
+final class TeleprompterSnapshotTests: FrameScriptTestCase {
     private let viewport = CGSize(width: 1512, height: 949)
     private let outputDirectory = "/tmp/fs-snapshots/teleprompter"
 
@@ -124,7 +124,7 @@ final class TeleprompterSnapshotTests: XCTestCase {
 
     func testOpenWindowRebuildsStringsWhenLanguageChanges() throws {
         let language = LanguageBox(.spanish)
-        let harness = try Harness(
+        let harness = Harness(
             scenes: Fixtures.reportedProject(),
             start: 0,
             viewport: viewport,
@@ -162,7 +162,7 @@ final class TeleprompterSnapshotTests: XCTestCase {
         appearance: NSAppearance.Name = .darkAqua,
         configure: ((Harness) -> Void)? = nil
     ) throws {
-        let harness = try Harness(
+        let harness = Harness(
             scenes: scenes,
             start: start,
             viewport: viewport,
@@ -259,8 +259,8 @@ final class TeleprompterSnapshotTests: XCTestCase {
         let model: TeleprompterModel
         private let window: NSWindow
         private let hostingView: NSHostingView<AnyView>
-        private let defaults: UserDefaults
-        private let suiteName: String
+        private let testDefaults: TestDefaults
+        private var defaults: UserDefaults { testDefaults.defaults }
 
         init(
             scenes: [TeleprompterSceneText],
@@ -268,10 +268,9 @@ final class TeleprompterSnapshotTests: XCTestCase {
             viewport: CGSize,
             appearance: NSAppearance.Name,
             languageProvider: (@MainActor () -> AppLanguage)? = nil
-        ) throws {
-            suiteName = "TeleprompterSnapshot-\(UUID().uuidString)"
-            defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-            let settingsStore = TeleprompterSettingsStore(userDefaults: defaults)
+        ) {
+            testDefaults = TestDefaults.make()
+            let settingsStore = TeleprompterSettingsStore(userDefaults: testDefaults.defaults)
             settingsStore.save(
                 TeleprompterSettings(
                     wordsPerMinute: 150,
@@ -372,7 +371,7 @@ final class TeleprompterSnapshotTests: XCTestCase {
             window.orderOut(nil)
             window.contentView = nil
             window.close()
-            defaults.removePersistentDomain(forName: suiteName)
+            testDefaults.cleanup()
         }
     }
 }

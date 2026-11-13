@@ -937,20 +937,6 @@ final class EditorMarkupTests: FrameScriptTestCase {
         )
     }
 
-    private func waitUntil(
-        timeout: Duration = .seconds(3),
-        _ condition: @escaping @MainActor () -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let start = clock.now
-        while !condition() {
-            guard clock.now - start < timeout else {
-                XCTFail("Timed out waiting for condition")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
 
     private func assertSortedAndNonOverlapping(
         _ runs: [MarkupHighlightRun],

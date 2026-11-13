@@ -269,6 +269,25 @@ struct ToolTests {
         }
     }
 
+    @Test("null arguments are treated as an empty object")
+    func nullArgumentsBecomeEmptyObject() async throws {
+        try await withHarness(try TestTools.standard()) { harness in
+            _ = try await harness.performInitialize()
+            try harness.send(RPC.request(
+                id: 3,
+                method: "tools/call",
+                params: .object([
+                    "name": .string("framescript_version"),
+                    "arguments": .null
+                ])
+            ))
+            let response = try await harness.nextResponse()
+            #expect(response.rpcError == nil)
+            #expect(response.resultIsError == false)
+            #expect(response.firstTextContent == "test-version")
+        }
+    }
+
     @Test("registration accepts valid schemas")
     func registrationAcceptsValidSchemas() throws {
         let registry = try TestTools.standard()

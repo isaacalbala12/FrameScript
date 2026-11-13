@@ -1234,9 +1234,14 @@ struct ScriptMarkupPerformanceTests {
         let milliseconds = MarkupTestSupport.milliseconds(best)
         print("parse 20k words: \(String(format: "%.2f", milliseconds)) ms, \(tokenCount) tokens")
 
+        #if DEBUG
+        let limit = Duration.milliseconds(250)
+        #else
+        let limit = Duration.milliseconds(50)
+        #endif
         #expect(tokenCount > 500)
         #expect(ScriptMarkup.spokenWordCount(script) == 20_000)
-        #expect(best < .milliseconds(50))
+        #expect(best < limit)
     }
 
     @Test func twentyThousandUnmatchedEmphasisOpenersStayLinear() {

@@ -443,18 +443,4 @@ final class ProjectFileChangeDetectionTests: FrameScriptTestCase {
         return directory.appendingPathComponent("Project.fscr")
     }
 
-    private func waitUntil(
-        _ description: String,
-        timeout: Duration = .seconds(4),
-        condition: @MainActor () -> Bool
-    ) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition() {
-            if ContinuousClock.now > deadline {
-                XCTFail("Timed out waiting for \(description)")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-    }
 }

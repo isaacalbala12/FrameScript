@@ -51,7 +51,7 @@ final class DemoProjectTests: FrameScriptTestCase {
         XCTAssertFalse(store.hasOpenProject)
     }
 
-    func testDemoEditsDoNotAutosave() async throws {
+    func testDemoEditsDoNotAutosave() throws {
         let demo = SampleData.demoProject(language: .english)
         var writes = 0
         let store = ProjectStore(project: demo) { _, _ in writes += 1 }
@@ -59,9 +59,12 @@ final class DemoProjectTests: FrameScriptTestCase {
         let appState = makeAppState(store: store)
 
         appState.touchProject()
+        // Trigger the real autosave entry point instead of sleeping: the
+        // configured interval is clamped to 5…120 s, so the old 140 ms sleep
+        // could never observe a write even if the demo guard were removed.
+        appState.performAutosave()
         appState.flushForApplicationResignation()
         appState.flushForWindowClose()
-        try await Task.sleep(for: .milliseconds(140))
 
         XCTAssertEqual(writes, 0)
         XCTAssertTrue(store.hasUnsavedFileChanges)
@@ -183,6 +186,11 @@ final class DemoProjectTests: FrameScriptTestCase {
     }
 
     private func temporaryProjectURL() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("DemoProjectTests-\(UUID().uuidString).fscr")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DemoProjectTests-\(UUID().uuidString).fscr")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
     }
 }
