@@ -52,11 +52,24 @@ FrameScript/
   Models/              Document models, settings, templates, demo data
   Services/            AI, export, file storage, Keychain
   Assets.xcassets      App icon and assets
+Packages/FrameScriptCore/
+  Package.swift
+  Sources/FrameScriptCore/   UI-free models, document codec, markup, exports
+  Sources/FrameScriptMCP/    MCP server, tools and transports
+  Sources/framescript/       `framescript` CLI (mcp, --version, --help)
+  Tests/                     Swift Testing suites for the package
 docs/
   banner.webp          README banner
+  format/              `.fscr` format guide and JSON Schema
 scripts/
   package-release.sh   Verified DMG/ZIP release packaging
 ```
+
+`FrameScript` depends on `Packages/FrameScriptCore`; the package never imports
+SwiftUI or AppKit. Keep UI-free logic (document models, codecs, markup and export
+rendering) in `FrameScriptCore` so the app, the tests, the CLI and the MCP server
+share one implementation. The app-only `FrameScript/Core/` folder holds UI
+utilities such as theme and localization.
 
 Built-in templates are defined in `FrameScript/Models/SampleData.swift`.
 

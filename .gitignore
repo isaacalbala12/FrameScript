@@ -27,3 +27,6 @@ repomix-output.md
 # Swift package build output
 Packages/*/.build/
 Packages/*/.swiftpm/
+
+# Local codebase-memory index
+.codebase-memory/
