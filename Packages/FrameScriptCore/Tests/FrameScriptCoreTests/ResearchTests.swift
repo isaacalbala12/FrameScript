@@ -505,9 +505,16 @@ struct ResearchTests {
         )
 
         let appendix = ResearchExport.markdownAppendix(project: project)
+        let expectedDay = {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter.string(from: Date(timeIntervalSince1970: 1_700_000_000))
+        }()
 
         #expect(appendix.hasPrefix("## Fuentes y verificación"))
-        #expect(appendix.contains("**Timing oficial** — oficial · fiabilidad alta · 2023-11-14 — https://example.com/source"))
+        #expect(appendix.contains("**Timing oficial** — oficial · fiabilidad alta · \(expectedDay) — https://example.com/source"))
         #expect(appendix.contains("Página de resultados."))
         #expect(appendix.contains("**Confirmada** — El récord es 1:42.3"))
         #expect(appendix.contains("Fuentes: Timing oficial · Escenas: Vuelta rápida"))

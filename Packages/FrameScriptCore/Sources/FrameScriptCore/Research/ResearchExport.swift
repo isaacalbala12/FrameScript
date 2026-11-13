@@ -278,7 +278,9 @@ public enum ResearchExport {
     private static func formattedDay(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        // Source dates are calendar dates, not instants: format in the user's
+        // time zone so a date picked at local midnight does not move a day.
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
