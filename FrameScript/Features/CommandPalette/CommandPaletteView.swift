@@ -2,73 +2,45 @@ import SwiftUI
 
 struct CommandPaletteView: View {
     @Environment(AppState.self) private var appState
+    @Environment(EscaletaImportCoordinator.self) private var escaletaImport
     @Environment(\.dismiss) private var dismiss
     @Environment(\.frameTheme) private var theme
     @Environment(\.openSettings) private var openSettings
-    @State private var query = ""
+    @State private var query: String
     @State private var selectedIndex = 0
     @FocusState private var isSearchFocused: Bool
 
-    private var commandResults: [PaletteResult] {
-        [
-            PaletteResult(title: appState.localized("command.switchScript"), detail: shortcut(.scriptMode)) {
-                appState.selectMode(.script)
-            },
-            PaletteResult(title: appState.localized("command.switchBRoll"), detail: shortcut(.visualsMode)) {
-                appState.selectMode(.bRoll)
-            },
-            PaletteResult(title: appState.localized("command.switchEditing"), detail: shortcut(.editingMode)) {
-                appState.selectMode(.editing)
-            },
-            PaletteResult(title: appState.localized("menu.teleprompter"), detail: shortcut(.teleprompter)) {
-                appState.presentTeleprompter()
-            },
-            PaletteResult(title: appState.localized("scene.add"), detail: shortcut(.addScene), action: appState.addScene),
-            PaletteResult(title: appState.localized("scene.duplicate"), detail: shortcut(.duplicateScene), action: appState.duplicateSelectedScene),
-            PaletteResult(title: appState.localized("scene.delete"), detail: shortcut(.deleteScene), action: appState.deleteSelectedScene),
-            PaletteResult(title: appState.localized("ai.analyzeCurrentScene"), detail: shortcut(.analyzeCurrentScene)) {
-                appState.settings.editorPreferences.showAIReviewPanel = true
-                Task { await appState.analyzeSelectedScene() }
-            },
-            PaletteResult(title: appState.localized("menu.generateHook"), detail: shortcut(.generateHook)) {
-                HookSheetPresenter.shared.presentAfterPaletteDismissal(.hook)
-            },
-            PaletteResult(title: appState.localized("menu.suggestRehooks"), detail: shortcut(.suggestRehooks)) {
-                HookSheetPresenter.shared.presentAfterPaletteDismissal(.rehook)
-            },
-            PaletteResult(title: appState.localized("command.openSettings"), detail: shortcut(.openSettings), action: {
-                appState.openSettings(tab: .general)
-                openSettings()
-            }),
-            PaletteResult(title: appState.localized("command.toggleFocus"), detail: shortcut(.toggleFocusMode)) {
-                appState.isFocusModeEnabled.toggle()
-            },
-            PaletteResult(title: appState.localized("command.toggleSidebar"), detail: shortcut(.toggleContentsPanel)) {
-                appState.isSidebarVisible.toggle()
-            },
-            PaletteResult(title: appState.localized("command.toggleAIReview"), detail: shortcut(.toggleAIReview)) {
-                appState.settings.editorPreferences.showAIReviewPanel.toggle()
-            },
-            PaletteResult(title: appState.localized("recording.menu.recordTake"), detail: shortcut(.recordTake)) {
-                appState.toggleRecordingTake()
-            },
-            PaletteResult(title: appState.localized("recording.menu.togglePanel"), detail: shortcut(.toggleRecordingPanel)) {
-                appState.recording.isPanelVisible.toggle()
-            },
-            PaletteResult(title: appState.localized("recording.obs.settings"), detail: "") {
-                appState.recording.isSettingsPresented = true
-            },
-            PaletteResult(title: appState.localized("project.browser"), detail: "") {
-                appState.returnToProjectList()
-            },
-            PaletteResult(title: appState.localized("command.showShortcuts"), detail: shortcut(.showShortcuts)) {
-                appState.isShortcutsPresented = true
-            }
-        ]
+    /// Seeds the search field so the empty-result state can be rendered in a
+    /// snapshot. Production always starts empty.
+    init(initialQuery: String = "") {
+        _query = State(initialValue: initialQuery)
     }
 
-    private func shortcut(_ command: ShortcutCommand) -> String {
-        appState.shortcutDisplay(for: command)
+    private var commandResults: [PaletteResult] {
+        let availability = CommandAvailability(appState: appState)
+        var results = PaletteCatalog.commands
+            .filter { PaletteCatalog.isAvailable($0, availability: availability) }
+            .map { command in
+                PaletteResult(
+                    id: "command:\(command.rawValue)",
+                    title: appState.localized(command.definition.localizationKey),
+                    detail: appState.shortcutDisplay(for: command)
+                ) {
+                    perform(command)
+                }
+            }
+
+        if availability.canOpenOBSSettings {
+            results.append(PaletteResult(title: appState.localized("recording.obs.settings"), detail: "") {
+                appState.recording.isSettingsPresented = true
+            })
+        }
+        if availability.canCloseProject {
+            results.append(PaletteResult(title: appState.localized("project.browser"), detail: "") {
+                appState.returnToProjectList()
+            })
+        }
+        return results
     }
 
     private var settingResults: [PaletteResult] {
@@ -115,36 +87,40 @@ struct CommandPaletteView: View {
             Divider()
                 .overlay(theme.divider)
 
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
-                        Button {
-                            run(result)
-                        } label: {
-                            HStack {
-                                Text(result.title)
-                                    .font(.system(size: 14))
-                                Spacer()
-                                Text(result.detail)
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                                    .foregroundStyle(theme.secondaryText)
+            if results.isEmpty {
+                emptyResults
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                            Button {
+                                run(result)
+                            } label: {
+                                HStack {
+                                    Text(result.title)
+                                        .font(.system(size: 14))
+                                    Spacer()
+                                    Text(result.detail)
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .foregroundStyle(theme.secondaryText)
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(height: 38)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(index == selectedIndex ? theme.selection : Color.clear)
+                                }
                             }
-                            .padding(.horizontal, 14)
-                            .frame(height: 38)
-                            .background {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(index == selectedIndex ? theme.selection : Color.clear)
-                            }
-                        }
-                        .buttonStyle(.cursorPlain)
-                        .onHover { hovering in
-                            if hovering {
-                                selectedIndex = index
+                            .buttonStyle(.cursorPlain)
+                            .onHover { hovering in
+                                if hovering {
+                                    selectedIndex = index
+                                }
                             }
                         }
                     }
+                    .padding(8)
                 }
-                .padding(8)
             }
         }
         .frame(width: 560, height: 420)
@@ -172,6 +148,27 @@ struct CommandPaletteView: View {
         }
     }
 
+    /// An empty query always matches at least one command, so this is the
+    /// "nothing matches your search" state (uiux 8).
+    private var emptyResults: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Text(String(format: appState.localized("command.noResults"), query))
+                .font(.system(size: 14))
+                .foregroundStyle(theme.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(appState.localized("command.clearSearch")) {
+                query = ""
+            }
+            .buttonStyle(.bordered)
+            .clickableCursor()
+            Spacer()
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func settingResult(tab: SettingsTab, key: String?, titleKey: String) -> PaletteResult {
         settingResult(tab: tab, key: key, title: appState.localized(titleKey))
     }
@@ -197,6 +194,79 @@ struct CommandPaletteView: View {
     private func run(_ result: PaletteResult) {
         result.action()
         dismiss()
+    }
+
+    /// One action per `ShortcutCommand`. Exhaustive on purpose: adding a command
+    /// without a palette action becomes a compile error.
+    private func perform(_ command: ShortcutCommand) {
+        switch command {
+        case .newProject:
+            appState.requestNewProject()
+        case .newProjectFromTemplate:
+            appState.requestNewProject(showsTemplateBrowser: true)
+        case .openProject:
+            appState.openProject()
+        case .import:
+            appState.openDemoProject()
+        case .save:
+            appState.saveProject()
+        case .saveAs:
+            appState.saveProjectAs()
+        case .export:
+            PaletteActionHandoff.shared.opensExport = true
+        case .importEscaleta:
+            escaletaImport.chooseFile(appState: appState)
+        case .exportEscaleta:
+            appState.exportEscaletaMarkdown()
+        case .showBackups:
+            appState.showBackupsWindow()
+        case .addScene:
+            appState.addScene()
+        case .duplicateScene:
+            appState.duplicateSelectedScene()
+        case .deleteScene:
+            appState.deleteSelectedScene()
+        case .moveSceneUp:
+            appState.moveSelectedSceneUp()
+        case .moveSceneDown:
+            appState.moveSelectedSceneDown()
+        case .previousScene:
+            appState.selectAdjacentScene(.previous)
+        case .nextScene:
+            appState.selectAdjacentScene(.next)
+        case .scriptMode:
+            appState.selectMode(.script)
+        case .visualsMode:
+            appState.selectMode(.bRoll)
+        case .editingMode:
+            appState.selectMode(.editing)
+        case .commandPalette:
+            break
+        case .toggleContentsPanel:
+            appState.isSidebarVisible.toggle()
+        case .toggleAIReview:
+            appState.settings.editorPreferences.showAIReviewPanel.toggle()
+        case .toggleFocusMode:
+            appState.isFocusModeEnabled.toggle()
+        case .teleprompter:
+            appState.presentTeleprompter()
+        case .recordTake:
+            appState.toggleRecordingTake()
+        case .toggleRecordingPanel:
+            appState.recording.isPanelVisible.toggle()
+        case .analyzeCurrentScene:
+            appState.settings.editorPreferences.showAIReviewPanel = true
+            Task { await appState.analyzeSelectedScene() }
+        case .openSettings:
+            appState.openSettings(tab: .general)
+            openSettings()
+        case .showShortcuts:
+            appState.isShortcutsPresented = true
+        case .generateHook:
+            HookSheetPresenter.shared.presentAfterPaletteDismissal(.hook)
+        case .suggestRehooks:
+            HookSheetPresenter.shared.presentAfterPaletteDismissal(.rehook)
+        }
     }
 }
 

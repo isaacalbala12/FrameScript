@@ -3,17 +3,16 @@ import UniformTypeIdentifiers
 
 struct AppRootView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var subscriptionRuntime = SubscriptionAIRuntime.shared
 
     var body: some View {
         @Bindable var windowState = appState.windowState
+        @Bindable var recording = appState.recording
         // Read the observable property in the body so a pending question
         // invalidates this view and presents the sheet.
         let pendingPrompt = subscriptionRuntime.pendingPrompt
-        let presentedError = Binding<AppError?>(
-            get: { appState.errorCenter.presentedError },
-            set: { if $0 == nil { appState.errorCenter.dismissCurrent() } }
-        )
         Group {
             if appState.hasOpenProject {
                 AppShellView()
@@ -32,30 +31,23 @@ struct AppRootView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .animation(.easeOut(duration: 0.18), value: appState.errorCenter.notice)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: appState.errorCenter.notice)
+            // The notice is drawn, not announced: VoiceOver users would miss
+            // "recent project removed" and similar transient feedback (uiux 18).
+            .onChange(of: appState.errorCenter.notice) { _, notice in
+                guard let notice else { return }
+                AccessibilityAnnouncement.post(notice.message(language: appState.currentLanguage))
+            }
             .task {
                 appState.configure()
             }
-            .alert(item: presentedError) { error in
-                let presentation = error.presentation(language: appState.currentLanguage)
-                let message = [presentation.message, presentation.recoverySuggestion]
-                    .compactMap { $0 }
-                    .joined(separator: "\n\n")
-                if let action = error.recoveryAction {
-                    return Alert(
-                        title: Text(presentation.title),
-                        message: Text(message),
-                        primaryButton: .default(Text(appState.localized("recovery.\(action.localizationKey).button"))) {
-                            appState.performRecovery(action)
-                        },
-                        secondaryButton: .cancel(Text(appState.localized("error.dismiss")))
-                    )
-                }
-                return Alert(
-                    title: Text(presentation.title),
-                    message: Text(message),
-                    dismissButton: .default(Text(appState.localized("error.dismiss")))
-                )
+            .errorAlert()
+            // The palette and the shortcuts sheet live at the root so ⌘K and
+            // ⇧⌘/ work on the welcome screen (they used to latch a flag that
+            // only the project window could read).
+            .onChange(of: appState.hasOpenProject) { _, _ in
+                appState.windowState.isCommandPalettePresented = false
+                appState.windowState.isShortcutsPresented = false
             }
             .sheet(item: $windowState.newProjectRequest) { request in
                 Group {
@@ -70,6 +62,23 @@ struct AppRootView: View {
             }
             .sheet(isPresented: $windowState.isExportPresented) {
                 ExportSheetView()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
+            .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
+                CommandPaletteView()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
+            .sheet(isPresented: $windowState.isShortcutsPresented) {
+                ShortcutsOverlay()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
+            // OBS is an app-level integration: configuring it must not require
+            // an open project.
+            .sheet(isPresented: $recording.isSettingsPresented) {
+                OBSSettingsSheet()
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }
@@ -91,24 +100,42 @@ struct AppRootView: View {
             }
             .background(ProjectWindowReader { appState.setProjectWindow($0) })
     }
+
+    private func performPendingPaletteAction() {
+        HookSheetPresenter.shared.presentPendingRequest()
+        if PaletteActionHandoff.shared.takeExportRequest() {
+            appState.windowState.isExportPresented = true
+        }
+        guard let tab = appState.windowState.pendingSettingsTab else { return }
+        let key = appState.windowState.pendingSettingsHighlightKey
+        appState.windowState.pendingSettingsTab = nil
+        appState.windowState.pendingSettingsHighlightKey = nil
+        appState.openSettings(tab: tab, highlightKey: key)
+        openSettings()
+    }
 }
 
 struct AppShellView: View {
     @Environment(AppState.self) private var appState
     @Environment(EscaletaImportCoordinator.self) private var escaletaImport
     @Environment(\.frameTheme) private var theme
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarDragStartWidth: Double?
     @State private var editorSessionID = UUID()
+    @State private var windowWidth: CGFloat = 0
+
+    /// The AI review column takes 292 pt; below this window width the script
+    /// column would be too narrow to read, so the panel hides itself instead
+    /// (uiux 20).
+    static let aiPanelMinimumWindowWidth: CGFloat = 1080
 
     var body: some View {
-        @Bindable var windowState = appState.windowState
         @Bindable var settingsStore = appState.settingsStore
-        @Bindable var hookPresenter = HookSheetPresenter.shared
-        @Bindable var recording = appState.recording
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
             && appState.settings.windowPreferences.focusModeBehavior == .hidePanels
+        let showsAIReviewPanel = appState.settings.editorPreferences.showAIReviewPanel
+            && windowWidth >= Self.aiPanelMinimumWindowWidth
 
         VStack(spacing: 0) {
             TopToolbar()
@@ -131,7 +158,7 @@ struct AppShellView: View {
                             .overlay(theme.divider)
 
                         RecordingPanel()
-                    } else if appState.settings.editorPreferences.showAIReviewPanel && !appState.isFocusModeEnabled {
+                    } else if showsAIReviewPanel && !appState.isFocusModeEnabled {
                         Divider()
                             .overlay(theme.divider)
 
@@ -145,43 +172,37 @@ struct AppShellView: View {
         }
         .background(theme.background)
         .foregroundStyle(theme.primaryText)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { windowWidth = proxy.size.width }
+                    .onChange(of: proxy.size.width) { _, width in windowWidth = width }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: appState.isSidebarVisible)
         .frame(minWidth: 980, minHeight: 680)
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "md" }) else {
-                return false
-            }
-            escaletaImport.present(url: url, appState: appState)
-            return true
+            handleDrop(urls)
         }
-        .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
-            CommandPaletteView()
-                .environment(appState)
-                .environment(\.frameTheme, theme)
-        }
-        .sheet(isPresented: $windowState.isShortcutsPresented) {
-            ShortcutsOverlay()
-                .environment(appState)
-                .environment(\.frameTheme, theme)
-        }
-        .hookGeneratorSheets(presenter: hookPresenter)
-        .sheet(isPresented: $recording.isSettingsPresented) {
-            OBSSettingsSheet()
-                .environment(appState)
-                .environment(\.frameTheme, theme)
-        }
+        .hookGeneratorSheets(presenter: HookSheetPresenter.shared)
         .onDisappear {
             appState.flushActiveEditorBoundary()
         }
     }
 
-    private func performPendingPaletteAction() {
-        HookSheetPresenter.shared.presentPendingRequest()
-        guard let tab = appState.windowState.pendingSettingsTab else { return }
-        let key = appState.windowState.pendingSettingsHighlightKey
-        appState.windowState.pendingSettingsTab = nil
-        appState.windowState.pendingSettingsHighlightKey = nil
-        appState.openSettings(tab: tab, highlightKey: key)
-        openSettings()
+    /// Dropping a project file opens it (with the normal unsaved-changes
+    /// confirmation); a Markdown file still opens the escaleta importer.
+    private func handleDrop(_ urls: [URL]) -> Bool {
+        switch ProjectDropAction.resolve(urls) {
+        case let .openProject(url):
+            appState.openProject(at: url)
+            return true
+        case let .importEscaleta(url):
+            escaletaImport.present(url: url, appState: appState)
+            return true
+        case .ignore:
+            return false
+        }
     }
 
     @ViewBuilder
@@ -237,6 +258,7 @@ struct WelcomeView: View {
     @Environment(\.frameTheme) private var theme
     @State private var isTemplatePickerPresented = false
     @FocusState private var focusedRecentID: UUID?
+    @FocusState private var focusedWelcomeAction: WelcomeActionKind?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -251,19 +273,50 @@ struct WelcomeView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    WelcomeAction(title: appState.localized("welcome.newBlankProject"), systemImage: "plus", accessibilityIdentifier: "welcome-new-blank-project", action: {
-                        appState.requestNewProject(template: appState.scriptTemplates().first { $0.isBlank }, locksTemplate: true)
-                    })
-                    WelcomeAction(title: appState.localized("welcome.newFromTemplate"), systemImage: "doc.badge.plus", accessibilityIdentifier: "welcome-new-from-template", action: {
-                        isTemplatePickerPresented = true
-                    })
-                    WelcomeAction(title: appState.localized("welcome.openProject"), systemImage: "folder", accessibilityIdentifier: "welcome-open-project", action: appState.openProject)
-                    WelcomeAction(title: appState.localized("welcome.importEscaleta"), systemImage: "square.and.arrow.down", accessibilityIdentifier: "welcome-import-escaleta", action: {
-                        escaletaImport.chooseFile(appState: appState)
-                    })
-                    WelcomeAction(title: appState.localized("welcome.openDemo"), systemImage: "play.rectangle", accessibilityIdentifier: "welcome-open-demo", action: appState.openDemoProject)
+                    WelcomeAction(
+                        kind: .blankProject,
+                        title: appState.localized("welcome.newBlankProject"),
+                        systemImage: "plus",
+                        accessibilityIdentifier: "welcome-new-blank-project",
+                        focusedAction: $focusedWelcomeAction,
+                        action: {
+                            appState.requestNewProject(template: appState.scriptTemplates().first { $0.isBlank }, locksTemplate: true)
+                        }
+                    )
+                    WelcomeAction(
+                        kind: .template,
+                        title: appState.localized("welcome.newFromTemplate"),
+                        systemImage: "doc.badge.plus",
+                        accessibilityIdentifier: "welcome-new-from-template",
+                        focusedAction: $focusedWelcomeAction,
+                        action: { isTemplatePickerPresented = true }
+                    )
+                    WelcomeAction(
+                        kind: .openProject,
+                        title: appState.localized("welcome.openProject"),
+                        systemImage: "folder",
+                        accessibilityIdentifier: "welcome-open-project",
+                        focusedAction: $focusedWelcomeAction,
+                        action: appState.openProject
+                    )
+                    WelcomeAction(
+                        kind: .escaleta,
+                        title: appState.localized("welcome.importEscaleta"),
+                        systemImage: "square.and.arrow.down",
+                        accessibilityIdentifier: "welcome-import-escaleta",
+                        focusedAction: $focusedWelcomeAction,
+                        action: { escaletaImport.chooseFile(appState: appState) }
+                    )
+                    WelcomeAction(
+                        kind: .demo,
+                        title: appState.localized("welcome.openDemo"),
+                        systemImage: "play.rectangle",
+                        accessibilityIdentifier: "welcome-open-demo",
+                        focusedAction: $focusedWelcomeAction,
+                        action: appState.openDemoProject
+                    )
 
-                    Text(appState.localized("welcome.dropEscaleta"))
+                    Text(appState.localized("welcome.dropProject"))
                         .font(.system(size: 11))
                         .foregroundStyle(theme.tertiaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -316,14 +369,26 @@ struct WelcomeView: View {
                 .environment(\.frameTheme, theme)
         }
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "md" }) else {
+            switch ProjectDropAction.resolve(urls) {
+            case let .openProject(url):
+                appState.openProject(at: url)
+                return true
+            case let .importEscaleta(url):
+                escaletaImport.present(url: url, appState: appState)
+                return true
+            case .ignore:
                 return false
             }
-            escaletaImport.present(url: url, appState: appState)
-            return true
         }
         .task {
             await appState.recentProjectStore.validateEntries()
+        }
+        .onAppear {
+            // Keyboard users need an entry point: the first welcome action is
+            // focusable and focused once the window exists (uiux 21).
+            Task { @MainActor in
+                focusedWelcomeAction = .blankProject
+            }
         }
     }
 }
@@ -408,10 +473,16 @@ private struct RecentProjectRow: View {
     }
 }
 
+private enum WelcomeActionKind: String, Hashable, CaseIterable {
+    case blankProject, template, openProject, escaleta, demo
+}
+
 private struct WelcomeAction: View {
+    let kind: WelcomeActionKind
     let title: String
     let systemImage: String
     let accessibilityIdentifier: String
+    @FocusState.Binding var focusedAction: WelcomeActionKind?
     let action: () -> Void
 
     var body: some View {
@@ -422,6 +493,8 @@ private struct WelcomeAction: View {
         }
         .buttonStyle(.borderless)
         .clickableCursor()
+        .focusable()
+        .focused($focusedAction, equals: kind)
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
@@ -841,7 +914,11 @@ private struct ExportSheetView: View {
             panel.directoryURL = folder
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        appState.saveExport(format: format, preferences: effectivePreferences, to: url)
+        // Keep the sheet (and its preview) open when the write failed. WP1's
+        // `saveExport -> Bool` drives this; until it lands the seam reports
+        // today's always-succeed behaviour.
+        guard appState.saveExportReportingStatus(format: format, preferences: effectivePreferences, to: url) else { return }
+        appState.settings.exportPreferences.defaultFormat = format
         appState.windowState.isExportPresented = false
         dismiss()
     }
@@ -861,7 +938,8 @@ private struct EmptyProjectView: View {
             Button(appState.localized("scene.add")) {
                 appState.addScene()
             }
-            .buttonStyle(.cursorPlain)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .clickableCursor()
         }
