@@ -45,6 +45,28 @@ struct TopToolbar: View {
 
             ProjectDurationControl()
 
+            Button {
+                appState.recording.isPanelVisible.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(recordingStatusColor)
+                        .frame(width: 6, height: 6)
+                    Text(recordingStatusText)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                }
+                .frame(height: 30)
+                .padding(.horizontal, 5)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(appState.recording.isPanelVisible ? theme.accentSoft : Color.clear)
+                }
+            }
+            .buttonStyle(.cursorPlain)
+            .foregroundStyle(theme.secondaryText)
+            .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
+
             HStack(spacing: 5) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
@@ -114,6 +136,47 @@ struct TopToolbar: View {
         .padding(.horizontal, 18)
         .frame(height: 58)
         .background(theme.background)
+        .task {
+            await appState.recording.connectAutomaticallyIfNeeded()
+        }
+    }
+
+    private var recordingStatusColor: Color {
+        if appState.recording.phase.isActive { return theme.destructive }
+        switch appState.recording.connectionState {
+        case .connected: return theme.success
+        case .connecting: return theme.warning
+        case .failed: return theme.destructive
+        case .disconnected: return theme.tertiaryText
+        }
+    }
+
+    private var recordingStatusText: String {
+        switch appState.recording.phase {
+        case .countdown(let value):
+            return "\(value)…"
+        case .starting:
+            return appState.localized("recording.starting")
+        case .stopping:
+            return appState.localized("recording.stopping")
+        case .recording:
+            return String(
+                format: appState.localized("recording.status.recording"),
+                DurationEstimator.formatted(appState.recording.elapsed)
+            )
+        case .idle:
+            break
+        }
+        switch appState.recording.connectionState {
+        case .connected:
+            return appState.localized("recording.obs.connected")
+        case .connecting:
+            return appState.localized("recording.obs.connecting")
+        case .failed:
+            return appState.localized("recording.obs.failed")
+        case .disconnected:
+            return appState.localized("recording.obs.disconnected")
+        }
     }
 
     private func toolbarButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {

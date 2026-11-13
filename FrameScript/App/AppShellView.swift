@@ -105,6 +105,7 @@ struct AppShellView: View {
         @Bindable var windowState = appState.windowState
         @Bindable var settingsStore = appState.settingsStore
         @Bindable var hookPresenter = HookSheetPresenter.shared
+        @Bindable var recording = appState.recording
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
             && appState.settings.windowPreferences.focusModeBehavior == .hidePanels
@@ -125,7 +126,12 @@ struct AppShellView: View {
                     editorContent
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if appState.settings.editorPreferences.showAIReviewPanel && !appState.isFocusModeEnabled {
+                    if appState.recording.isPanelVisible && !appState.isFocusModeEnabled {
+                        Divider()
+                            .overlay(theme.divider)
+
+                        RecordingPanel()
+                    } else if appState.settings.editorPreferences.showAIReviewPanel && !appState.isFocusModeEnabled {
                         Divider()
                             .overlay(theme.divider)
 
@@ -158,6 +164,11 @@ struct AppShellView: View {
                 .environment(\.frameTheme, theme)
         }
         .hookGeneratorSheets(presenter: hookPresenter)
+        .sheet(isPresented: $recording.isSettingsPresented) {
+            OBSSettingsSheet()
+                .environment(appState)
+                .environment(\.frameTheme, theme)
+        }
         .onDisappear {
             appState.flushActiveEditorBoundary()
         }

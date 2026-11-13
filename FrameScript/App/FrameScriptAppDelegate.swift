@@ -34,7 +34,26 @@ final class FrameScriptAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState else { return .terminateNow }
-        return appState.confirmApplicationTermination() ? .terminateNow : .terminateCancel
+        guard appState.recording.hasActiveTake else {
+            return appState.confirmApplicationTermination() ? .terminateNow : .terminateCancel
+        }
+        // Finalize the take before the save decision: the save prompt must see
+        // the new take entry, otherwise quitting mid-take loses it.
+        Task { @MainActor in
+            let shouldTerminate = await self.terminationShouldProceed(appState: appState)
+            sender.reply(toApplicationShouldTerminate: shouldTerminate)
+        }
+        return .terminateLater
+    }
+
+    /// Testable termination order: stop/finalize first, then ask whether to
+    /// save. If the user cancels, the take is already closed out but the app
+    /// keeps running with the take in the project.
+    func terminationShouldProceed(appState: AppState) async -> Bool {
+        if appState.recording.hasActiveTake {
+            await appState.recording.prepareForTermination()
+        }
+        return appState.confirmApplicationTermination()
     }
 
     static func isProjectFile(_ url: URL) -> Bool {

@@ -230,6 +230,19 @@ struct FrameScriptApp: App {
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
                 .disabled(!appState.hasOpenProject)
             Divider()
+            Button(appState.localized("recording.menu.recordTake")) { appState.toggleRecordingTake() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .recordTake))
+                .disabled(!appState.hasOpenProject)
+            Button(appState.localized("recording.menu.togglePanel")) {
+                appState.recording.isPanelVisible.toggle()
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleRecordingPanel))
+            .disabled(!appState.hasOpenProject)
+            Button(appState.localized("recording.obs.settings")) {
+                appState.recording.isSettingsPresented = true
+            }
+            .disabled(!appState.hasOpenProject)
+            Divider()
             Button(appState.localized("backups.menu")) { appState.showBackupsWindow() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .showBackups))
                 .disabled(!appState.hasOpenProject)

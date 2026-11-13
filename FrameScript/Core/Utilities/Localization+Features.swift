@@ -16,6 +16,7 @@ extension L10n {
         markdownImportStrings,
         aiProvidersStrings,
         editorMarkupStrings,
-        durationStrings
+        durationStrings,
+        recordingStrings
     ]
 }
