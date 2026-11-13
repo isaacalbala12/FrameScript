@@ -34,8 +34,75 @@ final class SpanishLocalizationTests: XCTestCase {
         }
     }
 
-    func testSpanishPlaceholdersMatchEnglishForEveryKey() {
-        let english = L10n.baseTable(for: .english)
+    /// Every feature table (and every `[.spanish: …]` counterpart) is registered
+    /// and carries the same keys in Spanish as in English.
+    func testEveryFeatureTableIsRegisteredAndKeepsSpanishKeyParity() {
+        let expectedSampleKeys = [
+            "template.Simracing Update Analysis",
+            "dialog.externalChange.title",
+            "backups.menu",
+            "menu.teleprompter",
+            "menu.generateHook",
+            "menu.importEscaleta",
+            "aiProvider.T3 Code (suscripción)",
+            "settings.markupRhythm",
+            "duration.real",
+            "recording.menu.togglePanel",
+            "voiceFollow.toggle"
+        ]
+
+        let fullTables = L10n.featureTables.compactMap { $0[.english] }
+        let englishFeatureKeys = Set(fullTables.flatMap(\.keys))
+        let spanishCounterpartKeys = Set(
+            L10n.featureTables
+                .filter { $0[.english] == nil }
+                .compactMap { $0[.spanish] }
+                .flatMap(\.keys)
+        )
+        for key in expectedSampleKeys {
+            XCTAssertTrue(
+                englishFeatureKeys.contains(key),
+                "feature table containing \(key) is not registered in Localization+Features.swift"
+            )
+        }
+
+        for (index, table) in L10n.featureTables.enumerated() {
+            XCTAssertFalse(table.isEmpty, "feature table \(index) is empty")
+            guard let english = table[.english] else {
+                // A `[.spanish: …]` counterpart table: its keys must exist in a
+                // registered English table, otherwise it overrides nothing.
+                let spanish = table[.spanish] ?? [:]
+                XCTAssertFalse(spanish.isEmpty, "counterpart table \(index) has no Spanish strings")
+                XCTAssertTrue(
+                    Set(spanish.keys).isSubset(of: englishFeatureKeys),
+                    "counterpart table \(index) has keys no English table defines: \(Set(spanish.keys).subtracting(englishFeatureKeys).sorted())"
+                )
+                continue
+            }
+            if let spanish = table[.spanish] {
+                XCTAssertEqual(
+                    Set(spanish.keys),
+                    Set(english.keys),
+                    "table \(index) Spanish keys drifted from English"
+                )
+            } else {
+                // Tables written before Spanish existed may ship Spanish as a
+                // separate `[.spanish: …]` entry; every key still needs one.
+                XCTAssertTrue(
+                    Set(english.keys).isSubset(of: spanishCounterpartKeys),
+                    "table \(index) has keys without a Spanish counterpart: \(Set(english.keys).subtracting(spanishCounterpartKeys).sorted())"
+                )
+            }
+        }
+
+        // The registered tables, taken together, must translate the same keys.
+        let spanishFeatureKeys = Set(
+            L10n.featureTables.compactMap { $0[.spanish] }.flatMap(\.keys)
+        )
+        XCTAssertEqual(englishFeatureKeys, spanishFeatureKeys)
+    }
+
+    func testSpanishPlaceholdersMatchEnglishForEveryKey() {        let english = L10n.baseTable(for: .english)
         let spanish = L10n.baseTable(for: .spanish)
 
         for (key, englishValue) in english {

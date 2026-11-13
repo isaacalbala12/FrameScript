@@ -76,7 +76,8 @@ final class RecordingController {
 
     var isSettingsPresented = false
     var isManualEntryPresented = false
-    var teleprompterHook: (any RecordingTeleprompterHook)?
+    /// Weak: `AppState` owns the controller and is itself the hook.
+    weak var teleprompterHook: (any RecordingTeleprompterHook)?
 
     // MARK: Dependencies
 
@@ -127,7 +128,6 @@ final class RecordingController {
         } else {
             self.countdownEnabled = true
         }
-        self.teleprompterHook = NoOpRecordingTeleprompterHook()
         observeClient()
     }
 

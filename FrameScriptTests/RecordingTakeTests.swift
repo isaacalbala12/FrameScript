@@ -422,6 +422,7 @@ final class RecordingTakeTests: XCTestCase {
         )]
         let project = FrameProject(title: "Menu", scenes: [fixture.scene])
         let appState = AppState(recording: fixture.controller)
+        appState.recordingTeleprompter = FakeRecordingTeleprompter()
         appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 120, markUnsaved: true)
         appState.setEditorContextAfterFlush(sceneID: fixture.scene.id, mode: .script)
         fixture.controller.selectedLanguageCode = "en"
@@ -630,6 +631,7 @@ final class RecordingTakeTests: XCTestCase {
             projectStore: ProjectStore(project: project),
             recording: fixture.controller
         )
+        appState.recordingTeleprompter = FakeRecordingTeleprompter()
         appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
         appState.setEditorContextAfterFlush(sceneID: scene.id, mode: .script)
         let connected = await fixture.controller.connect()
@@ -678,6 +680,7 @@ final class RecordingTakeTests: XCTestCase {
             projectStore: ProjectStore(project: project),
             recording: fixture.controller
         )
+        appState.recordingTeleprompter = FakeRecordingTeleprompter()
         appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
         appState.setEditorContextAfterFlush(sceneID: scene.id, mode: .script)
         let connected = await fixture.controller.connect()
@@ -700,6 +703,60 @@ final class RecordingTakeTests: XCTestCase {
             accuracy: 0.001
         )
         XCTAssertNil(appState.sceneDurationSummary(for: scene, language: "es").real)
+    }
+
+    // MARK: - Integration: recording drives the teleprompter
+
+    func testRecordingStartOpensTeleprompterOnSceneAndVariantLanguageAndStopPauses() throws {
+        let hook = Scene(order: 0, sectionType: .hook, title: "Hook", scriptText: "Texto original")
+        let body = Scene(order: 1, sectionType: .explanation, title: "Body", scriptText: "Texto del cuerpo")
+        body.languageVariants = [
+            SceneLanguageVariant(languageCode: "en", text: "English body text")
+        ]
+        let project = FrameProject(title: "Teleprompter", scenes: [hook, body], primaryLanguage: "es")
+        let appState = AppState(projectStore: ProjectStore(project: project))
+        let fake = FakeRecordingTeleprompter()
+        appState.recordingTeleprompter = fake
+        appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
+        appState.recording.selectedLanguageCode = "en"
+
+        appState.recordingDidStart(sceneID: body.id)
+
+        let presentation = try XCTUnwrap(fake.presentations.first)
+        XCTAssertEqual(fake.presentations.count, 1)
+        XCTAssertEqual(presentation.startingSectionIndex, 1)
+        XCTAssertEqual(presentation.sections.count, 2)
+        XCTAssertEqual(presentation.sections[1].id, body.id)
+        XCTAssertEqual(presentation.sections[1].text, "English body text")
+        XCTAssertEqual(presentation.speechLanguage, .english)
+        XCTAssertEqual(presentation.wordsPerMinute, appState.effectiveWPM(language: "en"), accuracy: 0.001)
+
+        appState.recordingDidStop(sceneID: body.id, takeID: nil, wasInterrupted: false)
+        XCTAssertEqual(fake.pauseCount, 1)
+    }
+
+    func testOBSStartAndStopDriveTheWiredTeleprompterHook() async throws {
+        let fixture = makeFixture(sceneText: "uno dos tres")
+        let project = FrameProject(title: "Hooked", scenes: [fixture.scene], primaryLanguage: "es")
+        let appState = AppState(
+            projectStore: ProjectStore(project: project),
+            recording: fixture.controller
+        )
+        let fake = FakeRecordingTeleprompter()
+        appState.recordingTeleprompter = fake
+        appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
+        appState.setEditorContextAfterFlush(sceneID: fixture.scene.id, mode: .script)
+        XCTAssertTrue(appState.recording.teleprompterHook === appState)
+
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.controller.startTake(sceneID: fixture.scene.id)
+        XCTAssertEqual(fake.presentations.count, 1)
+        XCTAssertEqual(fake.presentations.first?.startingSectionIndex, 0)
+        XCTAssertEqual(fake.presentations.first?.sections.first?.text, "uno dos tres")
+
+        await fixture.controller.stopTake()
+        XCTAssertEqual(fake.pauseCount, 1)
     }
 
     // MARK: - Fixtures
@@ -759,6 +816,41 @@ final class RecordingTakeTests: XCTestCase {
             language: { .spanish }
         ))
         return Fixture(client: client, controller: controller, scene: scene, changes: changes)
+    }
+}
+
+/// In-memory teleprompter seam so recording tests never open a window.
+@MainActor
+private final class FakeRecordingTeleprompter: RecordingTeleprompterPresenting {
+    struct Presentation {
+        let sections: [TeleprompterSceneText]
+        let startingSectionIndex: Int
+        let uiLanguage: AppLanguage
+        let speechLanguage: SpeechLanguage?
+        let wordsPerMinute: Double
+    }
+
+    private(set) var presentations: [Presentation] = []
+    private(set) var pauseCount = 0
+
+    func present(
+        sections: [TeleprompterSceneText],
+        startingSectionIndex: Int,
+        uiLanguage: AppLanguage,
+        speechLanguage: SpeechLanguage?,
+        wordsPerMinute: Double
+    ) {
+        presentations.append(Presentation(
+            sections: sections,
+            startingSectionIndex: startingSectionIndex,
+            uiLanguage: uiLanguage,
+            speechLanguage: speechLanguage,
+            wordsPerMinute: wordsPerMinute
+        ))
+    }
+
+    func pauseActiveSession() {
+        pauseCount += 1
     }
 }
 

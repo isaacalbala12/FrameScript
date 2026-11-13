@@ -123,6 +123,11 @@ final class AppState {
     let dependencies: AppDependencies
     /// F10 recording state and the obs-websocket client.
     let recording: RecordingController
+    /// Seam for recording -> teleprompter (F8/F9); tests replace it with a fake.
+    var recordingTeleprompter: any RecordingTeleprompterPresenting = LiveRecordingTeleprompter()
+    /// Last accepted teleprompter learning sample, used to drop duplicate
+    /// reports of the same reading.
+    var lastTeleprompterLearningSignature: TeleprompterLearningSignature?
     private let aiProviderConfigurationStore: AIProviderConfigurationStore
     let securityScope: SecurityScopedResourceAccess
     private let exportFolderBookmarkCreator: ExportFolderBookmarkCreator
@@ -214,6 +219,8 @@ final class AppState {
         }
         SubscriptionAIRuntime.shared.attach(appState: self)
         attachRecordingContext()
+        self.recording.teleprompterHook = self
+        TeleprompterPresenter.shared.readingSessionReporter = self
     }
 
     func configure() {

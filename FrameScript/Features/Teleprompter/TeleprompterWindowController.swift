@@ -273,7 +273,7 @@ final class TeleprompterPresenter {
 
     /// F11 learner hook. Set it from the app; the teleprompter only emits a
     /// session summary when voice following stops.
-    var readingSessionReporter: (any TeleprompterReadingSessionReporting)?
+    weak var readingSessionReporter: (any TeleprompterReadingSessionReporting)?
 
     var activeModel: TeleprompterModel? {
         controller?.model
