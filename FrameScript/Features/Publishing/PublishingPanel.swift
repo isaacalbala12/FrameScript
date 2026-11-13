@@ -213,11 +213,23 @@ struct PublishingPanel: View {
     }
 
     private func summaryText(errors: Int, warnings: Int) -> String {
+        let errorText = errors == 1
+            ? appState.localized("publishing.validation.errorOne")
+            : String(
+                format: appState.localized("publishing.validation.errorsCount"),
+                errors
+            )
+        let warningText = warnings == 1
+            ? appState.localized("publishing.validation.warningOne")
+            : String(
+                format: appState.localized("publishing.validation.warningsCount"),
+                warnings
+            )
         if errors > 0 {
-            return String(format: appState.localized("publishing.validation.errors"), errors, warnings)
+            return "\(errorText) · \(warningText)"
         }
         if warnings > 0 {
-            return String(format: appState.localized("publishing.validation.warnings"), warnings)
+            return warningText
         }
         return appState.localized("publishing.validation.ok")
     }

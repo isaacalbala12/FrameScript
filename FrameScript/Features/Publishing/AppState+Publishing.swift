@@ -10,6 +10,7 @@ extension AppState {
     // MARK: - Presentation
 
     func showPublishingPanel() {
+        guard hasOpenProject else { return }
         PublishingPresentation.shared.resetTitleGeneration()
         PublishingPresentation.shared.isPresented = true
     }
@@ -119,14 +120,14 @@ extension AppState {
 
     func setPublishingPromise(_ value: String) {
         var notes = publishingNotes
-        notes.promise = PublishingText.nonEmpty(value)
+        notes.promise = value.isEmpty ? nil : value
         project.topic = notes.encoded()
         touchProject()
     }
 
     func setPublishingThesis(_ value: String) {
         var notes = publishingNotes
-        notes.thesis = PublishingText.nonEmpty(value)
+        notes.thesis = value.isEmpty ? nil : value
         project.topic = notes.encoded()
         touchProject()
     }
@@ -188,13 +189,12 @@ extension AppState {
     }
 
     func setPublishingChapterTitle(_ title: String, sceneID: UUID, language: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         updatePublishingPack(language: language) { pack in
             if let index = pack.chapterOverrides.firstIndex(where: { $0.sceneID == sceneID }) {
-                pack.chapterOverrides[index].title = trimmed
+                pack.chapterOverrides[index].title = title
             } else {
                 pack.chapterOverrides.append(
-                    ChapterOverride(sceneID: sceneID, title: trimmed, isExcluded: false)
+                    ChapterOverride(sceneID: sceneID, title: title, isExcluded: false)
                 )
             }
         }

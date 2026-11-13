@@ -10,6 +10,8 @@ struct PublishingMetadataTab: View {
     @State private var presentation = PublishingPresentation.shared
     @State private var showsTitleSuggestions = false
     @State private var pendingTitleReplacement: String?
+    @State private var promiseDraft = ""
+    @State private var thesisDraft = ""
 
     private var pack: PublishingPack {
         appState.publishingPack(language: language)
@@ -41,6 +43,18 @@ struct PublishingMetadataTab: View {
             .padding(20)
         }
         .accessibilityIdentifier("publishing-metadata-tab")
+        .onAppear {
+            promiseDraft = appState.publishingPromise
+            thesisDraft = appState.publishingThesis
+        }
+        .onChange(of: promiseDraft) { _, value in
+            guard value != appState.publishingPromise else { return }
+            appState.setPublishingPromise(value)
+        }
+        .onChange(of: thesisDraft) { _, value in
+            guard value != appState.publishingThesis else { return }
+            appState.setPublishingThesis(value)
+        }
         .sheet(isPresented: $showsTitleSuggestions) {
             PublishingTitleSuggestionsSheet(language: language)
                 .environment(appState)
@@ -121,10 +135,7 @@ struct PublishingMetadataTab: View {
             )
             TextField(
                 appState.localized("publishing.promise.placeholder"),
-                text: Binding(
-                    get: { appState.publishingPromise },
-                    set: { appState.setPublishingPromise($0) }
-                )
+                text: $promiseDraft
             )
             .textFieldStyle(QuietTextFieldStyle())
 
@@ -135,10 +146,7 @@ struct PublishingMetadataTab: View {
             )
             TextField(
                 appState.localized("publishing.thesis.placeholder"),
-                text: Binding(
-                    get: { appState.publishingThesis },
-                    set: { appState.setPublishingThesis($0) }
-                )
+                text: $thesisDraft
             )
             .textFieldStyle(QuietTextFieldStyle())
         }

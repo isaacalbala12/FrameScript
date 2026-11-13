@@ -104,10 +104,36 @@ final class PublishingSnapshotTests: XCTestCase {
         }
     }
 
+    // MARK: - Validation state
+
+    func testMetadataWithValidationIssuesSnapshots() throws {
+        var pack = appState.publishingPack(language: "es")
+        pack.chosenTitle = String(repeating: "Título largo ", count: 10)
+        pack.description = String(repeating: "x", count: 4_600)
+        pack.tags = (1...21).map { "etiqueta\($0)" }
+        pack.hashtags = ["#a", "#b", "#c", "#d"]
+        pack.pinnedComment = String(repeating: "y", count: 501)
+        pack.thumbnailConceptNotes = """
+        ### Concepto A — Una dos tres cuatro
+        Idea: Demasiadas palabras para una miniatura.
+        """
+        appState.updatePublishingPack(language: "es") { $0 = pack }
+
+        for window in Self.windowSizes {
+            for scheme in [ColorScheme.light, .dark] {
+                try render(
+                    PublishingPanel(initialTab: .metadata, initialLanguage: "es"),
+                    name: "publishing-metadata-issues-\(sizeName(window))-\(schemeName(scheme))",
+                    windowSize: window,
+                    scheme: scheme
+                )
+            }
+        }
+    }
+
     // MARK: - Sheets
 
-    func testPublishingSheetsSnapshots() throws {
-        let input = appState.publishingExportInput(language: "es")
+    func testPublishingSheetsSnapshots() throws {        let input = appState.publishingExportInput(language: "es")
         let suggestions = [
             "La presión que cambia el neumático de lluvia",
             "Tres neumáticos de lluvia: cuál elegir",
