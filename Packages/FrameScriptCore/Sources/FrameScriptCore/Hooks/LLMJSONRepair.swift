@@ -6,10 +6,13 @@ import Foundation
 /// quotes, single-quoted JSON, raw newlines inside strings or trailing commas.
 /// The repair is deliberately conservative: each transformation is only tried
 /// when the previous form failed to parse.
-enum HookJSONRepair {
+///
+/// Hooks and the scene review share this implementation so both accept the same
+/// provider quirks.
+public enum LLMJSONRepair {
     // MARK: - Candidates
 
-    static func candidates(from response: String) -> [String] {
+    public static func candidates(from response: String) -> [String] {
         let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -152,6 +155,24 @@ enum HookJSONRepair {
         return segments
             .filter { seen.insert($0).inserted }
             .sorted { $0.count > $1.count }
+    }
+
+    /// Every JSON object or array that can be parsed out of `response`, in the
+    /// order the candidates were generated. Scalars are skipped: a bare string
+    /// or number is never a payload.
+    public static func parsedPayloads(in response: String) -> [Any] {
+        var payloads: [Any] = []
+        for candidate in candidates(from: response) {
+            for variant in variants(of: candidate) {
+                guard let data = variant.data(using: .utf8),
+                      let value = try? JSONSerialization.jsonObject(with: data),
+                      value is [String: Any] || value is [Any]
+                else { continue }
+                payloads.append(value)
+                break
+            }
+        }
+        return payloads
     }
 
     // MARK: - Variants
@@ -508,3 +529,6 @@ enum HookJSONRepair {
         }
     }
 }
+
+/// The pre-rename name. The existing Core tests and the hook parser use it.
+typealias HookJSONRepair = LLMJSONRepair

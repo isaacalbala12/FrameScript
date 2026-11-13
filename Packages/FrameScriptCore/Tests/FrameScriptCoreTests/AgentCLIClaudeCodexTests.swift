@@ -19,8 +19,11 @@ struct ClaudeCLIRunnerTests {
 
         let recorded = await launcher.recordedRequests()
         let processRequest = try #require(recorded.first)
+        // The run is pinned to plan mode with every tool denied; see WP2.
         #expect(processRequest.arguments == [
             "-p", "--output-format", "json", "--no-session-persistence",
+            "--permission-mode", "plan",
+            "--disallowedTools", ClaudeCLIRunner.deniedTools,
             "--model", "sonnet"
         ])
         #expect(processRequest.standardInput == Data("Reply with exactly: OK".utf8))
@@ -144,6 +147,7 @@ struct CodexCLIRunnerTests {
         let processRequest = try #require(recorded.first)
         #expect(processRequest.arguments == [
             "exec", "--json", "--skip-git-repo-check", "--ephemeral",
+            "-s", "read-only",
             "-m", "gpt-5.1-codex-mini", "-"
         ])
         #expect(processRequest.standardInput == Data("Reply with exactly: OK".utf8))

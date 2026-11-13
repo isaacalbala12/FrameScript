@@ -256,8 +256,8 @@ enum HookJSONPayload {
     static func entries(from response: String, keys: [String]) -> [Any]? {
         var collected: [Any] = []
         var parsedStructuredPayload = false
-        for candidate in HookJSONRepair.candidates(from: response) {
-            for variant in HookJSONRepair.variants(of: candidate) {
+        for candidate in LLMJSONRepair.candidates(from: response) {
+            for variant in LLMJSONRepair.variants(of: candidate) {
                 guard let data = variant.data(using: .utf8),
                       let value = try? JSONSerialization.jsonObject(with: data),
                       let entries = unwrap(value, keys: keys) else {

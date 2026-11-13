@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 import NaturalLanguage
 import OSLog
 
@@ -181,61 +182,6 @@ enum AITask: String, Codable, Hashable {
     case editingGeneration
     case hook
     case rehook
-}
-
-@MainActor
-struct MockLLMProvider: LLMProviderProtocol {
-    func complete(request: LLMRequest, apiKey: String) async throws -> LLMResponse {
-        let russian = request.systemPrompt.contains("Russian")
-        switch request.task {
-        case .autocomplete:
-            return LLMResponse(text: russian ? " с более ясным следующим акцентом." : " with a clearer next beat.")
-        case .rewrite:
-            return LLMResponse(text: russian ? "Вот более ясная и компактная версия выбранного фрагмента." : "Here is a cleaner, tighter version of the selected passage.")
-        case .analyze:
-            return LLMResponse(text: russian
-                ? #"{"title":"Хук","severity":"suggestion","message":"Хук понятен, но ему нужен более конкретный пример.","suggestion":"Добавьте пример перед объяснением."}"#
-                : #"{"title":"Hook","severity":"suggestion","message":"The hook is clear, but it needs a more concrete example.","suggestion":"Add the example before the explanation."}"#)
-        case .bRollGeneration:
-            return LLMResponse(text: russian
-                ? #"{"source":"Custom","description":"Добавьте спокойную запись экрана с крупным планом.","notes":"Используйте одну простую подпись."}"#
-                : #"{"source":"Custom","description":"Use a calm screen recording with a close-up insert.","notes":"Use one simple label."}"#)
-        case .editingGeneration:
-            return LLMResponse(text: russian
-                ? #"{"description":"Сохраните прямые склейки и легкие приближения.","notes":"Оставьте в субтитрах только ключевые слова."}"#
-                : #"{"description":"Keep hard cuts and subtle punch-ins.","notes":"Use keyword-only captions."}"#)
-        case .hook:
-            return LLMResponse(text: russian
-                ? #"{"hooks":[{"angle":"контраст","text":"Новый патч обещает больше, чем даёт. Проблема в одном изменении, о котором никто не говорит.","onScreenText":"Что изменилось?"}]}"#
-                : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
-        case .rehook:
-            return Self.rehookResponse(for: request.userPrompt, russian: russian)
-        }
-    }
-
-    /// Builds a valid bridge response from the first anchor in the prompt so
-    /// the mock never returns an empty anchor when multiple positions exist.
-    static func rehookResponse(for userPrompt: String, russian: Bool = false) -> LLMResponse {
-        let text = russian
-            ? "Но есть вторая деталь, которая меняет весь расклад."
-            : "Pero hay una segunda pieza que cambia todo el planteamiento."
-        let anchor = firstAnchor(in: userPrompt) ?? ""
-        let payload: [String: Any] = ["bridges": [["text": text, "anchor": anchor]]]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8) else {
-            return LLMResponse(text: #"{"bridges":[]}"#)
-        }
-        return LLMResponse(text: json)
-    }
-
-    static func firstAnchor(in userPrompt: String) -> String? {
-        for line in userPrompt.components(separatedBy: .newlines) {
-            guard let range = line.range(of: "Anchor:") else { continue }
-            let value = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty { return value }
-        }
-        return nil
-    }
 }
 
 @MainActor
@@ -546,10 +492,14 @@ final class ProviderCredentialSession {
 }
 
 struct AIProviderConfigurationStore {
+    /// Set once the pre-ASCII defaults keys have been moved.
+    static let legacyKeysMigrationFlag = "FrameScript.ai.providerKeysMigrated"
+
     private let userDefaults: UserDefaults
 
     init(userDefaults: UserDefaults = AppEnvironment.defaults) {
         self.userDefaults = AppEnvironment.isolatedDefaults(userDefaults)
+        Self.migrateLegacyKeys(in: self.userDefaults)
     }
 
     func save(_ configuration: AIProviderConfiguration, for provider: AIProviderKind) {
@@ -595,6 +545,31 @@ struct AIProviderConfigurationStore {
 
     private func keyMetadataKey(for provider: AIProviderKind) -> String {
         "FrameScript.ai.hasStoredKey.\(provider.rawValue)"
+    }
+
+    /// Moves the configuration and "has stored key" entries from the Spanish
+    /// raw values to the ASCII ones. The Keychain account itself is unchanged,
+    /// so no saved key is lost.
+    static func migrateLegacyKeys(in defaults: UserDefaults) {
+        guard !defaults.bool(forKey: legacyKeysMigrationFlag) else { return }
+        for provider in AIProviderKind.allCases where provider != .disabled {
+            let legacyKey = "FrameScript.ai.provider.\(provider.legacyRawValue)"
+            let currentKey = "FrameScript.ai.provider.\(provider.rawValue)"
+            if defaults.object(forKey: currentKey) == nil,
+               let stored = defaults.object(forKey: legacyKey) {
+                defaults.set(stored, forKey: currentKey)
+            }
+            defaults.removeObject(forKey: legacyKey)
+
+            let legacyMetadataKey = "FrameScript.ai.hasStoredKey.\(provider.legacyRawValue)"
+            let currentMetadataKey = "FrameScript.ai.hasStoredKey.\(provider.rawValue)"
+            if defaults.object(forKey: currentMetadataKey) == nil,
+               defaults.object(forKey: legacyMetadataKey) != nil {
+                defaults.set(defaults.bool(forKey: legacyMetadataKey), forKey: currentMetadataKey)
+            }
+            defaults.removeObject(forKey: legacyMetadataKey)
+        }
+        defaults.set(true, forKey: legacyKeysMigrationFlag)
     }
 }
 
@@ -975,14 +950,15 @@ struct AnalysisResponse {
     let suggestion: String
 
     static func decode(from response: String) throws -> AnalysisResponse {
-        let value: Any
-        do {
-            value = try JSONSerialization.jsonObject(with: Data(strippingFence(from: response).utf8))
-        } catch {
-            logger.error("Structured analysis parse failed: \(String(describing: error), privacy: .private)")
+        // Providers wrap JSON in prose, fences or smart quotes; use the same
+        // extraction and repair the hook parser uses instead of a single
+        // strict JSON parse.
+        let payloads = LLMJSONRepair.parsedPayloads(in: response)
+        guard !payloads.isEmpty else {
+            logger.error("Structured analysis parse failed: no JSON payload found")
             throw LLMProviderError.malformedResponse("analysis.invalidJSON")
         }
-        guard let object = unwrap(value) else {
+        guard let object = payloads.lazy.compactMap({ unwrap($0) }).first else {
             logger.error("Structured analysis parse failed: unsupported or incomplete wrapper")
             throw LLMProviderError.malformedResponse("analysis.incompleteWrapper")
         }
@@ -1010,14 +986,6 @@ struct AnalysisResponse {
             throw LLMProviderError.malformedResponse("analysis.invalidFields")
         }
         return AnalysisResponse(title: title, severity: severity, message: message, suggestion: suggestion)
-    }
-
-    private static func strippingFence(from response: String) -> String {
-        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lines = trimmed.components(separatedBy: .newlines)
-        guard lines.count >= 3, lines.first?.lowercased().hasPrefix("```") == true,
-              lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" else { return trimmed }
-        return lines.dropFirst().dropLast().joined(separator: "\n")
     }
 
     private static func unwrap(_ value: Any) -> [String: Any]? {

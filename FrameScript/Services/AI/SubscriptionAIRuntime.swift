@@ -11,10 +11,30 @@ struct SubscriptionAIActivity: Identifiable, Equatable {
         case probe
     }
 
-    let id = UUID()
+    let id: UUID
     let mode: Mode
-    let kind: AgentCLIKind
+    /// The provider the user selected for this task.
+    let configuredKind: AgentCLIKind
+    /// The CLI that is actually running. It differs from `configuredKind` when
+    /// the selected binary is missing or T3 is unreachable and the router falls
+    /// back, and the pill says so.
+    var kind: AgentCLIKind
     let startedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        mode: Mode,
+        configuredKind: AgentCLIKind,
+        startedAt: Date
+    ) {
+        self.id = id
+        self.mode = mode
+        self.configuredKind = configuredKind
+        self.kind = configuredKind
+        self.startedAt = startedAt
+    }
+
+    var usedFallback: Bool { kind != configuredKind }
 }
 
 enum SubscriptionAIOutcome: Equatable {
@@ -63,6 +83,9 @@ final class SubscriptionAIRuntime {
     private let inspector: SubscriptionAIT3ThreadInspector
     private var cancelCurrentWork: (() -> Void)?
     private var didRequestCancellation = false
+    /// Notification tokens are not Sendable; the class is a main-actor
+    /// singleton and only touches this in `init`/`deinit`.
+    @ObservationIgnored nonisolated(unsafe) private var projectChangeObserver: NSObjectProtocol?
 
     init(
         store: SubscriptionAISettingsStore = .shared,
@@ -72,6 +95,45 @@ final class SubscriptionAIRuntime {
         self.store = store
         self.routerFactory = routerFactory
         self.inspector = inspector
+        observeProjectChanges()
+    }
+
+    deinit {
+        if let projectChangeObserver {
+            NotificationCenter.default.removeObserver(projectChangeObserver)
+        }
+    }
+
+    /// A run belongs to the project that started it. When the project is about
+    /// to be closed, replaced or deleted, the run is cancelled and its UI state
+    /// (pending question, outcome, open error) is dropped so the next project
+    /// never inherits it.
+    private func observeProjectChanges() {
+        projectChangeObserver = NotificationCenter.default.addObserver(
+            forName: .frameScriptProjectWillChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.resetForProjectChange()
+            }
+        }
+    }
+
+    private func resetForProjectChange() {
+        pendingPrompt = nil
+        lastOutcome = nil
+        openError = nil
+        // A silent cancellation: the run unwinds without recording
+        // `.cancelled`, because the project change is the reason.
+        didRequestCancellation = false
+        cancelCurrentWork?()
+    }
+
+    private func noteResolvedProvider(_ kind: AgentCLIKind, activityID: UUID) {
+        guard var current = activity, current.id == activityID, current.kind != kind else { return }
+        current.kind = kind
+        activity = current
     }
 
     func attach(appState: AppState) {
@@ -85,6 +147,7 @@ final class SubscriptionAIRuntime {
         let task = SubscriptionAITask(request.task)
         let selection = settings.selection(for: task)
         let context = appState?.subscriptionAIContext ?? .standalone()
+        let activityID = UUID()
         let provider = SubscriptionAIProvider(
             settings: settings,
             context: context,
@@ -94,11 +157,15 @@ final class SubscriptionAIRuntime {
                     settings: settings,
                     threadMapping: context.threadMapping
                 )
+            },
+            onResolvedProvider: { [weak self] kind in
+                self?.noteResolvedProvider(kind, activityID: activityID)
             }
         )
         let activity = SubscriptionAIActivity(
+            id: activityID,
             mode: .completion(task),
-            kind: selection.kind,
+            configuredKind: selection.kind,
             startedAt: Date()
         )
         return try await perform(activity: activity) {
@@ -112,6 +179,7 @@ final class SubscriptionAIRuntime {
         let settings = store.settings
         let chosen = selection ?? settings.defaultSelection
         let context = appState?.subscriptionAIContext ?? .standalone()
+        let activityID = UUID()
         let prober = SubscriptionAIProber(
             settings: settings,
             context: context,
@@ -121,9 +189,17 @@ final class SubscriptionAIRuntime {
                     settings: settings,
                     threadMapping: mapping
                 )
+            },
+            onResolvedProvider: { [weak self] kind in
+                self?.noteResolvedProvider(kind, activityID: activityID)
             }
         )
-        let activity = SubscriptionAIActivity(mode: .probe, kind: chosen.kind, startedAt: Date())
+        let activity = SubscriptionAIActivity(
+            id: activityID,
+            mode: .probe,
+            configuredKind: chosen.kind,
+            startedAt: Date()
+        )
         do {
             let reply = try await perform(activity: activity) {
                 try await prober.probe(selection: chosen)

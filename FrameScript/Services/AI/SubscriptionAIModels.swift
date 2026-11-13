@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import OSLog
 
 // MARK: - Provider kinds
 
@@ -30,6 +31,7 @@ enum SubscriptionAITask: String, CaseIterable, Codable, Identifiable, Sendable {
     case titlesSEO
     case translation
     case hooks
+    case rehook
 
     var id: String { rawValue }
 
@@ -44,6 +46,7 @@ enum SubscriptionAITask: String, CaseIterable, Codable, Identifiable, Sendable {
         case "titles", "titlesseo", "seo": self = .titlesSEO
         case "translation", "translate": self = .translation
         case "hooks", "hook": self = .hooks
+        case "rehook", "rehooks": self = .rehook
         default: self = .review
         }
     }
@@ -58,6 +61,7 @@ enum SubscriptionAITask: String, CaseIterable, Codable, Identifiable, Sendable {
         case .titlesSEO: "Titles and SEO"
         case .translation: "Translation"
         case .hooks: "Hooks"
+        case .rehook: "Rehooks"
         }
     }
 }
@@ -70,6 +74,10 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
     var kind: AgentCLIKind
     var providerInstanceID: String
     var modelSlug: String
+    /// The stored kind could not be decoded. The selection keeps the fallback
+    /// kind so the UI still renders, but every run is refused instead of
+    /// silently using T3 (E27).
+    private(set) var hasUnknownKind = false
 
     init(kind: AgentCLIKind, providerInstanceID: String = "", modelSlug: String = "") {
         self.kind = kind
@@ -85,7 +93,17 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        kind = (try? container.decode(AgentCLIKind.self, forKey: .kind)) ?? .t3
+        let storedKind = try? container.decodeIfPresent(String.self, forKey: .kind)
+        if let storedKind {
+            if let decoded = AgentCLIKind(rawValue: storedKind) {
+                kind = decoded
+            } else {
+                kind = .t3
+                hasUnknownKind = true
+            }
+        } else {
+            kind = .t3
+        }
         providerInstanceID = try container.decodeIfPresent(String.self, forKey: .providerInstanceID) ?? ""
         modelSlug = try container.decodeIfPresent(String.self, forKey: .modelSlug) ?? ""
     }
@@ -109,6 +127,7 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
     /// Nil when the selection is usable. T3 rejects a provider without a model
     /// and a model without a provider; the direct CLIs need their own model.
     var validationIssue: SubscriptionAIConfigurationIssue? {
+        guard !hasUnknownKind else { return .unknownProviderKind }
         switch kind {
         case .t3:
             guard !trimmedProviderInstanceID.isEmpty, !trimmedModelSlug.isEmpty else {
@@ -372,6 +391,7 @@ enum SubscriptionAIConfigurationIssue: String, Equatable, Sendable, CaseIterable
     case claudeModelMissing
     case codexModelMissing
     case t3ProjectMissing
+    case unknownProviderKind
 
     var localizationKey: String { "aiError.issue.\(rawValue)" }
 
@@ -385,6 +405,8 @@ enum SubscriptionAIConfigurationIssue: String, Equatable, Sendable, CaseIterable
             "Choose a Codex model, for example gpt-5.3-codex."
         case .t3ProjectMissing:
             "No T3 Code project is configured. Choose the T3 project id or folder in Settings."
+        case .unknownProviderKind:
+            "The saved AI provider is not recognised. Choose a provider in Settings."
         }
     }
 }
@@ -417,6 +439,24 @@ enum SubscriptionAIError: Error, Equatable, LocalizedError, Sendable {
 }
 
 enum SubscriptionAIErrorDescription {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "AISubscription"
+    )
+
+    /// CLI diagnostics can be arbitrarily long (and are often English stderr).
+    /// The alert keeps a readable prefix; the full text goes to the log.
+    static let maximumDiagnosticLength = 200
+
+    static func truncatedDiagnostic(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maximumDiagnosticLength else { return trimmed }
+        logger.error("AI run failure: \(trimmed, privacy: .private)")
+        let prefix = String(trimmed.prefix(maximumDiagnosticLength))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return prefix + "…"
+    }
+
     /// Localization key and `%@` arguments for a typed AI error. Only typed
     /// errors are mapped; unknown errors keep their existing description.
     static func mapping(for error: Error) -> (key: String, arguments: [String])? {
@@ -450,7 +490,7 @@ enum SubscriptionAIErrorDescription {
             case .cancelled:
                 return ("aiError.cancelled", [])
             case let .runFailed(_, message, _):
-                return ("aiError.runFailed", [message])
+                return ("aiError.runFailed", [truncatedDiagnostic(message)])
             case let .malformedOutput(_, detail):
                 return ("aiError.malformedOutput", [detail])
             case let .outputTruncated(limit):
@@ -482,6 +522,27 @@ enum SubscriptionAIErrorDescription {
 
 // MARK: - Runtime context
 
+/// Neutral working directory for the local agent CLIs.
+///
+/// The app is not sandboxed and the CLIs run with whatever permission mode the
+/// user configured globally. Running them inside the project folder gives a
+/// prompt injected through imported or shared text a natural place to look for
+/// sibling files, so AI tasks (which never need project files) run in an empty,
+/// private scratch folder instead.
+enum SubscriptionAIScratchDirectory {
+    static let name = "FrameScriptAI"
+
+    static func url(fileManager: FileManager = .default) -> URL {
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("\(name)-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+        return directory
+    }
+}
+
 struct SubscriptionAIContext: Sendable {
     var projectTitle: String
     var workingDirectory: URL?
@@ -497,8 +558,8 @@ struct SubscriptionAIContext: Sendable {
         self.threadMapping = threadMapping
     }
 
-    static func standalone() -> SubscriptionAIContext {
-        SubscriptionAIContext()
+    static func standalone(workingDirectory: URL? = nil) -> SubscriptionAIContext {
+        SubscriptionAIContext(workingDirectory: workingDirectory)
     }
 
     func threadTitle(for task: SubscriptionAITask) -> String {

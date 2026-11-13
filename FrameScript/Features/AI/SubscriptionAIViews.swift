@@ -21,6 +21,8 @@ struct SubscriptionAIProgressView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(theme.primaryText)
                             .lineLimit(1)
+                            .help(activityHelp(activity))
+                            .accessibilityLabel(activityTitle(activity))
                         Text(elapsedText(activity, now: context.date))
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .monospacedDigit()
@@ -32,6 +34,7 @@ struct SubscriptionAIProgressView: View {
                         .buttonStyle(.borderless)
                         .clickableCursor()
                         .help(appState.localized("settings.ai.subscription.cancelHelp"))
+                        .accessibilityLabel(appState.localized("settings.ai.subscription.cancelHelp"))
                     }
                 }
             }
@@ -49,6 +52,8 @@ struct SubscriptionAIProgressView: View {
                     }
                     .buttonStyle(.borderless)
                     .clickableCursor()
+                    .help(appState.localized("settings.ai.subscription.dismissHelp"))
+                    .accessibilityLabel(appState.localized("settings.ai.subscription.dismissHelp"))
                 }
             }
         }
@@ -62,9 +67,25 @@ struct SubscriptionAIProgressView: View {
         case .probe:
             task = appState.localized("settings.ai.subscription.activityProbe")
         }
+        let format = activity.usedFallback
+            ? appState.localized("settings.ai.subscription.activityFallback")
+            : appState.localized("settings.ai.subscription.activity")
         return String(
-            format: appState.localized("settings.ai.subscription.activity"),
+            format: format,
             task,
+            appState.localized("cliKind.\(activity.kind.rawValue)")
+        )
+    }
+
+    /// Explains a provider fallback: the selected CLI was unavailable, so the
+    /// request is running with another installed one.
+    private func activityHelp(_ activity: SubscriptionAIActivity) -> String {
+        guard activity.usedFallback else {
+            return activityTitle(activity)
+        }
+        return String(
+            format: appState.localized("settings.ai.subscription.activityFallbackHelp"),
+            appState.localized("cliKind.\(activity.configuredKind.rawValue)"),
             appState.localized("cliKind.\(activity.kind.rawValue)")
         )
     }

@@ -10,7 +10,18 @@ import Foundation
 ///
 /// The prompt goes on stdin; the JSON result carries `result`, `is_error`,
 /// `session_id` and `subtype`.
+///
+/// The run is pinned to plan mode with every file/command/network tool denied,
+/// so the user's global Claude Code permissions cannot turn a script (which may
+/// come from an imported or shared file) into file access. FrameScript only
+/// needs the model's text, never a tool call.
 public struct ClaudeCLIRunner: AgentCLIRunner {
+    /// Denied tools: no shell, no file writes, no reads, no web, no subagents.
+    static let deniedTools = [
+        "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
+        "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Task"
+    ].joined(separator: ",")
+
     public let kind: AgentCLIKind = .claude
     public var executable: URL
     private let launcher: any AgentProcessLaunching
@@ -30,7 +41,13 @@ public struct ClaudeCLIRunner: AgentCLIRunner {
         // Validate blankness but send the caller's prompt byte-for-byte.
         let prompt = request.prompt
 
-        var arguments = ["-p", "--output-format", "json", "--no-session-persistence"]
+        var arguments = [
+            "-p", "--output-format", "json", "--no-session-persistence",
+            // Plan mode is read-only; the deny-list removes the tools that
+            // could still read local files or reach the network.
+            "--permission-mode", "plan",
+            "--disallowedTools", Self.deniedTools
+        ]
         if let model = request.model.modelSlug?.nilIfBlank {
             arguments += ["--model", model]
         }

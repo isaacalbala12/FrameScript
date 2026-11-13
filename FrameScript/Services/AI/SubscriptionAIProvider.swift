@@ -15,6 +15,9 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
     var context: SubscriptionAIContext
     var routerProvider: RouterProvider
     var onPendingQuestion: (@MainActor (AgentCLIPendingQuestion) -> Void)?
+    /// Reports which CLI actually runs the request. The router may fall back to
+    /// another installed CLI, and that must be visible instead of silent.
+    var onResolvedProvider: (@MainActor @Sendable (AgentCLIKind) -> Void)?
 
     static let probePrompt = "Reply with exactly: OK"
 
@@ -40,7 +43,7 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
 
         let result: AgentCLIResult
         do {
-            result = try await router.run(agentRequest)
+            result = try await router.run(agentRequest, onResolved: Self.resolutionReporter(onResolvedProvider))
         } catch AgentCLIError.cancelled {
             throw CancellationError()
         }
@@ -70,6 +73,14 @@ struct SubscriptionAIProvider: LLMProviderProtocol {
         case (false, false): return "\(system)\n\n\(user)"
         }
     }
+
+    /// Adapts the optional main-actor observer to the router's callback.
+    static func resolutionReporter(
+        _ observer: (@MainActor @Sendable (AgentCLIKind) -> Void)?
+    ) -> (@MainActor @Sendable (AgentCLIKind) async -> Void)? {
+        guard let observer else { return nil }
+        return { kind in observer(kind) }
+    }
 }
 
 // MARK: - Connection probe
@@ -84,6 +95,8 @@ struct SubscriptionAIProber {
     var settings: SubscriptionAISettings
     var context: SubscriptionAIContext
     var routerProvider: RouterProvider
+    /// Reports which CLI actually runs the probe.
+    var onResolvedProvider: (@MainActor @Sendable (AgentCLIKind) -> Void)?
 
     func probe(selection: SubscriptionAISelection) async throws -> String {
         if let issue = selection.validationIssue {
@@ -102,7 +115,10 @@ struct SubscriptionAIProber {
         )
         let result: AgentCLIResult
         do {
-            result = try await router.run(request)
+            result = try await router.run(
+                request,
+                onResolved: SubscriptionAIProvider.resolutionReporter(onResolvedProvider)
+            )
         } catch AgentCLIError.cancelled {
             throw CancellationError()
         }
@@ -318,8 +334,9 @@ struct SubscriptionAIT3ThreadInspector: Sendable {
     }
 
     func link(threadID: String, executable: URL) async -> URL? {
-        let trimmed = threadID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        // The id can come from a pending-question payload; never pass a
+        // `-`-prefixed value to the CLI as an operand.
+        guard let trimmed = T3ThreadIdentifier.normalized(threadID) else { return nil }
         let request = AgentProcessRequest(
             executableURL: executable,
             arguments: ["thread", "show", trimmed, "--json"],

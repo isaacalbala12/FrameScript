@@ -84,14 +84,23 @@ enum HookContextBuilder {
         return ordered.first(where: { $0.sectionType == .hook }) ?? ordered.first
     }
 
+    static func wordsPerMinute(project: FrameProject, settings: AppSettings) -> Double {
+        let rate = DurationEstimator.effectiveWordsPerMinute(
+            language: project.primaryLanguage,
+            learnedWordsPerMinute: project.learnedWordsPerMinuteByLanguage,
+            settings: settings
+        )
+        return rate.isFinite && rate > 0 ? rate : 150
+    }
+
+    /// Legacy entry point for callers that only know the global rate. The
+    /// per-language settings, learned rate and built-in defaults still win.
     static func wordsPerMinute(project: FrameProject, configured: Int) -> Double {
-        if let learned = project.learnedWordsPerMinuteByLanguage[project.primaryLanguage],
-           learned.isFinite,
-           learned > 0 {
-            return learned
+        var settings = AppSettings.defaults
+        if configured > 0 {
+            settings.editorPreferences.wordsPerMinute = configured
         }
-        let value = Double(configured)
-        return value.isFinite && value > 0 ? value : 150
+        return wordsPerMinute(project: project, settings: settings)
     }
 
     /// Script language detection falls back to the project's declared primary
@@ -187,8 +196,34 @@ enum HookContextBuilder {
 
     private static func thesis(project: FrameProject, scene: Scene) -> String {
         let topic = project.topic.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !topic.isEmpty { return truncated(topic, limit: 320) }
+        if !topic.isEmpty {
+            // Imported escaletas store their round-trip metadata (including a
+            // base64 JSON blob) in `topic`. It is not a thesis: strip the blob
+            // and prefer the explicit "Tesis:" note when the block has one.
+            let cleaned = strippingEscaletaMetadata(from: topic)
+            let notes = EscaletaProjectNotes.decode(cleaned)
+            if let explicit = notes.thesis?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !explicit.isEmpty {
+                return truncated(explicit, limit: 320)
+            }
+            // Some importers keep "Tesis: …" on one line instead of a block.
+            if let inline = labelledNote(in: cleaned, keys: ["tesis", "thesis"]) {
+                return inline
+            }
+            let remaining = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !remaining.isEmpty { return truncated(remaining, limit: 320) }
+        }
         return labelledNote(in: scene.notes, keys: ["tesis", "thesis"]) ?? ""
+    }
+
+    /// Removes the `__framescript_escaleta_metadata__:<base64>` line that
+    /// `EscaletaProjectMapper` writes into the project topic.
+    static func strippingEscaletaMetadata(from topic: String) -> String {
+        let marker = EscaletaProjectNotes.metadataLabel
+        let kept = topic
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix(marker) }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func promise(project: FrameProject, scene: Scene, pack: PublishingPack?) -> String {

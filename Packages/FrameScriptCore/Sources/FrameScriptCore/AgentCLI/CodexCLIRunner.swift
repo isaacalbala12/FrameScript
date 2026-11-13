@@ -16,6 +16,10 @@ import Foundation
 ///     {"type":"thread.started","thread_id":"..."}
 ///     {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
 ///     {"type":"turn.completed", ...}
+///     {"type":"turn.failed","error":{"message":"..."}}
+///
+/// The sandbox is pinned to `read-only` so the user's own
+/// `~/.codex/config.toml` cannot hand a script-driven run full disk access.
 public struct CodexCLIRunner: AgentCLIRunner {
     public let kind: AgentCLIKind = .codex
     public var executable: URL
@@ -36,7 +40,12 @@ public struct CodexCLIRunner: AgentCLIRunner {
         // Validate blankness but send the caller's prompt byte-for-byte.
         let prompt = request.prompt
 
-        var arguments = ["exec", "--json", "--skip-git-repo-check", "--ephemeral"]
+        var arguments = [
+            "exec", "--json", "--skip-git-repo-check", "--ephemeral",
+            // Always pin the sandbox: `codex exec` otherwise inherits
+            // `sandbox_mode` from the user's config (often danger-full-access).
+            "-s", "read-only"
+        ]
         if let model = request.model.modelSlug?.nilIfBlank {
             arguments += ["-m", model]
         }
@@ -53,6 +62,17 @@ public struct CodexCLIRunner: AgentCLIRunner {
         let output = try await launcher.launch(processRequest)
         let events = Self.parseEvents(output.standardOutputText)
         let stderr = output.standardErrorSummary
+
+        // A `turn.failed` event is fatal even when the CLI still exits 0.
+        // `error` events are not: Codex emits them for recoverable notices
+        // (reconnects) before a good final message.
+        if let turnFailure = events.turnFailureMessage {
+            throw AgentCLIError.runFailed(
+                threadID: nil,
+                message: turnFailure,
+                exitCode: output.exitCode
+            )
+        }
 
         let failure = events.errorMessage ?? stderr.nilIfBlank
         guard output.exitCode == 0 else {
@@ -71,6 +91,15 @@ public struct CodexCLIRunner: AgentCLIRunner {
                 detail: failure ?? "codex printed no agent message."
             )
         }
+        // Without a terminal `turn.completed` the stream was cut short: the
+        // message may be partial, so it must not be reported as a success.
+        guard events.didCompleteTurn else {
+            throw AgentCLIError.runFailed(
+                threadID: nil,
+                message: failure ?? "codex did not complete the turn.",
+                exitCode: output.exitCode
+            )
+        }
 
         return .completed(
             AgentCLIReply(
@@ -87,6 +116,8 @@ public struct CodexCLIRunner: AgentCLIRunner {
         var threadID: String?
         var lastAgentMessage: String?
         var errorMessage: String?
+        var turnFailureMessage: String?
+        var didCompleteTurn = false
     }
 
     /// Parses JSONL line by line. A malformed line is skipped: Codex can print
@@ -115,9 +146,13 @@ public struct CodexCLIRunner: AgentCLIRunner {
             case "error":
                 events.errorMessage = (object["message"] as? String)
                     ?? (object["error"] as? [String: Any])?["message"] as? String
+            case "turn.completed":
+                events.didCompleteTurn = true
             case "turn.failed":
-                events.errorMessage = (object["error"] as? [String: Any])?["message"] as? String
+                events.didCompleteTurn = true
+                events.turnFailureMessage = (object["error"] as? [String: Any])?["message"] as? String
                     ?? (object["message"] as? String)
+                    ?? "codex reported a failed turn."
             default:
                 continue
             }

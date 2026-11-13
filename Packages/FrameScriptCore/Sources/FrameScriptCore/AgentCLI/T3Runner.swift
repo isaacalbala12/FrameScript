@@ -75,7 +75,15 @@ public struct T3Runner: AgentCLIRunner {
         // Validate blankness but send the caller's prompt byte-for-byte.
         let prompt = request.prompt
 
-        let threadID = request.threadID?.nilIfBlank
+        let rawThreadID = request.threadID?.nilIfBlank
+        if let rawThreadID, !T3ThreadIdentifier.isValid(rawThreadID) {
+            // Never fall back to "start a new thread": that would hide a
+            // tampered project file and post the prompt somewhere unexpected.
+            throw AgentCLIError.invalidConfiguration(
+                "The T3 thread id in this project is not valid."
+            )
+        }
+        let threadID = rawThreadID.flatMap(T3ThreadIdentifier.normalized)
         let arguments: [String]
         if let threadID {
             arguments = sendArguments(threadID: threadID)
@@ -207,8 +215,11 @@ public struct T3Runner: AgentCLIRunner {
         ["thread", "send", threadID, "-"] + baseDirectoryArguments + ["--wait", "--json"]
     }
 
-    private func showArguments(threadID: String) -> [String] {
-        ["thread", "show", threadID, "--messages", "20"] + baseDirectoryArguments + ["--json"]
+    private func showArguments(threadID: String) throws -> [String] {
+        guard let identifier = T3ThreadIdentifier.normalized(threadID) else {
+            throw AgentCLIError.invalidConfiguration("The T3 thread id is not valid.")
+        }
+        return ["thread", "show", identifier, "--messages", "20"] + baseDirectoryArguments + ["--json"]
     }
 
     private var baseDirectoryArguments: [String] {
@@ -249,7 +260,7 @@ public struct T3Runner: AgentCLIRunner {
         let timeout = min(20, max(1, effectiveTimeout(0)))
         let request = AgentProcessRequest(
             executableURL: configuration.executable,
-            arguments: showArguments(threadID: threadID),
+            arguments: (try? showArguments(threadID: threadID)) ?? [],
             timeout: timeout,
             outputByteLimit: 262_144
         )

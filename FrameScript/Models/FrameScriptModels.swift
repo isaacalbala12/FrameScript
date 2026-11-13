@@ -1392,7 +1392,13 @@ struct AIPreferences: Codable, Hashable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        provider = container.decodeSettingsEnum(AIProviderKind.self, forKey: .provider, default: .disabled)
+        // `decodeSettingsEnum` compares raw values, so it would drop a provider
+        // saved by an older build as "T3 Code (suscripción)".
+        if let storedProvider = try? container.decodeIfPresent(String.self, forKey: .provider) {
+            provider = AIProviderKind(storedRawValue: storedProvider) ?? .disabled
+        } else {
+            provider = .disabled
+        }
         model = try container.decodeIfPresent(String.self, forKey: .model) ?? "gpt-4.1-mini"
         baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
@@ -1403,27 +1409,57 @@ struct AIPreferences: Codable, Hashable {
 }
 
 enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
-    case disabled = "Disabled"
-    case openAICompatible = "OpenAI-compatible"
-    case openRouter = "OpenRouter"
-    case groq = "Groq"
-    case googleAIStudio = "Google AI Studio"
-    case t3Code = "T3 Code (suscripción)"
-    case claudeCode = "Claude Code (suscripción)"
-    case codex = "Codex (suscripción)"
+    // ASCII raw values: they are persisted in settings JSON and used as
+    // UserDefaults key suffixes. The Spanish strings they replaced are still
+    // accepted through `legacyRawValue`.
+    case disabled = "disabled"
+    case openAICompatible = "openAICompatible"
+    case openRouter = "openRouter"
+    case groq = "groq"
+    case googleAIStudio = "googleAIStudio"
+    case t3Code = "t3Code"
+    case claudeCode = "claudeCode"
+    case codex = "codex"
 
     var id: String { rawValue }
 
+    /// The raw value this provider used before the ASCII rename.
+    var legacyRawValue: String {
+        switch self {
+        case .disabled: "Disabled"
+        case .openAICompatible: "OpenAI-compatible"
+        case .openRouter: "OpenRouter"
+        case .groq: "Groq"
+        case .googleAIStudio: "Google AI Studio"
+        case .t3Code: "T3 Code (suscripción)"
+        case .claudeCode: "Claude Code (suscripción)"
+        case .codex: "Codex (suscripción)"
+        }
+    }
+
+    /// The Keychain account stays on the legacy string so an API key saved by
+    /// an older build keeps working after the rename.
     var keychainAccount: String {
         switch self {
         case .googleAIStudio: "FrameScript.GoogleAIStudio"
-        default: rawValue
+        default: legacyRawValue
+        }
+    }
+
+    /// Accepts the current ASCII raw value and the legacy Spanish one.
+    init?(storedRawValue: String) {
+        if let value = AIProviderKind(rawValue: storedRawValue) {
+            self = value
+        } else if let value = AIProviderKind.allCases.first(where: { $0.legacyRawValue == storedRawValue }) {
+            self = value
+        } else {
+            return nil
         }
     }
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
-        self = AIProviderKind(rawValue: value) ?? .disabled
+        self = AIProviderKind(storedRawValue: value) ?? .disabled
     }
 }
 
