@@ -108,6 +108,15 @@
             "description": "Learned words per minute for one language."
           }
         },
+        "learnedWordsPerMinuteResetAtByLanguage": {
+          "type": "object",
+          "description": "Map from BCP-47 language code to the instant the user last reset the learned speech rate for that language. Takes recorded at or before this instant do not teach the learner. JSON object with language codes as keys.",
+          "additionalProperties": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Reset instant for one language."
+          }
+        },
         "assets": {
           "type": "array",
           "description": "Files referenced by the project.",
@@ -206,6 +215,7 @@
         "videoType",
         "productionStatus",
         "learnedWordsPerMinuteByLanguage",
+        "learnedWordsPerMinuteResetAtByLanguage",
         "assets",
         "publishingPacks",
         "checklistTasks",

@@ -43,7 +43,13 @@ enum SampleData {
             let sceneTitle = name.isEmpty ? defaultSceneName : sceneNameResolver(name)
             return Scene(id: sceneID, order: index, sectionType: SectionType(rawValue: name) ?? .custom, title: sceneTitle, scriptText: "", notes: "", textSegments: [TextSegment(sceneID: sceneID, order: 0, sourceText: "", segmentType: .paragraph)])
         }
-        return FrameProject(title: title, templateID: template?.id, scenes: scenes, exportPresets: [ExportPreset(id: UUID(), name: exportPresetName, format: .productionOutline)])
+        return FrameProject(
+            title: title,
+            templateID: template?.id,
+            scenes: scenes,
+            exportPresets: [ExportPreset(id: UUID(), name: exportPresetName, format: .productionOutline)],
+            primaryLanguage: SimracingCopy.resolvedLanguage(language).contentLanguageCode
+        )
     }
 
     static func demoProject(language: AppLanguage) -> FrameProject {
@@ -187,7 +193,7 @@ enum SampleData {
             ], edits: [
                 edit("Open the showcase, explore the connected scene cards", cut: "Calm closing hold", transition: "Fade through color", subtitles: "CTA sentence", emphasis: "Highlight ‘your own copy’", zoom: "Slow pull-back", sfx: "Soft resolve", music: "Resolve and fade", graphics: "Open demo / Save your copy", notes: "Keep the CTA on screen long enough to read.")
             ], reviews: [review("CTA", .note, "The call to action stays product-led and gives the viewer a low-risk next step.", "Keep the final sentence warm and unhurried.")])
-        ], exportPresets: [ExportPreset(id: UUID(), name: "Editor handoff", format: .productionOutline)])
+        ], exportPresets: [ExportPreset(id: UUID(), name: "Editor handoff", format: .productionOutline)], primaryLanguage: "en")
     }
 
     private static var russianDemoProject: FrameProject {
@@ -232,6 +238,6 @@ enum SampleData {
             ], edits: [
                 edit("Откройте витрину, изучите связанные карточки сцен", cut: "Спокойная финальная задержка", transition: "Затухание через цвет", subtitles: "CTA одной фразой", emphasis: "Выделить «свою копию»", zoom: "Медленный отъезд", sfx: "Мягкое разрешение", music: "Разрешение и затухание", graphics: "Открыть демо / Сохранить свою копию", notes: "CTA остаётся на экране достаточно долго для чтения.")
             ], reviews: [review("CTA", .note, "Призыв остаётся ориентированным на продукт и даёт зрителю безопасный следующий шаг.", "Последнюю фразу произнесите тепло и без спешки.")])
-        ], exportPresets: [ExportPreset(id: UUID(), name: "Передача редактору", format: .productionOutline)])
+        ], exportPresets: [ExportPreset(id: UUID(), name: "Передача редактору", format: .productionOutline)], primaryLanguage: "ru")
     }
 }

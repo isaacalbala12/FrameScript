@@ -32,6 +32,53 @@ struct DocumentFormatTests {
         #expect(decoded.fileVersion == 4)
     }
 
+    @Test("Migration preserves an explicit primary language")
+    func explicitPrimaryLanguageMigratesUnchanged() throws {
+        var document = Self.minimalDocument()
+        document.fileVersion = 3
+        document.project.primaryLanguage = "en"
+
+        let migrated = try document.migrated()
+
+        #expect(migrated.project.primaryLanguage == "en")
+    }
+
+    @Test("Loaded duration values are sanitized")
+    func loadedDurationValuesAreSanitized() throws {
+        var document = Self.minimalDocument()
+        document.project.targetDuration = 1e300
+        document.project.learnedWordsPerMinuteByLanguage = ["es": 1e300, "en": 150]
+        var scene = try #require(document.project.scenes.first)
+        scene.targetDuration = 1e300
+        scene.takes = [
+            FrameScriptDocument.Take(
+                number: 1,
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                duration: 1e300
+            )
+        ]
+        document.project.scenes[0] = scene
+
+        let data = try FrameScriptDocumentCodec.encode(document)
+        let decoded = try FrameScriptDocumentCodec.decode(data)
+
+        #expect(decoded.project.targetDuration == nil)
+        #expect(decoded.project.scenes.first?.targetDuration == nil)
+        #expect(decoded.project.scenes.first?.takes.first?.duration == 0)
+        #expect(decoded.project.learnedWordsPerMinuteByLanguage == ["en": 150])
+    }
+
+    @Test("Empty primary language migrates to the Spanish default")
+    func emptyPrimaryLanguageMigrates() throws {
+        var document = Self.minimalDocument()
+        document.fileVersion = 3
+        document.project.primaryLanguage = "  "
+
+        let migrated = try document.migrated()
+
+        #expect(migrated.project.primaryLanguage == "es")
+    }
+
     @Test("Atomic write helper writes and reads the same document")
     func atomicWriteReadsBack() throws {
         let document = Self.fullDocument()
@@ -510,6 +557,7 @@ struct DocumentFormatTests {
             publishDate: Date(timeIntervalSince1970: 1_700_000_800),
             targetDuration: 720,
             learnedWordsPerMinuteByLanguage: ["es": 152.5, "en": 161],
+            learnedWordsPerMinuteResetAtByLanguage: ["es": Date(timeIntervalSince1970: 1_700_000_900)],
             assets: [asset],
             publishingPacks: ["es": pack, "en": pack],
             checklistTasks: [task],

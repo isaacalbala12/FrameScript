@@ -40,7 +40,7 @@ extension AppState {
         projectStore.openProject(
             restoredProject,
             fileURL: nil,
-            wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+            wordsPerMinute: durationWordsPerMinute(for: restoredProject),
             markUnsaved: true
         )
         editorState.selectedSceneID = restoredProject.scenes.sortedByOrder.first?.id
@@ -96,7 +96,7 @@ extension AppState {
             projectStore.openProject(
                 restoredProject,
                 fileURL: destination,
-                wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+                wordsPerMinute: durationWordsPerMinute(for: restoredProject),
                 markUnsaved: false
             )
             let orderedScenes = restoredProject.scenes.sortedByOrder

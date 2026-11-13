@@ -116,7 +116,8 @@ extension SampleData {
                     templateType: "Análisis de actualización"
                 )
             ],
-            exportPresets: [ExportPreset(id: UUID(), name: "Entrega al editor", format: .productionOutline)]
+            exportPresets: [ExportPreset(id: UUID(), name: "Entrega al editor", format: .productionOutline)],
+            primaryLanguage: "es"
         )
     }
 }

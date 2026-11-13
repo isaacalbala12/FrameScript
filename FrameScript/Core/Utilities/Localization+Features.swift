@@ -15,6 +15,7 @@ extension L10n {
         hooksStrings,
         markdownImportStrings,
         aiProvidersStrings,
-        editorMarkupStrings
+        editorMarkupStrings,
+        durationStrings
     ]
 }

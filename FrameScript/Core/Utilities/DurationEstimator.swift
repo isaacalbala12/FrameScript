@@ -24,9 +24,9 @@ struct DurationConfiguration: Equatable, Sendable {
 ///
 /// The estimate uses `ScriptMarkup.estimateDuration`: spoken words only
 /// (markers and cues such as `[IMAGEN: …]` never count) plus every pause
-/// marker. Reading speed is per language, with an explicit per-language
-/// setting, a built-in default (`es` 150, `en` 160, `ru` 140) and the
-/// project's learned rate (F11) in that order.
+/// marker. Reading speed is per language: the project's learned rate (F11)
+/// wins, then an explicit per-language setting, then a customized legacy global
+/// rate, then the built-in default for `es`/`en`/`ru`, then the global rate.
 enum DurationEstimator {
     /// Built-in reading speeds used until the user or the project says
     /// otherwise.
@@ -35,6 +35,11 @@ enum DurationEstimator {
         "en": 160,
         "ru": 140
     ]
+
+    /// Value `EditorPreferences.wordsPerMinute` had before per-language rates
+    /// existed. A different value is treated as a deliberate global choice and
+    /// keeps applying to every language.
+    static let defaultLegacyWordsPerMinute = 150
 
     /// Lowest and highest learned rate accepted from `FrameProject`. Values
     /// outside this range are treated as missing so a corrupt measurement never
@@ -55,8 +60,14 @@ enum DurationEstimator {
         )
     }
 
+    /// Markup-aware estimate: only spoken words count and inline pauses add
+    /// their real duration. Callers pass the learned per-language pace.
     static func estimate(text: String, wordsPerMinute: Double) -> TimeInterval {
-        estimate(text: text, configuration: DurationConfiguration(wordsPerMinute: wordsPerMinute))
+        let pace = wordsPerMinute.isFinite && wordsPerMinute > 0 ? wordsPerMinute : 0
+        return estimate(
+            text: text,
+            configuration: DurationConfiguration(wordsPerMinute: pace)
+        )
     }
 
     static func estimate(text: String, configuration: DurationConfiguration) -> TimeInterval {
@@ -121,8 +132,8 @@ enum DurationEstimator {
         )
     }
 
-    /// Learned rate first, then the user's per-language setting, then the
-    /// built-in value for `es`/`en`/`ru`, then the legacy global rate.
+    /// Learned rate first, then the user's explicit or legacy global setting,
+    /// then the built-in value for `es`/`en`/`ru`.
     static func effectiveWordsPerMinute(
         language: String,
         learnedWordsPerMinute: [String: Double],
@@ -151,10 +162,13 @@ enum DurationEstimator {
 
     // MARK: - Formatting
 
-    /// `m:ss` for a non-negative duration, clamped and rounded to seconds.
+    /// `m:ss` (or `h:mm:ss`) for a non-negative duration, clamped and rounded
+    /// to seconds. Values read from disk or typed by the user are untrusted, so
+    /// the conversion never traps.
     static func formatted(_ interval: TimeInterval) -> String {
-        guard interval.isFinite else { return "0:00" }
-        let seconds = max(0, Int(interval.rounded()))
+        let maximumFormattable: TimeInterval = 999_999_999
+        let safeInterval = interval.isFinite ? min(max(interval, 0), maximumFormattable) : 0
+        let seconds = Int(safeInterval.rounded())
         let hours = seconds / 3600
         let minutes = (seconds % 3600) / 60
         let remainder = seconds % 60

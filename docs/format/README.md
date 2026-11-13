@@ -265,9 +265,15 @@ shown above it.
     `estimatedDuration` / `actualDuration`. B-roll and editing notes are **not**
     duplicated: they live on the original scene and stay anchored to the original
     `scriptText`.
-  - **Language-keyed objects** — `Project.publishingPacks`, `Project.publishedVideos`
-    and `Project.learnedWordsPerMinuteByLanguage` are JSON objects whose keys are
+  - **Language-keyed objects** — `Project.publishingPacks`, `Project.publishedVideos`,
+    `Project.learnedWordsPerMinuteByLanguage` and
+    `Project.learnedWordsPerMinuteResetAtByLanguage` are JSON objects whose keys are
     language codes.
+- `learnedWordsPerMinuteByLanguage` stores the speech rate the app learned from
+  rated recordings, in words per minute. `learnedWordsPerMinuteResetAtByLanguage`
+  stores, per language, the instant of the user's last reset: takes recorded at or
+  before that instant must not teach the learner. Both maps are written on every
+  save; clients that do not model learning can preserve them as opaque data.
 - `Take.languageCode` and `ShortClip.languageCode` select the language of that take
   or clip. Empty means "the scene's original language".
 - `PublishingPack` holds titles, description, tags, hashtags, pinned comment,
@@ -370,6 +376,7 @@ omitted. This file opens as an empty project.
     "videoType": "",
     "productionStatus": "idea",
     "learnedWordsPerMinuteByLanguage": {},
+    "learnedWordsPerMinuteResetAtByLanguage": {},
     "assets": [],
     "publishingPacks": {},
     "checklistTasks": [],
@@ -535,6 +542,9 @@ payload decompresses to the minimal document above.
       "es": 152.5,
       "en": 161
     },
+    "learnedWordsPerMinuteResetAtByLanguage": {
+      "es": "2026-02-01T10:00:00.000000Z"
+    },
     "assets": [
       {
         "id": "77777777-7777-4777-8777-777777777777",
@@ -667,7 +677,7 @@ payload decompresses to the minimal document above.
         "name": "Before the rewrite",
         "isAutomatic": false,
         "label": "manual",
-        "compressedPayload": "RlNTQwEAAABBAgAAAAAAAFQBAAAAAAAAh5Y1vY1Sy26DMBD8lcpnqNwkDYFboxwaqZGQglKpVQ/GXogbB1t+REUR/94FQnMt8sE7Azuzs1xJJRUcwDqpG5ItImKs/gbuSXYlTBZHC0zsmOlLP89HbrshGSER8QO73bh1i8xFCrA7LUDhy10XEeYceEeyz6+I8CPwk5LOF8ydJkwxef67SzNd9dkwK51uClYqmFCU8iBe0BiZ0dkypk94CppmlOJ5pMPzga7gx2jrcwt39Vpp55htx0oK7JEwoOlzuoiXy1UVL+YJj9Mqgbgsk5ImOFZFV9hMAbMNiHdthctxPNkED+v2jTV1YDX0k/aRyTN2v4MEXQ9JisA9Brv3zAf0gtLAeiaUmMURxAEB7W5dRlA2dc746QY6Ds0UgdPB8qnw0qteCR2huHqY1oaMNpKPCwoNJulA7GGwcfs0GPHPKC/jf/GKe9NTev2addGaXpx03S8="
+        "compressedPayload": "RlNTQwEAAAAgAwAAAAAAAHUBAAAAAAAAVeawl5VSUWvCMBB+91dIn+3I1Nnpm+LDhAkyi4ONPVyTUzNjE5JUJuJ/36Xa0Q4ZrOSh+e67y33fXevUarejtVS4QuukzqNRu98JmLH6E7mne6AQIAX9RwkgGz4M+/Fg8LiO+72Ex8N1gnGWJRlLEMSaPUadS4aXXmFImstc7kG1q5rXOLcIHsU4PBJ1WXcQs3s6KRuOGKNzx8rvreIXRvyLj19GW7+w6NA7ynn/uAYcxxwbiLHUoD0+Q74pYFM2TYRKhzaSB6gCDlKgTo8G6yCJEwX35OHSgy9CefIMoYorBJujeNVWuAVa8qTwOKk/eTr/RX0JMsb+dga43xpNkSnptjLfLIDvXJ3Mt8h3FPQpuF3TGF1Y3nSGK5D7JqL3Bqx0Ok8hU032RmnnyMhmBWkapMNl1Z6oA92kgky3tBRiDuZn8cIAeovL5symNcdDoGTPpm5yJEYYi51rgapUW5IqzUVOPTsUSyxHdMsqFKswV1cln1vn1jc="
       }
     ],
     "aiThreadMap": {
@@ -694,8 +704,8 @@ payload decompresses to the minimal document above.
 `fscr-v4.schema.json` is a draft 2020-12 schema with one `$defs` entry per Swift
 type, exact enum raw values, `format: "uuid"` / `"date-time"` annotations, and
 `additionalProperties: true` on every object (map members use a value schema; see
-`learnedWordsPerMinuteByLanguage`, `publishingPacks`, `publishedVideos` and
-`threadIDsByProviderModel`).
+`learnedWordsPerMinuteByLanguage`, `learnedWordsPerMinuteResetAtByLanguage`,
+`publishingPacks`, `publishedVideos` and `threadIDsByProviderModel`).
 
 `required` lists exactly the member names the Swift encoder always writes. In
 practice those are the non-optional stored properties; `EditingItem.cutStyle` is the

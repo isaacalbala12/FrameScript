@@ -24,9 +24,12 @@ extension AppState {
     }
 
     /// Recomputes every scene estimate. Call after changing the language rate,
-    /// pause defaults or a learned WPM.
-    func refreshDurationEstimates() {
-        guard hasOpenProject else { return }
+    /// pause defaults or a learned WPM. Returns whether any stored estimate
+    /// changed.
+    @discardableResult
+    func refreshDurationEstimates() -> Bool {
+        guard hasOpenProject else { return false }
+        var changed = false
         for scene in project.scenes {
             let configuration = durationConfiguration(for: scene)
             let estimate = ScriptMarkup.estimate(
@@ -34,9 +37,13 @@ extension AppState {
                 wordsPerMinute: configuration.wordsPerMinute,
                 defaults: configuration.pauseDefaults
             )
+            if abs(scene.estimatedDuration - estimate.duration) > 0.0001 {
+                changed = true
+            }
             scene.estimatedDuration = estimate.duration
             SceneMetricsCache.shared.store(estimate, for: scene.id)
         }
+        return changed
     }
 
     /// Debounced word-count and duration update for a text edit. Keeps typing

@@ -103,6 +103,7 @@ extension FrameProject {
             publishDate: publishDate,
             targetDuration: targetDuration,
             learnedWordsPerMinuteByLanguage: learnedWordsPerMinuteByLanguage,
+            learnedWordsPerMinuteResetAtByLanguage: learnedWordsPerMinuteResetAtByLanguage,
             assets: assets.map { $0.copied(context: context) },
             publishingPacks: publishingPacks.mapValues { $0.copied(context: context) },
             checklistTasks: checklistTasks.map { $0.copied(context: context) },

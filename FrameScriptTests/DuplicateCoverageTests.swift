@@ -209,7 +209,8 @@ extension DuplicateCoverageTests {
             "id", "title", "createdAt", "updatedAt", "templateID", "settingsOverride",
             "exportPresets", "scenes", "primaryLanguage", "topic", "videoType",
             "productionStatus", "targetDate", "publishDate", "targetDuration",
-            "learnedWordsPerMinuteByLanguage", "assets", "publishingPacks",
+            "learnedWordsPerMinuteByLanguage", "learnedWordsPerMinuteResetAtByLanguage",
+            "assets", "publishingPacks",
             "checklistTasks", "rhythmThresholdsOverride", "sources", "claims",
             "comparisonTables", "glossary", "clips", "versionHistory", "aiThreadMap",
             "unparsedSections", "publishedVideos"

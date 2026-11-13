@@ -22,12 +22,17 @@ extension EditorPreferences {
 
     /// Reading speed for a language code.
     ///
-    /// Order: explicit per-language setting → built-in default for `es`/`en`/`ru`
-    /// → the legacy global ``wordsPerMinute`` for anything else.
+    /// Order: explicit per-language setting → customized legacy global rate →
+    /// built-in default for `es`/`en`/`ru` → the global rate. The global rate
+    /// equal to its old default (`150`) counts as unchanged, so the per-language
+    /// defaults still apply to new users.
     func effectiveWordsPerMinute(for language: String) -> Double {
         let code = DurationEstimator.normalizedLanguageCode(language)
         if let explicit = wordsPerMinuteByLanguage[code], explicit > 0 {
             return Double(explicit)
+        }
+        if wordsPerMinute != DurationEstimator.defaultLegacyWordsPerMinute {
+            return Double(max(1, wordsPerMinute))
         }
         if let builtIn = DurationEstimator.defaultWordsPerMinuteByLanguage[code] {
             return Double(builtIn)
