@@ -8,17 +8,23 @@ public enum HookInsertion {
     /// Replaces the first spoken paragraph of a scene with `hook`.
     ///
     /// Leading cue-only lines inside that paragraph (for example
-    /// `[IMAGEN: …]`) are preserved. Everything that follows the paragraph,
-    /// including later cues, B-roll markers and paragraphs, is left untouched.
+    /// `[IMAGEN: …]`) are preserved. Cue-only lines that sit between the first
+    /// and last spoken line are kept after the replacement so B-roll, editing
+    /// anchors and pause markers are never lost. Everything after the last
+    /// spoken line, including later cues and paragraphs, is left untouched.
     /// When the scene has no spoken paragraph, the hook is appended as a new
     /// paragraph.
     public static func replacingHook(in text: String, with hook: String) -> String {
-        let value = normalizedLine(hook)
+        let value = normalizedBlock(hook)
         guard !value.isEmpty else { return text }
 
-        if let range = spokenParagraphReplacementRange(in: text) {
+        if let target = hookParagraphTarget(in: text) {
+            var block = value
+            if !target.preservedCueLines.isEmpty {
+                block += "\n" + target.preservedCueLines.joined(separator: "\n")
+            }
             var result = text
-            result.replaceSubrange(range, with: value)
+            result.replaceSubrange(target.range, with: block)
             return result
         }
 
@@ -86,9 +92,36 @@ public enum HookInsertion {
 
     // MARK: - Helpers
 
+    private struct HookParagraphTarget {
+        let range: Range<String.Index>
+        let preservedCueLines: [String]
+    }
+
+    private struct ParagraphLine {
+        let range: Range<String.Index>
+        let text: String
+
+        var isSpoken: Bool {
+            ScriptMarkup.spokenWordCount(text) > 0
+        }
+
+        var isCueLine: Bool {
+            !isSpoken && text.contains("[") && text.contains("]")
+        }
+    }
+
     private static func normalizedLine(_ text: String) -> String {
         text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Normalizes each line but keeps line boundaries so a hook can carry its
+    /// own `[TEXTO: …]` cue directly below the spoken paragraph.
+    private static func normalizedBlock(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .map(normalizedLine)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     private static func normalizedAnchor(_ text: String) -> String {
@@ -97,43 +130,47 @@ public enum HookInsertion {
             .lowercased()
     }
 
-    /// Returns the range from the first spoken line of the first spoken
-    /// paragraph through the end of that paragraph.
-    private static func spokenParagraphReplacementRange(in text: String) -> Range<String.Index>? {
+    /// Finds the first spoken paragraph and the spoken line range inside it.
+    /// Cue-only lines inside that range are returned separately so the caller
+    /// can keep them after the replacement.
+    private static func hookParagraphTarget(in text: String) -> HookParagraphTarget? {
         var paragraphStart: String.Index?
         var paragraphEnd: String.Index?
         var index = text.startIndex
 
-        func firstSpokenLineRange(
-            start: String.Index,
-            end: String.Index
-        ) -> Range<String.Index>? {
-            var lineStart = start
-            while lineStart < end {
-                let lineEnd = text[lineStart..<end].firstIndex(of: "\n") ?? end
-                let line = text[lineStart..<lineEnd]
-                if ScriptMarkup.spokenWordCount(String(line)) > 0 {
-                    return lineStart..<end
-                }
-                lineStart = lineEnd < end ? text.index(after: lineEnd) : end
+        func target(for range: Range<String.Index>) -> HookParagraphTarget? {
+            let lines = paragraphLines(in: range, text: text)
+            guard let first = lines.firstIndex(where: \.isSpoken),
+                  let last = lines.lastIndex(where: \.isSpoken) else {
+                return nil
             }
-            return nil
+            let preserved = lines[first...last]
+                .filter(\.isCueLine)
+                .map(\.text)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return HookParagraphTarget(
+                range: lines[first].range.lowerBound..<lines[last].range.upperBound,
+                preservedCueLines: preserved
+            )
         }
 
-        func flush() -> Range<String.Index>? {
+        func flush() -> HookParagraphTarget? {
             defer {
                 paragraphStart = nil
                 paragraphEnd = nil
             }
-            guard let start = paragraphStart, let end = paragraphEnd else { return nil }
-            return firstSpokenLineRange(start: start, end: end)
+            guard let start = paragraphStart, let end = paragraphEnd, start < end else {
+                return nil
+            }
+            return target(for: start..<end)
         }
 
         while index < text.endIndex {
             let lineEnd = text[index...].firstIndex(of: "\n") ?? text.endIndex
             let line = text[index..<lineEnd]
             if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                if let range = flush() { return range }
+                if let target = flush() { return target }
             } else {
                 if paragraphStart == nil { paragraphStart = index }
                 paragraphEnd = lineEnd
@@ -142,5 +179,19 @@ public enum HookInsertion {
         }
 
         return flush()
+    }
+
+    private static func paragraphLines(in range: Range<String.Index>, text: String) -> [ParagraphLine] {
+        var lines: [ParagraphLine] = []
+        var start = range.lowerBound
+        while start < range.upperBound {
+            let end = text[start..<range.upperBound].firstIndex(of: "\n") ?? range.upperBound
+            lines.append(ParagraphLine(
+                range: start..<end,
+                text: String(text[start..<end])
+            ))
+            start = end < range.upperBound ? text.index(after: end) : range.upperBound
+        }
+        return lines
     }
 }

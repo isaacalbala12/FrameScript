@@ -94,6 +94,32 @@ enum HookContextBuilder {
         return value.isFinite && value > 0 ? value : 150
     }
 
+    /// Script language detection falls back to the project's declared primary
+    /// language before the interface language. A short or empty scene must not
+    /// silently switch a Spanish project to English prompts.
+    static func scriptLanguage(
+        project: FrameProject,
+        sceneText: String,
+        interfaceLanguage: AppLanguage
+    ) -> AppLanguage {
+        let fallback = appLanguage(forPrimaryLanguageCode: project.primaryLanguage) ?? interfaceLanguage
+        return PromptBuilder().responseLanguage(for: sceneText, fallback: fallback)
+    }
+
+    static func appLanguage(forPrimaryLanguageCode code: String) -> AppLanguage? {
+        let normalized = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "spanish": return .spanish
+        case "english": return .english
+        case "russian": return .russian
+        default: break
+        }
+        if normalized.hasPrefix("es") { return .spanish }
+        if normalized.hasPrefix("en") { return .english }
+        if normalized.hasPrefix("ru") { return .russian }
+        return nil
+    }
+
     static func hookContext(
         project: FrameProject,
         scene: Scene,
@@ -241,7 +267,7 @@ enum HookPromptBuilder {
             "Scene duration: \(DurationEstimator.formatted(context.sceneSeconds)) · \(context.sceneWordCount) words · \(Int(context.wordsPerMinute.rounded())) wpm"
         )
         lines.append(
-            "Maximum hook length: \(Int(HookLimits.maximumHookSeconds)) s ≈ \(budget) spoken words."
+            "Maximum hook length: \(Int(HookLimits.maximumHookSeconds)) s ≈ \(budget) spoken words. Aim for 80–100 % of \(budget). This replaces the opening paragraph: write it to stand alone and flow into the next sentence."
         )
         if !context.sceneNotes.isEmpty {
             lines.append("Hook scene notes: \(context.sceneNotes)")
@@ -275,7 +301,7 @@ enum HookPromptBuilder {
             "Scene duration: \(DurationEstimator.formatted(context.sceneSeconds)) · \(context.sceneWordCount) words · \(Int(context.wordsPerMinute.rounded())) wpm"
         )
         lines.append(
-            "Maximum bridge length: \(Int(HookLimits.maximumRehookSeconds)) s ≈ \(budget) spoken words."
+            "Maximum bridge length: \(Int(HookLimits.maximumRehookSeconds)) s ≈ \(budget) spoken words. Aim for 80–100 % of \(budget). It is spoken right before its anchor."
         )
         lines.append("")
 
@@ -323,7 +349,11 @@ struct HookService: HookServicing {
     ) async throws -> HookGenerationResult {
         guard settings.provider != .disabled else { throw HookServiceError.providerDisabled }
 
-        let language = promptBuilder.responseLanguage(for: scene.scriptText, fallback: interfaceLanguage)
+        let language = HookContextBuilder.scriptLanguage(
+            project: project,
+            sceneText: scene.scriptText,
+            interfaceLanguage: interfaceLanguage
+        )
         let context = HookContextBuilder.hookContext(
             project: project,
             scene: scene,
@@ -364,7 +394,11 @@ struct HookService: HookServicing {
         wordsPerMinute: Double,
         apiKey: String
     ) async throws -> RehookGenerationResult {
-        let language = promptBuilder.responseLanguage(for: scene.scriptText, fallback: interfaceLanguage)
+        let language = HookContextBuilder.scriptLanguage(
+            project: project,
+            sceneText: scene.scriptText,
+            interfaceLanguage: interfaceLanguage
+        )
         let context = HookContextBuilder.rehookContext(
             project: project,
             scene: scene,

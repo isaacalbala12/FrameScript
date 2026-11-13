@@ -252,9 +252,9 @@ struct HookGeneratorSheet: View {
                     HookCard(
                         index: index,
                         hook: hook,
-                        isCopied: copiedText == hook.text,
+                        isCopied: copiedText == hook.scriptTextForInsertion,
                         onInsert: { insertHook(hook) },
-                        onCopy: { copy(hook.text) }
+                        onCopy: { copy(hook.scriptTextForInsertion) }
                     )
                 }
                 Text(appState.localized("hooks.generatedBy"))
@@ -459,7 +459,8 @@ struct HookGeneratorSheet: View {
     }
 
     private func insertHook(_ hook: HookSuggestion) {
-        if appState.insertHookSuggestion(hook, undoManager: undoManager) {
+        guard let result = hookResult else { return }
+        if appState.insertHookSuggestion(hook, sceneID: result.sceneID, undoManager: undoManager) {
             dismiss()
         } else {
             errorKey = "hooks.error.noScene"
@@ -699,7 +700,7 @@ enum HookLocalization {
             key = "hooks.angle.question"
         case "contraste", "contrast", "контраст":
             key = "hooks.angle.contrast"
-        case "dato", "dato concreto", "data", "данные":
+        case "dato", "dato concreto", "data", "данные", "цифра", "число", "факт", "статистика":
             key = "hooks.angle.data"
         case "promesa", "promise", "обещание":
             key = "hooks.angle.promise"
@@ -723,11 +724,14 @@ enum HookLocalization {
             switch error {
             case .providerDisabled: return "hooks.error.disabled"
             case .truncated: return "hooks.error.truncated"
-            case .noSuggestions: return "hooks.error.empty"
             }
         }
-        if error is HookParsingError {
-            return "hooks.error.malformed"
+        if let error = error as? HookParsingError {
+            switch error {
+            case .noSuggestions: return "hooks.error.empty"
+            case .noValidAnchors: return "hooks.error.anchorMissing"
+            case .invalidJSON: return "hooks.error.malformed"
+            }
         }
         if error is HookGenerationError {
             return "hooks.error.noScene"

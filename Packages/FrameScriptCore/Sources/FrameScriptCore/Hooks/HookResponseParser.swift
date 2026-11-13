@@ -43,12 +43,11 @@ public enum HookResponseParser {
                 HookJSONPayload.firstString(in: object, keys: ["angle", "label", "type", "kind"]) ?? "",
                 limit: 48
             )
-            let onScreenText = sanitizedLabel(
+            let onScreenText = sanitizedOnScreenText(
                 HookJSONPayload.firstString(
                     in: object,
                     keys: ["onScreenText", "on_screen_text", "screenText", "screen_text", "overlay", "textOnScreen"]
-                ) ?? "",
-                limit: 80
+                ) ?? ""
             )
 
             suggestions.append(HookSuggestion(
@@ -204,6 +203,11 @@ public enum HookResponseParser {
         guard !value.isEmpty, value.count <= 1_200 else { return nil }
         guard !value.contains("```"), !value.contains("**"), !value.contains("##") else { return nil }
         guard !value.lowercased().contains("[re-hook]") else { return nil }
+        let placeholders: Set<String> = [
+            "spoken hook", "hook", "text", "texto", "example", "ejemplo",
+            "bridge", "puente", "string", "hook text", "texto del gancho"
+        ]
+        guard !placeholders.contains(value.lowercased()) else { return nil }
         guard ScriptMarkup.spokenWordCount(value) > 0 else { return nil }
         return value
     }
@@ -220,6 +224,17 @@ public enum HookResponseParser {
         value = value.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         guard !value.contains("```"), !value.contains("**"), !value.contains("##") else { return "" }
         return String(value.prefix(limit)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func sanitizedOnScreenText(_ raw: String) -> String {
+        var value = sanitizedLabel(raw, limit: 80)
+        value = value
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholders: Set<String> = ["…", "...", "on screen", "on-screen", "texto en pantalla"]
+        return placeholders.contains(value.lowercased()) ? "" : value
     }
 
     private static func normalized(_ text: String) -> String {
@@ -239,15 +254,21 @@ public enum HookResponseParser {
 
 enum HookJSONPayload {
     static func entries(from response: String, keys: [String]) -> [Any]? {
-        for candidate in candidates(from: response) {
-            guard let data = candidate.data(using: .utf8),
-                  let value = try? JSONSerialization.jsonObject(with: data),
-                  let entries = unwrap(value, keys: keys) else {
-                continue
+        var collected: [Any] = []
+        var parsedStructuredPayload = false
+        for candidate in HookJSONRepair.candidates(from: response) {
+            for variant in HookJSONRepair.variants(of: candidate) {
+                guard let data = variant.data(using: .utf8),
+                      let value = try? JSONSerialization.jsonObject(with: data),
+                      let entries = unwrap(value, keys: keys) else {
+                    continue
+                }
+                parsedStructuredPayload = true
+                collected.append(contentsOf: entries)
+                break
             }
-            return entries
         }
-        return nil
+        return parsedStructuredPayload ? collected : nil
     }
 
     static func object(from entry: Any) -> [String: Any]? {
@@ -261,49 +282,6 @@ enum HookJSONPayload {
             if let value = object[key] as? String, !value.isEmpty { return value }
         }
         return nil
-    }
-
-    private static func candidates(from response: String) -> [String] {
-        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        var values: [String] = []
-        append(trimmed, to: &values)
-
-        if let fenced = fenceContent(from: trimmed) {
-            append(fenced, to: &values)
-        }
-
-        let sources = values
-        for source in sources {
-            for (opening, closing) in [("{", "}"), ("[", "]")] {
-                if let start = source.firstIndex(of: Character(opening)),
-                   let end = source.lastIndex(of: Character(closing)),
-                   start < end {
-                    append(String(source[start...end]), to: &values)
-                }
-            }
-        }
-
-        var seen = Set<String>()
-        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
-    }
-
-    private static func append(_ value: String, to values: inout [String]) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        values.append(trimmed)
-    }
-
-    private static func fenceContent(from text: String) -> String? {
-        guard let opening = text.range(of: "```") else { return nil }
-        var body = text[opening.upperBound...]
-        if let lineEnd = body.firstIndex(of: "\n") {
-            body = body[body.index(after: lineEnd)...]
-        } else if let firstSpace = body.firstIndex(of: " ") {
-            // A single-line fence such as ```json {...}```.
-            body = body[body.index(after: firstSpace)...]
-        }
-        guard let closing = body.range(of: "```", options: .backwards) else { return nil }
-        return String(body[..<closing.lowerBound])
     }
 
     private static func unwrap(_ value: Any, keys: [String]) -> [Any]? {

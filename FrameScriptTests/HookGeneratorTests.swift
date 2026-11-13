@@ -13,26 +13,27 @@ final class HookGeneratorTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("Respond only in Spanish."))
         XCTAssertTrue(prompt.contains("simracing"))
-        XCTAssertTrue(prompt.contains("15 seconds"))
-        XCTAssertTrue(prompt.contains("35 to 50"))
-        XCTAssertTrue(prompt.contains("first sentence has 15 words or fewer"))
+        XCTAssertTrue(prompt.contains("first 15 seconds"))
+        XCTAssertTrue(prompt.contains("Never exceed the word budget"))
+        XCTAssertTrue(prompt.contains("First sentence 12 words or fewer"))
+        XCTAssertTrue(prompt.contains("canonical labels, never translated"))
         XCTAssertTrue(prompt.contains("en el vídeo de hoy"))
         XCTAssertTrue(prompt.contains("no olvides suscribirte"))
         XCTAssertTrue(prompt.contains("en conclusión"))
-        XCTAssertTrue(prompt.contains("Never claim the creator tested"))
-        XCTAssertTrue(prompt.contains("Never invent"))
+        XCTAssertTrue(prompt.contains("Never invent facts"))
         XCTAssertTrue(prompt.contains("onScreenText"))
         XCTAssertTrue(prompt.contains("pregunta"))
         XCTAssertTrue(prompt.contains("contraste"))
         XCTAssertTrue(prompt.contains("promesa"))
     }
 
-    func testRehookSystemPromptContainsAnchorAndSixSecondConstraints() {
+    func testRehookSystemPromptContainsAnchorAndBudgetConstraints() {
         let prompt = PromptBuilder().systemPrompt(for: .rehook, language: .russian)
 
         XCTAssertTrue(prompt.contains("Respond only in Russian."))
-        XCTAssertTrue(prompt.contains("6 seconds"))
-        XCTAssertTrue(prompt.contains("anchor"))
+        XCTAssertTrue(prompt.contains("IMMEDIATELY BEFORE the anchor"))
+        XCTAssertTrue(prompt.contains("Never exceed the word budget"))
+        XCTAssertTrue(prompt.contains("No structure announcements"))
         XCTAssertTrue(prompt.contains("copy one supplied anchor sentence exactly"))
         XCTAssertTrue(prompt.contains("además"))
         XCTAssertTrue(prompt.contains("not summarise"))
@@ -66,6 +67,8 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertTrue(prompt.contains(scene.scriptText))
         XCTAssertTrue(prompt.contains("Next scene: \(project.scenes.sortedByOrder[1].title)"))
         XCTAssertTrue(prompt.contains("15 s ≈ 37 spoken words"))
+        XCTAssertTrue(prompt.contains("Aim for 80–100 % of 37"))
+        XCTAssertTrue(prompt.contains("This replaces the opening paragraph"))
         XCTAssertTrue(prompt.contains("\"hooks\""))
     }
 
@@ -87,6 +90,8 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Project title: \(project.title)"))
         XCTAssertTrue(prompt.contains("Scene: \(scene.title)"))
         XCTAssertTrue(prompt.contains("Maximum bridge length: 6 s ≈ 15 spoken words"))
+        XCTAssertTrue(prompt.contains("Aim for 80–100 % of 15"))
+        XCTAssertTrue(prompt.contains("spoken right before its anchor"))
         for position in positions {
             XCTAssertTrue(prompt.contains("Anchor: \(position.anchor)"))
         }
@@ -100,6 +105,18 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertEqual(HookPromptBuilder.wordBudget(seconds: 6, wordsPerMinute: 150), 15)
         XCTAssertEqual(HookPromptBuilder.wordBudget(seconds: 15, wordsPerMinute: 0), 37)
         XCTAssertEqual(HookPromptBuilder.wordBudget(seconds: 15, wordsPerMinute: 180), 45)
+    }
+
+    func testPromptBudgetAtSlowRateStaysWithinSpokenLimits() {
+        let hookBudget = HookPromptBuilder.wordBudget(seconds: 15, wordsPerMinute: 110)
+        XCTAssertEqual(hookBudget, 27)
+        let hookText = Array(repeating: "palabra", count: hookBudget).joined(separator: " ")
+        XCTAssertLessThanOrEqual(ScriptMarkup.estimateDuration(hookText, wordsPerMinute: 110), 15)
+
+        let rehookBudget = HookPromptBuilder.wordBudget(seconds: 6, wordsPerMinute: 110)
+        XCTAssertEqual(rehookBudget, 11)
+        let rehookText = Array(repeating: "palabra", count: rehookBudget).joined(separator: " ")
+        XCTAssertLessThanOrEqual(ScriptMarkup.estimateDuration(rehookText, wordsPerMinute: 110), 6)
     }
 
     func testHookScenePrefersTheMarkedHookThenTheFirstScene() {
@@ -123,6 +140,29 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertEqual(HookContextBuilder.wordsPerMinute(project: project, configured: 150), 168)
         project.learnedWordsPerMinuteByLanguage["es"] = 0
         XCTAssertEqual(HookContextBuilder.wordsPerMinute(project: project, configured: 0), 150)
+    }
+
+    func testProjectPrimaryLanguageIsTheFallbackBeforeTheInterface() {
+        XCTAssertEqual(HookContextBuilder.appLanguage(forPrimaryLanguageCode: "es-ES"), .spanish)
+        XCTAssertEqual(HookContextBuilder.appLanguage(forPrimaryLanguageCode: "english"), .english)
+        XCTAssertEqual(HookContextBuilder.appLanguage(forPrimaryLanguageCode: "ru-RU"), .russian)
+        XCTAssertNil(HookContextBuilder.appLanguage(forPrimaryLanguageCode: "fr"))
+
+        let project = FrameProject(title: "Idioma", primaryLanguage: "es")
+        XCTAssertEqual(
+            HookContextBuilder.scriptLanguage(project: project, sceneText: "", interfaceLanguage: .english),
+            .spanish
+        )
+        XCTAssertEqual(
+            HookContextBuilder.scriptLanguage(project: project, sceneText: "Hola", interfaceLanguage: .russian),
+            .spanish
+        )
+
+        project.primaryLanguage = "fr"
+        XCTAssertEqual(
+            HookContextBuilder.scriptLanguage(project: project, sceneText: "", interfaceLanguage: .russian),
+            .russian
+        )
     }
 
     // MARK: - Service
@@ -175,6 +215,22 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertEqual(result.language, .spanish)
         XCTAssertTrue(provider.requests.first?.systemPrompt.contains("Respond only in Spanish.") == true)
         XCTAssertTrue(provider.requests.first?.userPrompt.contains("Gancho") == true)
+    }
+
+    func testHookGenerationFallsBackToProjectPrimaryLanguageWhenTheSceneIsEmpty() async throws {
+        let provider = HookTestProvider(LLMResponse(text: #"{"hooks":[{"angle":"dato","text":"Un gancho de reserva con un dato concreto."}]}"#))
+        let project = makeShortProject()
+        project.primaryLanguage = "es"
+        project.scenes[0].scriptText = ""
+        let appState = makeAppState(provider: provider)
+        appState.settings.aiPreferences.provider = .openAICompatible
+        appState.settings.generalPreferences.language = .english
+        open(project, in: appState)
+
+        let result = try await appState.generateHookSuggestions()
+
+        XCTAssertEqual(result.language, .spanish)
+        XCTAssertTrue(provider.requests.first?.systemPrompt.contains("Respond only in Spanish.") == true)
     }
 
     func testHookGenerationSurfacesTruncationInsteadOfParsingPartialJSON() async throws {
@@ -275,20 +331,53 @@ final class HookGeneratorTests: XCTestCase {
         let suggestion = HookSuggestion(
             angle: "contraste",
             text: "Nuevo gancho.",
+            onScreenText: "Pantalla",
             wordCount: 2,
             estimatedSeconds: 0.8
         )
         let undoManager = UndoManager()
 
         undoManager.beginUndoGrouping()
-        XCTAssertTrue(appState.insertHookSuggestion(suggestion, undoManager: undoManager))
+        XCTAssertTrue(appState.insertHookSuggestion(suggestion, sceneID: scene.id, undoManager: undoManager))
         undoManager.endUndoGrouping()
 
-        XCTAssertEqual(scene.scriptText, "Nuevo gancho.\n\nResto del guion.")
+        XCTAssertEqual(scene.scriptText, "Nuevo gancho.\n[TEXTO: Pantalla]\n\nResto del guion.")
         undoManager.undo()
         XCTAssertEqual(scene.scriptText, previous)
         undoManager.redo()
-        XCTAssertEqual(scene.scriptText, "Nuevo gancho.\n\nResto del guion.")
+        XCTAssertEqual(scene.scriptText, "Nuevo gancho.\n[TEXTO: Pantalla]\n\nResto del guion.")
+    }
+
+    func testHookInsertUsesTheGeneratedSceneID() throws {
+        let first = Scene(
+            order: 0,
+            sectionType: .hook,
+            title: "Primer gancho",
+            scriptText: "Gancho A.\n\nResto A."
+        )
+        let second = Scene(
+            order: 1,
+            sectionType: .hook,
+            title: "Segundo gancho",
+            scriptText: "Gancho B.\n\nResto B."
+        )
+        let project = FrameProject(title: "Dos ganchos", scenes: [first, second])
+        let appState = makeAppState(provider: HookTestProvider(LLMResponse(text: "{}")))
+        open(project, in: appState)
+        let suggestion = HookSuggestion(
+            angle: "dato",
+            text: "Nuevo gancho.",
+            wordCount: 2,
+            estimatedSeconds: 0.8
+        )
+
+        // The sheet generated for the first scene; make it stop being the
+        // default hook scene before insertion.
+        first.sectionType = .problem
+        XCTAssertTrue(appState.insertHookSuggestion(suggestion, sceneID: first.id))
+
+        XCTAssertEqual(first.scriptText, "Nuevo gancho.\n\nResto A.")
+        XCTAssertEqual(second.scriptText, "Gancho B.\n\nResto B.")
     }
 
     func testOverLimitHookIsRejectedByTheInsertionGuard() throws {
@@ -304,7 +393,7 @@ final class HookGeneratorTests: XCTestCase {
             estimatedSeconds: 16
         )
 
-        XCTAssertFalse(appState.insertHookSuggestion(suggestion))
+        XCTAssertFalse(appState.insertHookSuggestion(suggestion, sceneID: scene.id))
 
         XCTAssertEqual(scene.scriptText, previous)
     }
@@ -386,8 +475,27 @@ final class HookGeneratorTests: XCTestCase {
     func testAngleLabelsFallBackToTheProviderLabel() {
         XCTAssertEqual(HookLocalization.angle("dato", language: .spanish), "Dato")
         XCTAssertEqual(HookLocalization.angle("CONTRASTE", language: .english), "Contrast")
+        XCTAssertEqual(HookLocalization.angle("цифра", language: .russian), "Данные")
         XCTAssertEqual(HookLocalization.angle("", language: .russian), "Угол")
         XCTAssertEqual(HookLocalization.angle("curiosidad", language: .english), "Curiosidad")
+    }
+
+    func testMockRehookEchoesTheFirstPromptAnchor() throws {
+        let prompt = "1. Anchor: Uno. Dos.\n2. Anchor: Tres."
+        let response = MockLLMProvider.rehookResponse(for: prompt)
+        let anchors = [
+            RehookPosition(anchor: "Uno. Dos.", anchorRange: UTF16Span(location: 0, length: 9), sentenceIndex: 1, reason: .longScene),
+            RehookPosition(anchor: "Tres.", anchorRange: UTF16Span(location: 10, length: 5), sentenceIndex: 2, reason: .longScene)
+        ]
+
+        let suggestions = try HookResponseParser.parseRehooks(
+            response.text,
+            anchors: anchors,
+            wordsPerMinute: 150
+        )
+
+        XCTAssertEqual(suggestions.count, 1)
+        XCTAssertEqual(suggestions.first?.anchor, "Uno. Dos.")
     }
 
     func testProviderErrorsMapToLocalizedHookKeys() {
@@ -398,6 +506,9 @@ final class HookGeneratorTests: XCTestCase {
         XCTAssertEqual(HookLocalization.errorKey(for: LLMProviderError.httpStatus(503, nil)), "hooks.error.server")
         XCTAssertEqual(HookLocalization.errorKey(for: LLMProviderError.network("1")), "hooks.error.network")
         XCTAssertEqual(HookLocalization.errorKey(for: HookParsingError.invalidJSON), "hooks.error.malformed")
+        XCTAssertEqual(HookLocalization.errorKey(for: HookParsingError.noSuggestions), "hooks.error.empty")
+        XCTAssertEqual(HookLocalization.errorKey(for: HookParsingError.noValidAnchors), "hooks.error.anchorMissing")
+        XCTAssertEqual(HookLocalization.errorKey(for: HookServiceError.truncated), "hooks.error.truncated")
         XCTAssertEqual(HookLocalization.errorKey(for: HookGenerationError.noScene), "hooks.error.noScene")
     }
 

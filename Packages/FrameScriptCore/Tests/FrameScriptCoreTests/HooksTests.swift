@@ -46,6 +46,103 @@ struct HookResponseParserTests {
         #expect(hooks[0].text == "Esto empieza con el problema real, no con el menú.")
     }
 
+    @Test func parsesSchemaExampleAndAnswerFencesSeparately() throws {
+        let response = """
+        Schema:
+        ```json
+        {"hooks":[{"angle":"pregunta","text":"spoken hook","onScreenText":"…"}]}
+        ```
+        Answer:
+        ```json
+        {"hooks":[{"angle":"dato","text":"El gancho real con un dato concreto.","onScreenText":"Dato"}]}
+        ```
+        """
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].text == "El gancho real con un dato concreto.")
+        #expect(hooks[0].angle == "dato")
+    }
+
+    @Test func findsJSONAmongProseBraces() throws {
+        let response = "Usa {estas llaves} y devuelve: {\"hooks\":[{\"text\":\"Un gancho entre prosa con llaves.\"}]} fin {otra}."
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].text == "Un gancho entre prosa con llaves.")
+    }
+
+    @Test func repairsTrailingCommas() throws {
+        let response = #"{"hooks":[{"text":"Un gancho con coma final.","angle":"dato",},],}"#
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].angle == "dato")
+    }
+
+    @Test func escapesRawNewlinesInsideJSONStrings() throws {
+        let response = "{\"hooks\":[{\"text\":\"Primera línea\nsegunda línea.\",\"angle\":\"dato\"}]}"
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.first?.text == "Primera línea segunda línea.")
+    }
+
+    @Test func repairsSingleQuotedJSON() throws {
+        let response = #"{'hooks':[{'text':'Un gancho con comillas simples.','angle':'dato'}]}"#
+        let apostrophe = #"{'hooks':[{'text':'It's a hook with an apostrophe.','angle':'dato'}]}"#
+
+        #expect(try HookResponseParser.parseHooks(response, wordsPerMinute: 150).first?.text == "Un gancho con comillas simples.")
+        #expect(try HookResponseParser.parseHooks(apostrophe, wordsPerMinute: 150).first?.text == "It's a hook with an apostrophe.")
+    }
+
+    @Test func repairsSmartQuoteDelimiters() throws {
+        let response = "{“hooks”:[{“text”:“Un gancho con comillas tipográficas.”,“angle”:“dato”}]}"
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].text == "Un gancho con comillas tipográficas.")
+        #expect(hooks[0].angle == "dato")
+    }
+
+    @Test func repairsGuillemetsAroundValues() throws {
+        let response = #"{"hooks":[{"text":«Un gancho entre guillemets.», "angle":"dato"}]}"#
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.first?.text == "Un gancho entre guillemets.")
+    }
+
+    @Test func acceptsSingleHookObjectUnderHooks() throws {
+        let response = #"{"hooks":{"text":"Un único gancho envuelto como objeto."}}"#
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].text == "Un único gancho envuelto como objeto.")
+    }
+
+    @Test func acceptsSingleHookObjectAmongProseBraces() throws {
+        let response = "Ejemplo {x}: {\"hooks\":{\"text\":\"Un único gancho entre llaves de prosa.\"}} fin {y}."
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.count == 1)
+        #expect(hooks[0].text == "Un único gancho entre llaves de prosa.")
+    }
+
+    @Test func acceptsPayloadWrappedInTypographicQuotes() throws {
+        let response = "“{\"hooks\":[{\"text\":\"Un gancho envuelto en comillas tipográficas.\"}]}”"
+
+        let hooks = try HookResponseParser.parseHooks(response, wordsPerMinute: 150)
+
+        #expect(hooks.first?.text == "Un gancho envuelto en comillas tipográficas.")
+    }
+
     @Test func skipsMalformedEntriesAndKeepsValidOnes() throws {
         let response = #"{"hooks":[{"angle":"dato"},{"text":"   "},{"text":123},{"text":"**Negrita** no es texto hablado."},{"text":"Esta sí sirve como gancho hablado."}]}"#
 
@@ -264,6 +361,26 @@ struct RehookPlannerTests {
         #expect(positions.first?.reason == .videoMidpoint)
     }
 
+    @Test func videoMidpointUsesSpokenTimeNotADurationFraction() throws {
+        // 15 sentences = 150 words = 60 s of speech plus a 30 s pause. At a
+        // 120 s video midpoint the correct target is 60 s into the scene, which
+        // is about 75 words. A duration fraction (60/90) would drift to 100
+        // words here.
+        let text = "[pausa 30s] " + longScene(sentenceCount: 15)
+
+        let positions = RehookPlanner.positions(
+            in: text,
+            wordsPerMinute: 150,
+            sceneStartSeconds: 0,
+            videoDurationSeconds: 120
+        )
+
+        let position = try #require(positions.first)
+        #expect(position.reason == .videoMidpoint)
+        #expect(position.sentenceIndex >= 6)
+        #expect(position.sentenceIndex <= 8)
+    }
+
     @Test func sceneWithFewerThanThreeSentencesHasNoPositions() {
         #expect(RehookPlanner.positions(in: "Uno. Dos.", wordsPerMinute: 150).isEmpty)
         #expect(RehookPlanner.positions(in: "", wordsPerMinute: 150).isEmpty)
@@ -284,9 +401,54 @@ struct RehookPlannerTests {
     }
 }
 
+@Suite("HookJSONRepair")
+struct HookJSONRepairTests {
+    @Test func stripsStructuralTrailingCommasOnly() {
+        let input = #"{"a":1, "b":[1,2,],"c":"x,}",}"#
+        let output = HookJSONRepair.removingTrailingCommas(input)
+        #expect(output == #"{"a":1, "b":[1,2],"c":"x,}"}"#)
+    }
+
+    @Test func normalizesSmartQuoteDelimitersWithoutTouchingApostrophes() {
+        let input = "{“hooks”:[{“text”:“l’aggiornamento.”}]}"
+        let output = HookJSONRepair.normalizedSmartQuotes(input)
+        #expect(output == "{\"hooks\":[{\"text\":\"l’aggiornamento.\"}]}")
+    }
+
+    @Test func escapesRawControlCharactersInsideStrings() {
+        let input = "{\"text\":\"linea\nsegunda\"}"
+        let output = HookJSONRepair.escapingControlCharacters(inStrings: input)
+        #expect(output == "{\"text\":\"linea\\nsegunda\"}")
+    }
+
+    @Test func convertsSingleQuotedJSONAndKeepsApostrophes() {
+        let input = #"{'text':'It's fine','angle':'dato'}"#
+        let output = HookJSONRepair.convertingSingleQuotedJSON(input)
+        #expect(output == #"{"text":"It's fine","angle":"dato"}"#)
+    }
+
+    @Test func returnsEveryFencedBlockSeparately() {
+        let input = """
+        Schema:
+        ```json
+        {"a":1}
+        ```
+        Answer:
+        ```json
+        {"b":2}
+        ```
+        """
+
+        let blocks = HookJSONRepair.fencedBlocks(in: input)
+
+        #expect(blocks.count == 2)
+        #expect(blocks[0].contains("\"a\""))
+        #expect(blocks[1].contains("\"b\""))
+    }
+}
+
 @Suite("HookInsertion")
-struct HookInsertionTests {
-    @Test func replacesFirstSpokenParagraphAndKeepsTheRest() {
+struct HookInsertionTests {    @Test func replacesFirstSpokenParagraphAndKeepsTheRest() {
         let text = "Gancho viejo.\n\nSegundo bloque.\n\nTercero."
 
         let result = HookInsertion.replacingHook(in: text, with: "Gancho nuevo.")
@@ -302,16 +464,51 @@ struct HookInsertionTests {
         #expect(result == "[IMAGEN: coche en pista]\nGancho nuevo.\n\nResto del guion.")
     }
 
+    @Test func preservesTrailingBrollCueAfterTheHookLine() {
+        let text = "Gancho viejo.\n[B-ROLL: garaje]\n\nSegundo bloque."
+
+        let result = HookInsertion.replacingHook(in: text, with: "Gancho nuevo.")
+
+        #expect(result == "Gancho nuevo.\n[B-ROLL: garaje]\n\nSegundo bloque.")
+    }
+
+    @Test func preservesInterleavedCueLinesAfterTheReplacement() {
+        let text = "Gancho viejo.\n[B-ROLL: garaje]\nSigue el gancho.\n\nResto."
+
+        let result = HookInsertion.replacingHook(in: text, with: "Gancho nuevo.")
+
+        #expect(result == "Gancho nuevo.\n[B-ROLL: garaje]\n\nResto.")
+    }
+
     @Test func appendsWhenThereIsNoSpokenParagraph() {
         #expect(HookInsertion.replacingHook(in: "", with: "Nuevo.") == "Nuevo.")
         #expect(HookInsertion.replacingHook(in: "   \n\n ", with: "Nuevo.") == "Nuevo.")
         #expect(HookInsertion.replacingHook(in: "[IMAGEN: coche]", with: "Nuevo.") == "[IMAGEN: coche]\n\nNuevo.")
     }
 
-    @Test func normalizesMultilineHookTextIntoOneParagraph() {
-        let result = HookInsertion.replacingHook(in: "Viejo.", with: "  Nuevo\n  gancho  ")
+    @Test func preservesLineBoundariesForTheOnScreenCue() {
+        let result = HookInsertion.replacingHook(in: "Viejo.", with: "  Nuevo\n  [TEXTO: Pantalla]  ")
 
-        #expect(result == "Nuevo gancho")
+        #expect(result == "Nuevo\n[TEXTO: Pantalla]")
+    }
+
+    @Test func scriptTextForInsertionAddsATextCue() {
+        let withCue = HookSuggestion(
+            angle: "dato",
+            text: "Gancho hablado.",
+            onScreenText: "Pantalla",
+            wordCount: 2,
+            estimatedSeconds: 0.8
+        )
+        let withoutCue = HookSuggestion(
+            angle: "dato",
+            text: "Gancho hablado.",
+            wordCount: 2,
+            estimatedSeconds: 0.8
+        )
+
+        #expect(withCue.scriptTextForInsertion == "Gancho hablado.\n[TEXTO: Pantalla]")
+        #expect(withoutCue.scriptTextForInsertion == "Gancho hablado.")
     }
 
     @Test func rehookIsInsertedBeforeAnchorWithCueLine() throws {

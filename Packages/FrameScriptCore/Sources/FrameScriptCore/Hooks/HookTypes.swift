@@ -49,8 +49,21 @@ public struct HookSuggestion: Sendable, Equatable, Hashable {
 
     public var exceedsLimit: Bool { estimatedSeconds > maximumSeconds }
     public var isWithinLimit: Bool { !exceedsLimit }
-}
 
+    /// The text that should be inserted into the script. A non-empty
+    /// `onScreenText` becomes a `[TEXTO: …]` cue on its own line, so it stays
+    /// out of the spoken narration and survives copy/paste.
+    public var scriptTextForInsertion: String {
+        let cue = onScreenText
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cue.isEmpty else { return text }
+        return "\(text)\n[TEXTO: \(cue)]"
+    }
+}
 /// One re-engagement bridge returned by the model.
 ///
 /// `anchor` and `anchorRange` point at the sentence the bridge must be inserted
@@ -120,5 +133,4 @@ public enum HookParsingError: Error, Equatable, Sendable {
 public enum HookServiceError: Error, Equatable, Sendable {
     case providerDisabled
     case truncated
-    case noSuggestions
 }

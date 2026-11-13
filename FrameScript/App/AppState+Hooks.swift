@@ -46,9 +46,10 @@ extension AppState {
 
         let wordsPerMinute = hookWordsPerMinute
         let positions = rehookPositions(for: scene, wordsPerMinute: wordsPerMinute)
-        let language = PromptBuilder().responseLanguage(
-            for: scene.scriptText,
-            fallback: currentLanguage
+        let language = HookContextBuilder.scriptLanguage(
+            project: project,
+            sceneText: scene.scriptText,
+            interfaceLanguage: currentLanguage
         )
         let sceneSeconds = ScriptMarkup.estimateDuration(
             scene.scriptText,
@@ -120,15 +121,22 @@ extension AppState {
     @discardableResult
     func insertHookSuggestion(
         _ suggestion: HookSuggestion,
+        sceneID: UUID,
         undoManager: UndoManager? = nil
     ) -> Bool {
-        guard suggestion.isWithinLimit, let scene = hookScene else { return false }
+        guard suggestion.isWithinLimit,
+              let scene = project.scenes.first(where: { $0.id == sceneID }) else {
+            return false
+        }
         let previousText = scene.scriptText
-        let updatedText = HookInsertion.replacingHook(in: previousText, with: suggestion.text)
+        let updatedText = HookInsertion.replacingHook(
+            in: previousText,
+            with: suggestion.scriptTextForInsertion
+        )
         guard updatedText != previousText else { return true }
         applyHookText(
             updatedText,
-            sceneID: scene.id,
+            sceneID: sceneID,
             previousText: previousText,
             actionKey: "hooks.insertAction",
             undoManager: undoManager

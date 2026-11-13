@@ -209,10 +209,32 @@ struct MockLLMProvider: LLMProviderProtocol {
                 ? #"{"hooks":[{"angle":"контраст","text":"Новый патч обещает больше, чем даёт. Проблема в одном изменении, о котором никто не говорит.","onScreenText":"Что изменилось?"}]}"#
                 : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
         case .rehook:
-            return LLMResponse(text: russian
-                ? #"{"bridges":[{"text":"Но есть вторая деталь, которая меняет весь расклад.","anchor":""}]}"#
-                : #"{"bridges":[{"text":"Pero hay una segunda pieza que cambia todo el planteamiento.","anchor":""}]}"#)
+            return Self.rehookResponse(for: request.userPrompt, russian: russian)
         }
+    }
+
+    /// Builds a valid bridge response from the first anchor in the prompt so
+    /// the mock never returns an empty anchor when multiple positions exist.
+    static func rehookResponse(for userPrompt: String, russian: Bool = false) -> LLMResponse {
+        let text = russian
+            ? "Но есть вторая деталь, которая меняет весь расклад."
+            : "Pero hay una segunda pieza que cambia todo el planteamiento."
+        let anchor = firstAnchor(in: userPrompt) ?? ""
+        let payload: [String: Any] = ["bridges": [["text": text, "anchor": anchor]]]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return LLMResponse(text: #"{"bridges":[]}"#)
+        }
+        return LLMResponse(text: json)
+    }
+
+    static func firstAnchor(in userPrompt: String) -> String? {
+        for line in userPrompt.components(separatedBy: .newlines) {
+            guard let range = line.range(of: "Anchor:") else { continue }
+            let value = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return nil
     }
 }
 
@@ -769,39 +791,40 @@ struct PromptBuilder {
             "Generate restrained YouTube editing notes. Avoid timeline complexity. \(languageInstruction)"
         case .hook:
             """
-            You write opening hooks for a Spanish simracing and motorsport YouTube channel. Write in the creator's voice: direct, colloquial Spanish from Spain, tuteo for the viewer, vosotros in any CTA, 8–18 word sentences, dry humour, thesis early, zero corporate filler. When the script language is not Spanish, keep the same direct, dry, concise voice in that language; the Spanish examples are style references, not text to copy. This is the first 15 seconds of the video; every second counts.
+            You write the first 15 seconds of a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, dry, tuteo for the viewer; never ustedes, "acá", "celular" or "computadora"; no corporate filler. If the script is in another language, keep this voice in that language.
 
             Return exactly one JSON object:
-            {"hooks":[{"angle":"pregunta","text":"spoken hook","onScreenText":"optional short overlay"}]}
+            {"hooks":[{"angle":"pregunta","text":"…","onScreenText":"…"}]}
 
-            Produce 3 to 5 alternatives, each with a different angle from this set: pregunta, contraste, dato, promesa, polémica. Write the angle label in \(languageName).
-            Rules for every hook:
-            - About 35 to 50 spoken words for a 150–180 wpm delivery, but never more than the 15-second budget supplied by the user.
-            - The first sentence has 15 words or fewer.
-            - No greeting. Never start with "en el vídeo de hoy", "hoy vamos a", "en el mundo del simracing", "no olvides suscribirte" or the equivalent generic YouTube intro in any language.
-            - Banned filler in Spanish: "en conclusión", "en resumen", "sumérgete", "descubre", "sin lugar a dudas", "hoy en día", "el mundo del simracing", "no te lo pierdas", "como todos sabemos", "es importante destacar". Apply the same ban in any other language.
-            - Start with the thesis, the conflict, the number or the promise. Do not warm up.
-            - Use a concrete number or fact only when it appears in the supplied material. Never invent data, sources, dates, prices or first-hand experiences.
-            - Never claim the creator tested, played, measured or bought something unless the supplied material explicitly says so. If a fact is not confirmed, do not present it as confirmed.
-            - No clickbait lies: do not promise anything the supplied video material does not support.
-            - End with a question or a promise the video can keep.
-            - Keep the creator's units when the script is Spanish: km/h, CV, Nm, kg, litros, €; decimal comma.
-            - "text" is spoken narration only: plain text, no Markdown, no quotes, no labels, no line breaks. "onScreenText" is optional, 2 to 4 words, or an empty string.
+            Produce 3 to 5 hooks, each with a different angle. "angle" must be exactly one of pregunta, contraste, dato, promesa, polémica — canonical labels, never translated (the app localizes them).
+            Rules:
+            - Never exceed the word budget in the user message; aim for 80–100 % of it. That budget already uses the real speaking rate, so ignore generic wpm figures.
+            - Use only numbers, dates, prices and experiences that appear in the supplied material. If the script hedges, the hook hedges. Never invent facts, sources or first-hand claims, and never promise something the video does not deliver.
+            - Never start with a greeting, the channel name, "en el vídeo de hoy", "hoy te traigo", "en este vídeo", "vamos a ver", "no olvides suscribirte" or the equivalent in any language. No CTA.
+            - Open on the thesis, the conflict, a supplied number or the promise. First sentence 12 words or fewer; one idea per sentence.
+            - Banned: "en conclusión", "en resumen", "sumérgete", "descubre", "sin lugar a dudas", "hoy en día", "el mundo del simracing", "no te lo pierdas", "como todos sabemos", "es importante destacar"; apply the same ban in any language.
+            - "dato" and "polémica" only when the script already contains the number or the conflict; otherwise pick another angle. Never fabricate either.
+            - End with tension the video resolves: a kept promise, a withheld number, or a question the first scene answers. Vary the ending across alternatives.
+            - The hook replaces the opening paragraph: it must stand alone, must not refer to earlier text and must not end mid-thought.
+            - "text" is spoken narration only: plain text, no Markdown, no quotes, no brackets, no line breaks. "onScreenText" is 2 to 4 words in the script language, no final period, never a copy of "text", or "".
+            - Units: km/h, CV, Nm, kg, litros, €; decimal comma. At most one Spain colloquialism ("menuda liada", "ojo", "ni de broma").
+            Style reference, do not copy: "La idea parece sencilla hasta que miras el detalle que cambia la decisión."
             Respond only in \(languageName).
             """
         case .rehook:
             """
-            You write re-engagement bridges for a Spanish simracing and motorsport YouTube channel. Voice: direct, colloquial, tuteo, short sentences, dry humour, no corporate filler. When the script language is not Spanish, keep the same voice in that language; the Spanish turns below are style references, not text to copy. A bridge must create curiosity about what comes next, not summarise what just ended.
+            You write re-engagement bridges for a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, tuteo, short sentences, dry humour. Keep the script's language.
 
             Return exactly one JSON object:
-            {"bridges":[{"text":"spoken bridge","anchor":"exact sentence from the scene where it is inserted"}]}
+            {"bridges":[{"text":"…","anchor":"…"}]}
 
-            Produce 1 or 2 bridges for each supplied anchor.
+            The bridge is spoken IMMEDIATELY BEFORE the anchor sentence: it sets that sentence up, it does not comment on or summarise it. Produce 1 or 2 bridges per supplied anchor.
             Rules:
-            - 6 seconds maximum at the supplied speaking rate (roughly 12 to 18 spoken words in Spanish).
-            - Do not start with "además", "también", "por otro lado" or their equivalent in another language.
-            - Do not repeat the anchor, do not summarise the previous block, and do not add facts, numbers or experiences that are not in the supplied material.
-            - Connect the end of the previous idea with the concrete promise of the next one. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza..." are welcome only when they fit; never as filler.
+            - Never exceed the word budget in the user message; aim for 80–100 % of it. It already uses the real speaking rate, so ignore generic wpm figures.
+            - Never start with "además", "también", "por otro lado", "dicho esto" or their equivalent in another language.
+            - No structure announcements: no "en un minuto", "más adelante", "al final del vídeo".
+            - Do not repeat the anchor, do not summarise the previous block, and add no fact, number or experience that is not in the supplied material.
+            - Create one concrete promise or open question that the next few sentences answer. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza…" are welcome only when they fit.
             - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
             Respond only in \(languageName).
             """
