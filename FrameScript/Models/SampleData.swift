@@ -52,8 +52,11 @@ enum SampleData {
         )
     }
 
-    static func demoProject(language: AppLanguage) -> FrameProject {
-        switch SimracingCopy.resolvedLanguage(language) {
+    static func demoProject(
+        language: AppLanguage,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> FrameProject {
+        switch SimracingCopy.resolvedLanguage(language, preferredLanguages: preferredLanguages) {
         case .spanish: spanishDemoProject
         case .russian: russianDemoProject
         case .english, .system: englishDemoProject
@@ -105,7 +108,17 @@ enum SampleData {
     }
 
     static func anchor(_ phrase: String, in text: String) -> TextAnchor {
-        guard let range = text.range(of: phrase) else { preconditionFailure("Demo anchor phrase must exist in its final script: \(phrase)") }
+        guard let range = text.range(of: phrase) else {
+            // Every demo phrase must appear in its own script. A translated
+            // demo or a copy edit can break that; the demo then anchors to the
+            // whole text instead of taking the app down on launch. A developer
+            // build still reports the broken phrase, except while tests run,
+            // which is the only place the fallback is exercised.
+            if !AppEnvironment.isRunningTests {
+                assertionFailure("Demo anchor phrase must exist in its final script: \(phrase)")
+            }
+            return wholeTextAnchor(in: text)
+        }
         let full = text as NSString
         let nsRange = NSRange(range, in: text)
         let prefixStart = max(0, nsRange.location - 48)
@@ -116,6 +129,17 @@ enum SampleData {
             selectedText: full.substring(with: nsRange),
             prefixContext: full.substring(with: NSRange(location: prefixStart, length: nsRange.location - prefixStart)),
             suffixContext: full.substring(with: NSRange(location: suffixStart, length: min(48, full.length - suffixStart)))
+        )
+    }
+
+    /// Degraded anchor used when a demo phrase cannot be found: the whole text.
+    static func wholeTextAnchor(in text: String) -> TextAnchor {
+        TextAnchor(
+            startUTF16: 0,
+            lengthUTF16: (text as NSString).length,
+            selectedText: text,
+            prefixContext: "",
+            suffixContext: ""
         )
     }
 

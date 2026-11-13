@@ -63,8 +63,6 @@ extension L10n {
             "escaleta.rehook.note": "Re-hook marker",
             "escaleta.scene.untitled": "Untitled scene",
             "escaleta.table.defaultTitle": "Comparison table",
-            "escaleta.evidence.heading": "Evidencia utilizada",
-            "escaleta.table.notesHeading": "Notas de tabla",
             "escaleta.export.panelMessage": "Export the current project as a Markdown escaleta."
         ],
         .spanish: [
@@ -76,7 +74,7 @@ extension L10n {
             "escaleta.import.title": "Importar escaleta Markdown",
             "escaleta.import.openPanelMessage": "Elige una escaleta, un dossier de investigación o un archivo de conceptos de miniatura en Markdown.",
             "escaleta.import.metric.scenes": "Escenas",
-            "escaleta.import.metric.cues": "Cues",
+            "escaleta.import.metric.cues": "Marcas",
             "escaleta.import.metric.broll": "B-roll",
             "escaleta.import.metric.anchors": "Anclas",
             "escaleta.import.metric.sources": "Fuentes",
@@ -127,8 +125,6 @@ extension L10n {
             "escaleta.rehook.note": "Marcador de re-hook",
             "escaleta.scene.untitled": "Escena sin título",
             "escaleta.table.defaultTitle": "Tabla comparativa",
-            "escaleta.evidence.heading": "Evidencia utilizada",
-            "escaleta.table.notesHeading": "Notas de tabla",
             "escaleta.export.panelMessage": "Exporta el proyecto actual como escaleta Markdown."
         ],
         .russian: [
@@ -191,8 +187,6 @@ extension L10n {
             "escaleta.rehook.note": "Метка re-hook",
             "escaleta.scene.untitled": "Сцена без названия",
             "escaleta.table.defaultTitle": "Сравнительная таблица",
-            "escaleta.evidence.heading": "Evidencia utilizada",
-            "escaleta.table.notesHeading": "Notas de tabla",
             "escaleta.export.panelMessage": "Экспортировать текущий проект как Markdown-эскалету."
         ]
     ]

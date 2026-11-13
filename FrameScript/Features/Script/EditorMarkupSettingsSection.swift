@@ -92,7 +92,7 @@ struct EditorMarkupSettingsSection: View {
                         in: 60...260,
                         step: 5
                     ) {
-                        Text("\(Int(appState.settings.editorPreferences.effectiveWordsPerMinute(for: code))) wpm")
+                        Text("\(Int(appState.settings.editorPreferences.effectiveWordsPerMinute(for: code))) \(appState.localized("hooks.wpm"))")
                             .font(.system(size: 13, weight: .medium))
                             .monospacedDigit()
                             .frame(minWidth: 78, alignment: .trailing)
@@ -162,7 +162,11 @@ struct EditorMarkupSettingsSection: View {
     }
 
     private func formattedSeconds(_ value: Double) -> String {
-        String(format: "%.1f", value)
+        String(
+            format: "%.1f",
+            locale: RhythmWarningFormatter.locale(for: appState.currentLanguage),
+            value
+        )
     }
 
     // MARK: Rhythm
@@ -190,10 +194,17 @@ struct EditorMarkupSettingsSection: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 150)
                         Button(appState.localized("settings.rhythmAddVideoType")) {
-                            let type = newVideoType.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let type = VideoTypeID.canonicalID(for: newVideoType)
                             guard !type.isEmpty else { return }
-                            if appState.settings.rhythmThresholdsByVideoType[type] == nil {
-                                appState.settings.rhythmThresholdsByVideoType[type] = .appDefaults
+                            if RhythmReview.videoTypeThresholds(
+                                for: type,
+                                settings: appState.settings
+                            ) == nil {
+                                RhythmReview.setVideoTypeThresholds(
+                                    .appDefaults,
+                                    for: type,
+                                    in: &appState.settings
+                                )
                             }
                             newVideoType = ""
                             appState.scheduleRhythmReview(delay: .zero)
@@ -210,13 +221,17 @@ struct EditorMarkupSettingsSection: View {
                 VideoTypeThresholdRow(
                     videoType: type,
                     thresholds: thresholdsBinding(for: type),
-                    canRemove: !EditorMarkupSettingsSection.defaultVideoTypes.contains(type),
+                    canRemove: !VideoTypeID.builtIn.contains(type),
                     onRemove: {
-                        appState.settings.rhythmThresholdsByVideoType.removeValue(forKey: type)
+                        RhythmReview.removeVideoTypeThresholds(for: type, in: &appState.settings)
                         appState.scheduleRhythmReview(delay: .zero)
                     },
                     onReset: {
-                        appState.settings.rhythmThresholdsByVideoType[type] = .appDefaults
+                        RhythmReview.setVideoTypeThresholds(
+                            .appDefaults,
+                            for: type,
+                            in: &appState.settings
+                        )
                         appState.scheduleRhythmReview(delay: .zero)
                     }
                 )
@@ -229,28 +244,23 @@ struct EditorMarkupSettingsSection: View {
     }
 
     private var videoTypes: [String] {
-        // The built-in types stay visible so the table is useful before any
-        // project defines a type. Custom types are appended and removable.
-        var types = EditorMarkupSettingsSection.defaultVideoTypes
-        types.formUnion(appState.settings.rhythmThresholdsByVideoType.keys)
-        let projectType = appState.project.videoType.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !projectType.isEmpty {
-            types.insert(projectType)
-        }
-        return types.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        RhythmReview.videoTypeIDs(
+            projectVideoType: appState.project.videoType,
+            settings: appState.settings,
+            language: appState.currentLanguage
+        )
     }
-
-    static let defaultVideoTypes: Set<String> = [
-        "Análisis", "Gameplay", "Review", "Comparativa", "Noticia", "Crónica", "Tutorial", "Vantare"
-    ]
 
     private func thresholdsBinding(for type: String) -> Binding<AppRhythmThresholds> {
         Binding(
             get: {
-                appState.settings.rhythmThresholdsByVideoType[type] ?? .appDefaults
+                RhythmReview.videoTypeThresholds(
+                    for: type,
+                    settings: appState.settings
+                ) ?? .appDefaults
             },
             set: { value in
-                appState.settings.rhythmThresholdsByVideoType[type] = value
+                RhythmReview.setVideoTypeThresholds(value, for: type, in: &appState.settings)
                 appState.scheduleRhythmReview(delay: .zero)
             }
         )
@@ -312,7 +322,7 @@ private struct VideoTypeThresholdRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(videoType)
+                Text(VideoTypeID.displayName(videoType, language: appState.currentLanguage))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(theme.primaryText)
                 Spacer()
@@ -410,6 +420,7 @@ private struct RhythmIntThresholdField: View {
 /// Compact numeric field for an optional threshold. `nil` means "inherit the
 /// lower layer", which the stepper materializes as the effective default.
 private struct RhythmThresholdField: View {
+    @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let title: String
     @Binding var value: Double?
@@ -447,7 +458,11 @@ private struct RhythmThresholdField: View {
         if step >= 1 {
             return "\(Int(current.rounded()))\(suffix)"
         }
-        return String(format: "%.1f", current) + suffix
+        return String(
+            format: "%.1f",
+            locale: RhythmWarningFormatter.locale(for: appState.currentLanguage),
+            current
+        ) + suffix
     }
 }
 

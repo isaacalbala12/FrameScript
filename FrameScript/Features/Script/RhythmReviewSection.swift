@@ -152,8 +152,8 @@ struct RhythmSidebarBadge: View {
                 .background {
                     Capsule().fill(theme.warning.opacity(0.15))
                 }
-                .help(String(format: appState.localized("rhythm.badgeAccessibility"), count))
-                .accessibilityLabel(String(format: appState.localized("rhythm.badgeAccessibility"), count))
+                .help(L10n.plural("rhythm.badgeAccessibility", count: count, language: appState.currentLanguage))
+                .accessibilityLabel(L10n.plural("rhythm.badgeAccessibility", count: count, language: appState.currentLanguage))
         }
     }
 
