@@ -22,6 +22,23 @@ enum SandboxDataMigration {
         var skippedAlreadyMigrated = false
         var skippedMissingContainer = false
         var skippedTestEnvironment = false
+        /// The sandbox plist exists but could not be read. The migration marker
+        /// is left unset, so the next launch retries.
+        var didFailToRead = false
+    }
+
+    private static let pendingFailureLock = NSLock()
+    nonisolated(unsafe) private static var storedPendingReadFailure = false
+
+    /// True when the last launch could not read the sandbox preferences. The app
+    /// reads (and clears) this once to show a notice; it survives the migration
+    /// call because the caller is not owned by this package.
+    static func consumePendingReadFailureNotice() -> Bool {
+        pendingFailureLock.lock()
+        defer { pendingFailureLock.unlock() }
+        let value = storedPendingReadFailure
+        storedPendingReadFailure = false
+        return value
     }
 
     static func defaultContainerPlistURL(fileManager: FileManager = .default) -> URL {
@@ -73,6 +90,10 @@ enum SandboxDataMigration {
                   format: nil
               ) as? [String: Any] else {
             var result = Result()
+            result.didFailToRead = true
+            pendingFailureLock.lock()
+            storedPendingReadFailure = true
+            pendingFailureLock.unlock()
             logger.error("Sandbox preferences exist but could not be read; migration left unmarked.")
             return result
         }

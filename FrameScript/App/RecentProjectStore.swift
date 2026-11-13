@@ -68,6 +68,9 @@ final class RecentProjectStore {
     private(set) var entries: [RecentProjectEntry] = []
     private(set) var storeError: RecentProjectStoreError?
     private(set) var availableEntryIDs: Set<UUID> = []
+    /// Entries whose volume is not mounted. They are kept so reconnecting the
+    /// drive restores the history instead of deleting it.
+    private(set) var unavailableEntryIDs: Set<UUID> = []
 
     private let userDefaults: UserDefaults
     private let fileManager: FileManager
@@ -133,10 +136,21 @@ final class RecentProjectStore {
         let previousEntries = entries
         let snapshot = entries.sorted { $0.lastOpenedAt > $1.lastOpenedAt }
         var validated: [RecentProjectEntry] = []
+        var unavailable: [RecentProjectEntry] = []
         var available: Set<UUID> = []
+        var unavailableIDs: Set<UUID> = []
         var seen: Set<String> = []
         var result = RecentValidationResult()
         for entry in snapshot {
+            // A project on an unmounted volume is not missing, it is offline.
+            // Dropping it would erase the user's history for a drive that is
+            // simply not connected right now.
+            if Self.isOnUnmountedVolume(entry.lastKnownPath, fileManager: fileManager) {
+                unavailable.append(entry)
+                unavailableIDs.insert(entry.id)
+                logger.notice("Keeping Recent entry on an unmounted volume \(entry.id.uuidString, privacy: .public).")
+                continue
+            }
             do {
                 let resolved = try resolveEntry(entry)
 #if DEBUG
@@ -171,12 +185,19 @@ final class RecentProjectStore {
                 logger.notice("Discarding invalid Recent entry \(entry.id.uuidString, privacy: .public). Error: \(error.localizedDescription, privacy: .private)")
             }
         }
-        entries = Array(validated.prefix(limit))
+        // Unmounted entries keep their place in the list; do not truncate them
+        // away just because they could not be resolved.
+        entries = (validated + unavailable).sorted { $0.lastOpenedAt > $1.lastOpenedAt }
         availableEntryIDs = available.intersection(Set(entries.map(\.id)))
+        unavailableEntryIDs = unavailableIDs
 #if DEBUG
         skipsNextUITestValidation = false
 #endif
-        if entries != previousEntries {
+        // A list that shrank must not be persisted as if those projects were
+        // deleted: the user may reconnect the volume. Refreshed bookmarks are
+        // still written when every entry survived.
+        let keptIDs = Set(entries.map(\.id))
+        if entries != previousEntries, keptIDs.isSuperset(of: Set(previousEntries.map(\.id))) {
             persist()
         }
         return result
@@ -343,6 +364,15 @@ final class RecentProjectStore {
 
     private func canonicalKey(for url: URL) -> String { url.standardizedFileURL.resolvingSymlinksInPath().path }
     private func displayName(for url: URL) -> String { url.deletingPathExtension().lastPathComponent }
+
+    /// `/Volumes/<Name>/…` whose mount point does not exist. Paths elsewhere
+    /// (including the boot volume) are never treated as offline.
+    static func isOnUnmountedVolume(_ path: String, fileManager: FileManager) -> Bool {
+        let components = URL(fileURLWithPath: path).pathComponents
+        guard components.count >= 3, components[1] == "Volumes" else { return false }
+        let mountPoint = "/\(components[1])/\(components[2])"
+        return !fileManager.fileExists(atPath: mountPoint)
+    }
 
     @discardableResult
     private func persist() -> Bool {
