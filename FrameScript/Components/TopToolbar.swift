@@ -15,6 +15,11 @@ struct TopToolbar: View {
                     .disabled(appState.projectStore.currentFileURL == nil)
                 Divider()
                 projectMenuButton(appState.localized("project.export"), shortcut: .export) { appState.exportProject() }
+                projectMenuButton(appState.localized("resolvePack.menu"), shortcut: .resolvePack) {
+                    ResolvePackPresenter.shared.present(
+                        languageCode: appState.resolvePackDefaultLanguageCode
+                    )
+                }
                 Divider()
                 Button(appState.localized("project.browser")) { appState.returnToProjectList() }
             } label: {
@@ -219,7 +224,7 @@ struct TopToolbar: View {
 
 enum ProjectTitleMenuShortcutHints {
     static func binding(for command: ShortcutCommand, settings: AppSettings) -> ShortcutBinding? {
-        guard [.save, .saveAs, .export].contains(command) else { return nil }
+        guard [.save, .saveAs, .export, .resolvePack].contains(command) else { return nil }
         return settings.activeShortcut(for: command)
     }
 }

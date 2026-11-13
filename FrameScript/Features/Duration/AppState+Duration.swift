@@ -92,38 +92,7 @@ extension AppState {
     /// Scene takes plus translated-variant takes, paired with the text each
     /// take was recorded against so stale hashes can be rejected.
     func durationTakeRecords(for scene: Scene) -> [DurationTakeRecord] {
-        guard !scene.takes.isEmpty || scene.languageVariants.contains(where: { !$0.takes.isEmpty }) else {
-            return []
-        }
-        var records: [DurationTakeRecord] = []
-        let sceneHash = FrameScriptDocument.TextHash.hash(scene.scriptText)
-        for take in scene.takes {
-            let language = take.languageCode
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty ? project.primaryLanguage : take.languageCode
-            records.append(
-                DurationTakeRecord(
-                    take: take,
-                    languageCode: language,
-                    sourceText: scene.scriptText,
-                    sourceTextHash: sceneHash
-                )
-            )
-        }
-        for variant in scene.languageVariants {
-            let variantHash = FrameScriptDocument.TextHash.hash(variant.text)
-            for take in variant.takes {
-                records.append(
-                    DurationTakeRecord(
-                        take: take,
-                        languageCode: variant.languageCode,
-                        sourceText: variant.text,
-                        sourceTextHash: variantHash
-                    )
-                )
-            }
-        }
-        return records
+        DurationTakeRecords.make(scene: scene, primaryLanguage: project.primaryLanguage)
     }
 
     func sceneDurationSummary(for scene: Scene) -> SceneDurationSummary {

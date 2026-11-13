@@ -156,15 +156,9 @@ public enum ExportMarkerColor: String, Sendable, Hashable, Codable, CaseIterable
         }
     }
 
-    /// Default colour used for each kind of note.
+    /// Default colour used for each kind of note (see `ResolveMarkerLegend`).
     public static func suggested(for source: ExportSourceTag) -> ExportMarkerColor {
-        switch source {
-        case .cam: .green
-        case .obs: .yellow
-        case .capture, .web: .pink
-        case .music: .lavender
-        case .graphic: .lemon
-        }
+        ResolveMarkerLegend.color(for: source)
     }
 }
 

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the DaVinci Resolve FREE delivery pack (F19): a “Pack para DaVinci Resolve” sheet with frame rate (23.976–60, including 29.97/59.94 DF), start timecode, ASCII-safe EDL names, real-take or learned-WPM durations, language variants and per-file selection. It exports `<Project>_resolve/` with a marker EDL (scene, CAM, OBS, screenshot/web, rigor/rhythm, re-hook and graphic/table colours), an FCPXML timeline with chapter markers, a shot list CSV, edit notes, YouTube chapters and an import README, after showing a marker preview and truncation warnings. Available from the File menu, the project menu and the command palette (⌥⌘E).
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.

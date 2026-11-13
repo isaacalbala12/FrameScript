@@ -61,6 +61,11 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("project.browser"), detail: "") {
                 appState.returnToProjectList()
             },
+            PaletteResult(title: appState.localized("resolvePack.menu"), detail: shortcut(.resolvePack)) {
+                ResolvePackPresenter.shared.presentAfterPaletteDismissal(
+                    languageCode: appState.resolvePackDefaultLanguageCode
+                )
+            },
             PaletteResult(title: appState.localized("command.showShortcuts"), detail: shortcut(.showShortcuts)) {
                 appState.isShortcutsPresented = true
             }

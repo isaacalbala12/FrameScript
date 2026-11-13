@@ -194,7 +194,7 @@ enum ShortcutCategory: String, CaseIterable, Hashable {
 
 enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
-    case importEscaleta, exportEscaleta
+    case importEscaleta, exportEscaleta, resolvePack
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case recordTake, toggleRecordingPanel
@@ -263,6 +263,9 @@ enum ShortcutRegistry {
         .init(command: .importEscaleta, localizationKey: "menu.importEscaleta", category: .project, factoryDefault: .init("m", modifiers: [.command, .shift]), order: 7),
         .init(command: .exportEscaleta, localizationKey: "menu.exportEscaleta", category: .project, factoryDefault: .init("e", modifiers: [.command, .shift]), order: 8),
         .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 9),
+        // ⌘E is plain export and ⇧⌘E is the escaleta export, so the Resolve
+        // pack keeps ⌥⌘E: the same "export" mnemonic without a conflict.
+        .init(command: .resolvePack, localizationKey: "resolvePack.menu", category: .project, factoryDefault: .init("e", modifiers: [.command, .option]), order: 10),
         .init(command: .addScene, localizationKey: "scene.add", category: .scenes, factoryDefault: .init("n", modifiers: [.command, .option]), order: 0),
         .init(command: .duplicateScene, localizationKey: "scene.duplicate", category: .scenes, factoryDefault: .init("d", modifiers: [.command]), order: 1),
         .init(command: .deleteScene, localizationKey: "scene.delete", category: .scenes, factoryDefault: .init(key: .delete, modifiers: [.command]), order: 2),

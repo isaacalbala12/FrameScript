@@ -105,6 +105,7 @@ struct AppShellView: View {
         @Bindable var windowState = appState.windowState
         @Bindable var settingsStore = appState.settingsStore
         @Bindable var hookPresenter = HookSheetPresenter.shared
+        @Bindable var resolvePackPresenter = ResolvePackPresenter.shared
         @Bindable var recording = appState.recording
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
@@ -164,6 +165,7 @@ struct AppShellView: View {
                 .environment(\.frameTheme, theme)
         }
         .hookGeneratorSheets(presenter: hookPresenter)
+        .resolvePackSheet(presenter: resolvePackPresenter)
         .sheet(isPresented: $recording.isSettingsPresented) {
             OBSSettingsSheet()
                 .environment(appState)
@@ -176,6 +178,7 @@ struct AppShellView: View {
 
     private func performPendingPaletteAction() {
         HookSheetPresenter.shared.presentPendingRequest()
+        ResolvePackPresenter.shared.presentPendingRequest()
         guard let tab = appState.windowState.pendingSettingsTab else { return }
         let key = appState.windowState.pendingSettingsHighlightKey
         appState.windowState.pendingSettingsTab = nil
