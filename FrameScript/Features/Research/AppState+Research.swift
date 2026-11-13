@@ -251,13 +251,23 @@ extension AppState {
 
     func updateResearchClaim(_ claim: ProjectClaim) {
         guard let index = project.claims.firstIndex(where: { $0.id == claim.id }) else { return }
-        let wasConfirmed = project.claims[index].status == .confirmed
+        let previous = project.claims[index]
+        let wasConfirmed = previous.status == .confirmed
         var updated = claim
         if updated.status == .confirmed {
             updated.needsVerification = false
         }
         project.claims[index] = updated
+        if previous.text != updated.text {
+            project.checklistTasks = renamingChecklistTask(
+                from: previous.text,
+                to: updated.text,
+                sceneID: updated.sceneIDs.first
+            )
+        }
         if updated.status == .confirmed, !wasConfirmed {
+            project.checklistTasks = markingChecklistResolved(for: updated)
+        } else if previous.needsVerification, !updated.needsVerification {
             project.checklistTasks = markingChecklistResolved(for: updated)
         }
         touchProject()
@@ -398,6 +408,17 @@ extension AppState {
     ) -> [ChecklistTask] {
         let coreTasks = project.checklistTasks.map(FrameScriptDocument.ChecklistTask.init(task:))
         return ResearchChecklist.markingResolved(claimText: claim.text, in: coreTasks).map { $0.makeTask() }
+    }
+
+    private func renamingChecklistTask(
+        from oldText: String,
+        to newText: String,
+        sceneID: UUID?
+    ) -> [ChecklistTask] {
+        let coreTasks = project.checklistTasks.map(FrameScriptDocument.ChecklistTask.init(task:))
+        return ResearchChecklist
+            .renaming(claimText: oldText, to: newText, sceneID: sceneID, in: coreTasks)
+            .map { $0.makeTask() }
     }
 
     /// Appends the "Fuentes y verificación" block to the current-language

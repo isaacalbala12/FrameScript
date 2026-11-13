@@ -113,6 +113,23 @@ final class ResearchFeatureTests: XCTestCase {
         XCTAssertEqual(appState.project.checklistTasks.filter { $0.kind == .research }.count, 1)
     }
 
+    func testEditingPendingClaimRenamesItsResearchTask() {
+        let scene = makeScene(order: 0, title: "Apertura")
+        let appState = makeAppState(project: makeProject(scenes: [scene]))
+        var claim = appState.addResearchClaim(
+            text: "El parche sale en mayo",
+            sceneIDs: [scene.id],
+            needsVerification: true
+        )
+
+        claim.text = "El parche sale en junio"
+        appState.updateResearchClaim(claim)
+
+        let task = appState.project.checklistTasks.first { $0.kind == .research }
+        XCTAssertEqual(task?.text, "El parche sale en junio")
+        XCTAssertEqual(appState.project.checklistTasks.filter { $0.kind == .research }.count, 1)
+    }
+
     func testPersonalExperienceNeverEntersPendingOrChecklist() {
         let appState = makeAppState(project: makeProject(scenes: [makeScene(order: 0, title: "Apertura")]))
 

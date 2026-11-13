@@ -232,6 +232,26 @@ struct ResearchTests {
         #expect(!result[2].isDone)
     }
 
+    @Test("Renaming a claim keeps its research task in sync")
+    func renamingClaimUpdatesTask() {
+        let sceneID = UUID()
+        let tasks = [
+            FrameScriptDocument.ChecklistTask(text: "El parche sale en mayo", kind: .research),
+            FrameScriptDocument.ChecklistTask(text: "Otra tarea", kind: .research)
+        ]
+
+        let result = ResearchChecklist.renaming(
+            claimText: "el parche sale en mayo",
+            to: "El parche sale en junio",
+            sceneID: sceneID,
+            in: tasks
+        )
+
+        #expect(result[0].text == "El parche sale en junio")
+        #expect(result[0].sceneID == sceneID)
+        #expect(result[1].text == "Otra tarea")
+    }
+
     // MARK: - Anchoring and links
 
     @Test("Anchoring finds a fragment and stores its context")

@@ -60,6 +60,27 @@ public enum ResearchChecklist {
         }
     }
 
+    /// Keeps a claim's checklist task in sync when the claim text is edited.
+    public static func renaming(
+        claimText: String,
+        to newText: String,
+        sceneID: UUID?,
+        in tasks: [FrameScriptDocument.ChecklistTask]
+    ) -> [FrameScriptDocument.ChecklistTask] {
+        let target = normalized(claimText)
+        let replacement = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty, !replacement.isEmpty else { return tasks }
+        return tasks.map { task in
+            guard task.kind == .research, normalized(task.text) == target else { return task }
+            var copy = task
+            copy.text = replacement
+            if let sceneID {
+                copy.sceneID = sceneID
+            }
+            return copy
+        }
+    }
+
     public static func normalized(_ text: String) -> String {
         text
             .trimmingCharacters(in: .whitespacesAndNewlines)
