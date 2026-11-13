@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "FrameScript uses the microphone so the teleprompter can follow your voice while you read. Audio is processed on this Mac and is never sent to a server.";
+"NSSpeechRecognitionUsageDescription" = "FrameScript uses on-device speech recognition to align what you read with the teleprompter script. Audio never leaves this Mac.";

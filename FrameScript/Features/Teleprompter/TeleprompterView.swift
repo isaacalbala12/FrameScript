@@ -57,6 +57,7 @@ struct TeleprompterRootView: View {
             model.showControlsTemporarily()
         }
         .onExitCommand { model.close() }
+        .voiceFollowAlerts(model: model)
     }
 
     // MARK: Guides and status
@@ -88,6 +89,7 @@ struct TeleprompterRootView: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(sceneLabel)
                 .lineLimit(1)
+            VoiceFollowStatusIndicator(model: model)
             Spacer(minLength: 24)
             Text(timeLabel)
                 .monospacedDigit()
@@ -180,6 +182,7 @@ private struct TeleprompterControls: View {
     var body: some View {
         VStack(spacing: 14) {
             transportRow
+            TeleprompterVoiceControls(model: model)
             sliderRow
             Text(model.localized("teleprompter.hint"))
                 .font(.system(size: 10, weight: .medium, design: .rounded))

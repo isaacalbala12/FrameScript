@@ -1,4 +1,5 @@
 import AppKit
+import FrameScriptCore
 import SwiftUI
 
 /// Hosts the teleprompter in its own AppKit window so it can be moved to any
@@ -19,7 +20,10 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         language: AppLanguage,
         settingsStore: TeleprompterSettingsStore,
         sceneProvider: TeleprompterSceneProvider?,
-        resumeAnchor: TeleprompterReadingAnchor?
+        resumeAnchor: TeleprompterReadingAnchor?,
+        speechLanguage: SpeechLanguage? = .spanish,
+        speechRecognizer: (any SpeechRecognizing)? = nil,
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
     ) {
         let model = TeleprompterModel(
             sections: sections,
@@ -27,7 +31,10 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             language: language,
             settingsStore: settingsStore,
             sceneProvider: sceneProvider,
-            resumeAnchor: resumeAnchor
+            resumeAnchor: resumeAnchor,
+            speechLanguage: speechLanguage,
+            speechRecognizer: speechRecognizer,
+            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider
         )
         self.model = model
 
@@ -227,9 +234,12 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         case "h", "H":
             guard !event.isARepeat else { return true }
             model.toggleMirrorHorizontal()
-        case "v", "V":
+        case "m", "M":
             guard !event.isARepeat else { return true }
             model.toggleMirrorVertical()
+        case "v", "V":
+            guard !event.isARepeat else { return true }
+            model.toggleVoiceFollow()
         case "c", "C":
             guard !event.isARepeat else { return true }
             model.toggleCountdown()
@@ -261,6 +271,10 @@ final class TeleprompterPresenter {
     private var controller: TeleprompterWindowController?
     private var lastAnchor: TeleprompterReadingAnchor?
 
+    /// F11 learner hook. Set it from the app; the teleprompter only emits a
+    /// session summary when voice following stops.
+    var readingSessionReporter: (any TeleprompterReadingSessionReporting)?
+
     var activeModel: TeleprompterModel? {
         controller?.model
     }
@@ -269,9 +283,14 @@ final class TeleprompterPresenter {
         source: TeleprompterSource,
         provider: TeleprompterSceneProvider?,
         startingSectionIndex: Int,
-        language: AppLanguage
+        language: AppLanguage,
+        speechLanguage: SpeechLanguage? = .spanish,
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
     ) {
         if let existing = controller {
+            Task { @MainActor in
+                await existing.model.updateSpeechLanguage(speechLanguage)
+            }
             existing.bringForward()
             return
         }
@@ -279,17 +298,38 @@ final class TeleprompterPresenter {
         let sections = source.sections
         guard !sections.isEmpty else { return }
 
+        #if DEBUG
+        let simulatedRecognizer = VoiceFollowDebugConfiguration.makeRecognizer()
+        #else
+        let simulatedRecognizer: (any SpeechRecognizing)? = nil
+        #endif
+
         let controller = TeleprompterWindowController(
             sections: sections,
             startingSectionIndex: startingSectionIndex,
             language: language,
             settingsStore: TeleprompterSettingsStore(),
             sceneProvider: provider,
-            resumeAnchor: lastAnchor
+            resumeAnchor: lastAnchor,
+            speechLanguage: speechLanguage,
+            speechRecognizer: simulatedRecognizer,
+            fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider
         )
         controller.presenter = self
+        controller.model.onReadingSessionFinished = { [weak self] session in
+            self?.readingSessionReporter?.teleprompterDidFinishReadingSession(session)
+        }
         self.controller = controller
         controller.present()
+
+        #if DEBUG
+        if VoiceFollowDebugConfiguration.autoStart {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(900))
+                self?.activeModel?.toggleVoiceFollow()
+            }
+        }
+        #endif
     }
 
     func controllerDidClose(_ controller: TeleprompterWindowController) {

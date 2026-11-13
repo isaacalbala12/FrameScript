@@ -17,6 +17,7 @@ extension L10n {
         aiProvidersStrings,
         editorMarkupStrings,
         durationStrings,
-        recordingStrings
+        recordingStrings,
+        voiceFollowStrings
     ]
 }

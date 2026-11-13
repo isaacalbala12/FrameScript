@@ -40,6 +40,18 @@ public struct SpeechRecognitionEvent: Sendable, Equatable {
     public let segment: Int
     /// Monotonic host uptime when the event was produced.
     public let timestamp: TimeInterval
+
+    public init(
+        text: String,
+        isFinal: Bool,
+        segment: Int,
+        timestamp: TimeInterval
+    ) {
+        self.text = text
+        self.isFinal = isFinal
+        self.segment = segment
+        self.timestamp = timestamp
+    }
 }
 
 public enum SpeechRecognitionError: Error, Sendable, Equatable {
@@ -47,6 +59,7 @@ public enum SpeechRecognitionError: Error, Sendable, Equatable {
     case microphonePermissionDenied
     case localeUnsupported(String)
     case recognizerUnavailable
+    case onDeviceRecognitionUnavailable
     case alreadyRunning
     case cancelled
     case audioDeviceUnavailable(AudioDeviceID)
@@ -65,6 +78,8 @@ extension SpeechRecognitionError: LocalizedError {
             "Speech recognition does not support the locale \(identifier)."
         case .recognizerUnavailable:
             "Speech recognition is not available right now."
+        case .onDeviceRecognitionUnavailable:
+            "On-device speech recognition is not available for this language right now."
         case .alreadyRunning:
             "Speech recognition is already running."
         case .cancelled:
@@ -248,6 +263,7 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
     private var isRunning = false
     private var isStarting = false
     private var tapInstalled = false
+    private var audioConfigurationObserver: NSObjectProtocol?
     private var generation: UInt64 = 0
     private var lifecycleGeneration: UInt64 = 0
     private var segment = 0
@@ -316,6 +332,10 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
             guard let recognizer = SFSpeechRecognizer(locale: locale) else {
                 isStarting = false
                 throw SpeechRecognitionError.localeUnsupported(language.localeIdentifier)
+            }
+            if configuration.prefersOnDeviceRecognition, !recognizer.supportsOnDeviceRecognition {
+                isStarting = false
+                throw SpeechRecognitionError.onDeviceRecognitionUnavailable
             }
 
             let pair = AsyncThrowingStream<SpeechRecognitionEvent, Error>.makeStream(
@@ -402,6 +422,23 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
         } catch {
             throw SpeechRecognitionError.audioEngineFailure(error.localizedDescription)
         }
+
+        audioConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            Task { await self?.handleAudioConfigurationChange() }
+        }
+    }
+
+    /// The system input can change underneath a running tap (Bluetooth
+    /// disconnect, unplug, aggregate device change). Never let that turn into
+    /// silent permanent fallback: finish the stream with an explicit error so
+    /// the teleprompter can alert and switch to timed scrolling.
+    private func handleAudioConfigurationChange() {
+        guard isRunning else { return }
+        fail(.audioEngineFailure("The audio input configuration changed while following voice."))
     }
 
     private static func selectInputDevice(
@@ -429,6 +466,10 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
 
     private func beginRecognitionTask() {
         guard isRunning, !isStarting, let recognizer, let requestBox else { return }
+        if configuration.prefersOnDeviceRecognition, !recognizer.supportsOnDeviceRecognition {
+            fail(.onDeviceRecognitionUnavailable)
+            return
+        }
 
         restartTimerTask?.cancel()
         restartTimerTask = nil
@@ -578,6 +619,10 @@ public actor LiveSpeechRecognizer: SpeechRecognizing {
         recognitionTask = nil
         recognizer = nil
 
+        if let observer = audioConfigurationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            audioConfigurationObserver = nil
+        }
         if let engine {
             if tapInstalled {
                 engine.inputNode.removeTap(onBus: 0)

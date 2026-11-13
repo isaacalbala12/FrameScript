@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 
 extension AppState {
     /// Opens the teleprompter for the open project, starting at the scene that
@@ -14,6 +15,14 @@ extension AppState {
             guard let self, self.hasOpenProject else { return [] }
             return self.teleprompterScenes()
         }
+        let speechLanguage = SpeechLanguage(projectLanguageCode: project.primaryLanguage)
+        let wpmProvider: (@MainActor () -> Double?)? = { [weak self] in
+            guard let self else { return nil }
+            let code = self.project.primaryLanguage
+            let shortCode = String(code.prefix(2))
+            return self.project.learnedWordsPerMinuteByLanguage[code]
+                ?? self.project.learnedWordsPerMinuteByLanguage[shortCode]
+        }
 
         TeleprompterPresenter.shared.show(
             source: StaticTeleprompterSource(
@@ -21,7 +30,9 @@ extension AppState {
             ),
             provider: provider,
             startingSectionIndex: startIndex,
-            language: currentLanguage
+            language: currentLanguage,
+            speechLanguage: speechLanguage,
+            fallbackWordsPerMinuteProvider: wpmProvider
         )
     }
 
