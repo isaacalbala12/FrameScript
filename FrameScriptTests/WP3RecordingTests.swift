@@ -425,6 +425,39 @@ final class WP3RecordingTests: FrameScriptTestCase {
         XCTAssertFalse(OBSConnectionConfig(host: "192.168.1.20").isLoopbackHost)
     }
 
+    /// The OBS sheet is not part of `MainWindowSnapshotTests`, so the new
+    /// non-loopback warning gets its own offscreen render (never ordered front).
+    func testOBSSettingsSheetShowsTheNonLoopbackWarning() throws {
+        let defaults = makeDefaults()
+        let preferences = OBSPreferencesStore(
+            defaults: defaults,
+            secretStore: WP3FakeSecretStore()
+        )
+        preferences.host = "192.168.1.20"
+        let controller = RecordingController(
+            client: WP3FakeOBSClient(),
+            preferences: preferences,
+            defaults: defaults
+        )
+        let appState = makeAppState(project: FrameProject(title: "OBS"), recording: controller)
+
+        for appearance in [SnapshotAppearance.light, .dark] {
+            let result = SnapshotRenderer.render(
+                OBSSettingsSheet(),
+                name: "obs-settings-non-loopback-\(appearance.rawValue)",
+                suite: "WP3RecordingTests",
+                size: CGSize(width: 500, height: 640),
+                appearance: appearance,
+                language: .spanish,
+                appState: appState
+            )
+            XCTAssertTrue(
+                result.textFragments.contains { $0.contains("no es local") },
+                "\(appearance.rawValue): the non-loopback warning is missing from \(result.textFragments)"
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private func pauseValues(in model: TeleprompterModel) -> [TimeInterval] {
@@ -473,7 +506,8 @@ final class WP3RecordingTests: FrameScriptTestCase {
 
     private func makeAppState(
         project: FrameProject,
-        settings: AppSettings = .defaults
+        settings: AppSettings = .defaults,
+        recording: RecordingController? = nil
     ) -> AppState {
         let suite = makeDefaults()
         let store = ProjectStore(project: project)
@@ -481,7 +515,8 @@ final class WP3RecordingTests: FrameScriptTestCase {
         return AppState(
             projectStore: store,
             recentProjectStore: RecentProjectStore(userDefaults: suite),
-            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings")
+            settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings"),
+            recording: recording
         )
     }
 
