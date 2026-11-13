@@ -21,7 +21,10 @@ extension L10n {
             "escaleta.warning.seoMissingDescription": "The SEO block has no description.",
             "escaleta.warning.duplicateTag": "Duplicate tags were removed.",
             "escaleta.warning.malformedTable": "A table row has a different number of columns than the header.",
-            "escaleta.warning.thumbnailTextLength": "The thumbnail text «%@» has more than 3 words."
+            "escaleta.warning.thumbnailTextLength": "The thumbnail text «%@» has more than 3 words.",
+            "escaleta.warning.emptyScene": "The scene %@ has no body.",
+            "escaleta.warning.emptyField": "The SEO field «%@» is empty.",
+            "escaleta.warning.emptySources": "The section «%@» has no sources."
         ],
         .spanish: [
             "export.csv.sceneNotes": "Notas de escena",
@@ -41,7 +44,10 @@ extension L10n {
             "escaleta.warning.seoMissingDescription": "El bloque SEO no tiene descripción.",
             "escaleta.warning.duplicateTag": "Se eliminaron etiquetas duplicadas.",
             "escaleta.warning.malformedTable": "Una fila de la tabla tiene un número de columnas distinto al de la cabecera.",
-            "escaleta.warning.thumbnailTextLength": "El texto de la miniatura «%@» tiene más de 3 palabras."
+            "escaleta.warning.thumbnailTextLength": "El texto de la miniatura «%@» tiene más de 3 palabras.",
+            "escaleta.warning.emptyScene": "La escena %@ no tiene cuerpo.",
+            "escaleta.warning.emptyField": "El campo SEO «%@» está vacío.",
+            "escaleta.warning.emptySources": "La sección «%@» no contiene fuentes."
         ],
         .russian: [
             "export.csv.sceneNotes": "Заметки сцены",
@@ -61,7 +67,10 @@ extension L10n {
             "escaleta.warning.seoMissingDescription": "В блоке SEO нет описания.",
             "escaleta.warning.duplicateTag": "Повторяющиеся теги удалены.",
             "escaleta.warning.malformedTable": "В строке таблицы другое число столбцов, чем в заголовке.",
-            "escaleta.warning.thumbnailTextLength": "Текст миниатюры «%@» длиннее 3 слов."
+            "escaleta.warning.thumbnailTextLength": "Текст миниатюры «%@» длиннее 3 слов.",
+            "escaleta.warning.emptyScene": "У сцены %@ нет тела.",
+            "escaleta.warning.emptyField": "Поле SEO «%@» пусто.",
+            "escaleta.warning.emptySources": "В разделе «%@» нет источников."
         ]
     ]
 }

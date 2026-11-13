@@ -418,7 +418,8 @@ private struct Parser {
                     kind: .emptySection,
                     message: "La escena \(heading.timestampText) no tiene cuerpo.",
                     line: node.lineIndex + 1,
-                    arguments: [heading.timestampText]
+                    arguments: [heading.timestampText],
+                    localizationKey: "escaleta.warning.emptyScene"
                 )
             )
         }
@@ -746,7 +747,8 @@ private struct Parser {
                     kind: .emptySection,
                     message: "El campo SEO «\(field.rawValue)» está vacío.",
                     line: lineStart,
-                    arguments: [field.rawValue]
+                    arguments: [field.rawValue],
+                    localizationKey: "escaleta.warning.emptyField"
                 )
             )
             return
@@ -954,7 +956,8 @@ private struct Parser {
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» no contiene fuentes.",
                     line: node.lineIndex + 1,
-                    arguments: [node.heading]
+                    arguments: [node.heading],
+                    localizationKey: "escaleta.warning.emptySources"
                 )
             )
         }

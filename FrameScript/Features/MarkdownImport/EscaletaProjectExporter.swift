@@ -19,7 +19,9 @@ enum EscaletaProjectExporter {
         var fallbackStart = 0
         for (sceneIndex, scene) in project.scenes.sortedByOrder.enumerated() {
             let sceneMeta = sceneMetadata[scene.id.uuidString]
-            let start = sceneMeta?.startSeconds ?? fallbackStart
+            // Metadata is decoded from the project's topic blob; an Int.max
+            // start would overflow the fallback arithmetic below.
+            let start = min(max(sceneMeta?.startSeconds ?? fallbackStart, 0), Int(Self.maximumSeconds))
             let timestamp = sceneMeta?.timestampText ?? formatTimestamp(start)
             scenes.append(
                 EscaletaScene(
@@ -206,7 +208,7 @@ enum EscaletaProjectExporter {
                     blocks.append(.cue(cue(from: scene.bRollItems[reference.index])))
                 case "editing":
                     guard scene.editingItems.indices.contains(reference.index) else { continue }
-                    blocks.append(.cue(cue(from: scene.editingItems[reference.index])))
+                    blocks.append(editingBlock(from: scene.editingItems[reference.index]))
                 case "note":
                     guard notes.indices.contains(reference.index) else { continue }
                     blocks.append(.cue(cue(fromNote: notes[reference.index])))

@@ -26,7 +26,7 @@ struct ExportService: ExportServicing {
     }
 
     private func renderPlainText(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
-        project.scenes.sortedByOrder.map { scene in
+        let body = project.scenes.sortedByOrder.map { scene in
             var output = ""
             if preferences.includeSectionNames {
                 let timestamp = preferences.includeTimestamps ? " [\(DurationEstimator.formatted(scene.estimatedDuration))]" : ""
@@ -66,7 +66,7 @@ struct ExportService: ExportServicing {
             return output
         }
         .joined(separator: "\n\n")
-        .appending("\n")
+        return body.isEmpty ? "" : body + "\n"
     }
 
     private func renderMarkdown(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
@@ -273,7 +273,11 @@ struct ExportService: ExportServicing {
     /// starts with `= + - @`, a tab or a CR is prefixed with an apostrophe so
     /// Excel and Sheets keep it as text.
     private func csvEscape(_ value: String) -> String {
-        let needsPrefix = value.first.map { "=+-@\t\r".contains($0) } ?? false
+        // `value.first` is a grapheme cluster: "\r\n" is one Character, so the
+        // check must use unicode scalars to see a leading CR.
+        let needsPrefix = value.unicodeScalars.first.map {
+            "=+-@\t\r".unicodeScalars.contains($0)
+        } ?? false
         let safe = needsPrefix ? "'" + value : value
         return "\"\(safe.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
