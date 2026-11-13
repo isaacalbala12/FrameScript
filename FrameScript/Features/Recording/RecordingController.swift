@@ -1,6 +1,8 @@
+import AppKit
 import Foundation
 import FrameScriptCore
 import Observation
+import OSLog
 
 /// One take together with the language bucket it belongs to.
 struct SceneTake: Identifiable, Equatable {
@@ -27,6 +29,11 @@ final class RecordingController {
         static let countdownEnabled = "recording.countdownEnabled"
     }
 
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "Recording"
+    )
+
     private enum TakeInterruption: Equatable {
         case connectionLost
         case stopFailed
@@ -52,6 +59,14 @@ final class RecordingController {
     private(set) var testConnectionIssue: RecordingIssue?
     private(set) var scenesIssue: RecordingIssue?
     private(set) var lastIssue: RecordingIssue?
+    /// Set when the scene disappeared before its take could be attached to it.
+    /// The recording itself is not lost: OBS already wrote the file, so its
+    /// path is kept and shown with the issue.
+    private(set) var lastOrphanedTakePath: String?
+    /// OBS's record status could not be read after a (re)connect. Starting is
+    /// refused until a status read succeeds, because OBS may still be recording
+    /// an output FrameScript does not own.
+    private(set) var recordStatusUnknown = false
     /// OBS is recording an output FrameScript did not start (for example a
     /// gameplay capture started by hand). Never stop it from FrameScript.
     private(set) var externalRecordingActive = false
@@ -101,11 +116,16 @@ final class RecordingController {
     /// so a quit or stop that lands mid-handshake cannot install `.recording`.
     private var startToken: UUID?
     private var stopRequestedWhileStarting = false
+    /// A real OBS `STOPPED` event that arrived while the start handshake was in
+    /// flight. OBS's normal `STARTING` event also reports `isRecording == false`,
+    /// so only `outputState == .stopped` sets this.
+    private var stopEventDuringStart = false
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     private var isStopping = false
     private var interruptedContext: InterruptedTakeContext?
     private var recoveredTakeID: UUID?
+    private var terminationObserver: NSObjectProtocol?
 
     /// Injectable clock so tests can assert start times without sleeping.
     var now: () -> Date
@@ -129,6 +149,53 @@ final class RecordingController {
             self.countdownEnabled = true
         }
         observeClient()
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.cancelTasksAndCloseClient()
+            }
+        }
+    }
+
+    isolated deinit {
+        stateTask?.cancel()
+        eventTask?.cancel()
+        tickTask?.cancel()
+        countdownTask?.cancel()
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
+        }
+    }
+
+    // MARK: Teardown
+
+    /// Cancels the observation, ticker and countdown tasks and closes the OBS
+    /// client. Safe to call more than once.
+    func shutdown() async {
+        cancelTasks()
+        await (client as? any OBSRecordingClientShutdown)?.shutdown()
+    }
+
+    private func cancelTasksAndCloseClient() {
+        cancelTasks()
+        let client = self.client
+        Task {
+            await (client as? any OBSRecordingClientShutdown)?.shutdown()
+        }
+    }
+
+    private func cancelTasks() {
+        stateTask?.cancel()
+        eventTask?.cancel()
+        tickTask?.cancel()
+        countdownTask?.cancel()
+        stateTask = nil
+        eventTask = nil
+        tickTask = nil
+        countdownTask = nil
     }
 
     // MARK: Derived state
@@ -142,7 +209,14 @@ final class RecordingController {
     var statusLanguage: AppLanguage { gateway?.language() ?? .english }
 
     func issueMessage(_ issue: RecordingIssue) -> String {
-        issue.message(language: statusLanguage)
+        let message = issue.message(language: statusLanguage)
+        guard issue == .sceneDeleted, let path = lastOrphanedTakePath else {
+            return message
+        }
+        return message + "\n" + String(
+            format: L10n.tr("recording.orphanTakePath", language: statusLanguage),
+            path
+        )
     }
 
     /// The selected variant, but only when the current scene actually has it.
@@ -224,6 +298,7 @@ final class RecordingController {
         connectionState = .disconnected
         scenes = []
         scenesIssue = nil
+        recordStatusUnknown = false
     }
 
     /// Connects with a separate client so testing a typo never tears down the
@@ -290,6 +365,12 @@ final class RecordingController {
 
     func startTake(sceneID: UUID, languageCode: String = "") async {
         guard phase == .idle, !isStopping else { return }
+        // An unreadable record status means OBS might already be recording an
+        // output we do not own. Treat it as "unknown", never as "idle".
+        guard !recordStatusUnknown else {
+            lastIssue = connectionIssue ?? .notConnected
+            return
+        }
         guard !externalRecordingActive else {
             lastIssue = .externalRecordingActive
             return
@@ -309,7 +390,9 @@ final class RecordingController {
         // the idle guard while the first one awaits the connection check.
         phase = .starting
         stopRequestedWhileStarting = false
+        stopEventDuringStart = false
         lastIssue = nil
+        lastOrphanedTakePath = nil
         activeSceneID = sceneID
         let requestedLanguage = normalizedLanguage(languageCode)
         activeLanguageCode = scene.languageVariants.contains(where: {
@@ -410,6 +493,13 @@ final class RecordingController {
             // stale token may mean an external recording is running, so never
             // stop it here; the next GetRecordStatus will treat it as unowned.
             guard startToken == token else { return }
+            if stopEventDuringStart {
+                stopEventDuringStart = false
+                abortStart(issue: .startFailed(
+                    L10n.tr("recording.error.stoppedDuringStart", language: statusLanguage)
+                ))
+                return
+            }
             if stopRequestedWhileStarting {
                 stopRequestedWhileStarting = false
                 await stopRecordingNow(startedAt: startedAt)
@@ -535,6 +625,15 @@ final class RecordingController {
         let language = gateway.language()
         let startedAt = activeStartedAt ?? now()
         guard let scene = gateway.scene(sceneID) else {
+            let orphanPath = filePath.isEmpty ? lastKnownOutputPath : filePath
+            if !orphanPath.isEmpty {
+                lastOrphanedTakePath = orphanPath
+                Self.logger.error(
+                    "Take finished but its scene was deleted; keeping the file path. path=\(orphanPath, privacy: .private)"
+                )
+            } else {
+                Self.logger.error("Take finished but its scene was deleted; OBS reported no output path.")
+            }
             lastIssue = .sceneDeleted
             phase = .idle
             resetActiveTake(clearElapsed: true)
@@ -564,7 +663,10 @@ final class RecordingController {
         }
 
         gateway.markProjectChanged()
+        // A new take changes the learning samples and the real duration.
+        DurationRevisionCounter.shared.bump()
         lastTakeID = takeID
+        lastOrphanedTakePath = nil
         if wasConnectionLost {
             lastIssue = .connectionLost
             interruptedContext = InterruptedTakeContext(
@@ -648,6 +750,7 @@ final class RecordingController {
         if let issue { lastIssue = issue }
         startToken = nil
         stopRequestedWhileStarting = false
+        stopEventDuringStart = false
         phase = .idle
         resetActiveTake(clearElapsed: true)
     }
@@ -659,6 +762,7 @@ final class RecordingController {
         countdownTask = nil
         startToken = nil
         stopRequestedWhileStarting = false
+        stopEventDuringStart = false
         activeSceneID = nil
         activeLanguageCode = ""
         activeReadText = ""
@@ -698,6 +802,7 @@ final class RecordingController {
             return
         }
         scenes = []
+        recordStatusUnknown = false
 
         // A dropped socket mid-take must never lose the take silently.
         guard activeSceneID != nil else { return }
@@ -734,8 +839,21 @@ final class RecordingController {
                 // connected.
                 externalRecordingActive = true
             }
-            // The user pressed Stop inside OBS itself.
+            // A real stop that lands while the start handshake is still in
+            // flight is latched and honoured once `startRecord()` returns.
+            // `isRecording == false` alone is not a stop: the normal
+            // `STARTING` event reports that too.
+            if change.outputState == .stopped,
+               case .starting = phase,
+               activeSceneID != nil {
+                stopEventDuringStart = true
+                return
+            }
+            // The user pressed Stop inside OBS itself. A `STARTING` event that
+            // arrives after the StartRecord response must not look like a stop:
+            // it also reports `isRecording == false`.
             if !change.isRecording,
+               change.outputState != .starting,
                case .recording(let startedAt) = phase,
                activeSceneID != nil {
                 var duration = max(elapsed, now().timeIntervalSince(startedAt))
@@ -776,9 +894,41 @@ final class RecordingController {
     /// before the disconnect; adopt that output only when a matching
     /// FrameScript take exists. An output started outside FrameScript is never
     /// stopped: it is reported through `externalRecordingActive` instead.
+    ///
+    /// The status request is retried once. If it still fails the status stays
+    /// unknown: starting is refused until a later read succeeds, because the
+    /// alternative is assuming "idle" while OBS is recording.
     private func reconcileRecordStatus() async {
         guard await client.currentConnectionState().isConnected else { return }
-        guard let status = try? await client.getRecordStatus() else { return }
+
+        var status: OBSRecordStatus?
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                status = try await client.getRecordStatus()
+                break
+            } catch {
+                lastError = error
+                if attempt == 0 {
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+            }
+        }
+        guard let status else {
+            let issue = RecordingIssue.from(
+                lastError ?? OBSError.notConnected,
+                operation: .connect
+            )
+            recordStatusUnknown = true
+            connectionIssue = issue
+            lastIssue = issue
+            Self.logger.error(
+                "OBS record status unavailable after connect; starting is blocked. detail=\(String(describing: lastError), privacy: .public)"
+            )
+            return
+        }
+        recordStatusUnknown = false
+
         if !status.outputActive {
             externalRecordingActive = false
             interruptedContext = nil
@@ -917,6 +1067,7 @@ final class RecordingController {
         guard removed else { return }
         if lastTakeID == takeID { lastTakeID = nil }
         if recoveredTakeID == takeID { recoveredTakeID = nil }
+        DurationRevisionCounter.shared.bump()
         gateway?.markProjectChanged()
     }
 
@@ -924,12 +1075,14 @@ final class RecordingController {
         guard let scene = gateway?.scene(sceneID) else { return }
         if let index = scene.takes.firstIndex(where: { $0.id == takeID }) {
             body(&scene.takes[index])
+            DurationRevisionCounter.shared.bump()
             gateway?.markProjectChanged()
             return
         }
         for variantIndex in scene.languageVariants.indices {
             if let index = scene.languageVariants[variantIndex].takes.firstIndex(where: { $0.id == takeID }) {
                 body(&scene.languageVariants[variantIndex].takes[index])
+                DurationRevisionCounter.shared.bump()
                 gateway?.markProjectChanged()
                 return
             }
@@ -953,8 +1106,22 @@ final class RecordingController {
             return false
         }
         let normalized = normalizedLanguage(languageCode)
-        let bookmarkData = fileURL.flatMap {
-            try? $0.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        let bookmarkData: Data?
+        if let fileURL {
+            do {
+                bookmarkData = try fileURL.bookmarkData(
+                    options: .withSecurityScope,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+            } catch {
+                bookmarkData = nil
+                Self.logger.error(
+                    "Manual take bookmark could not be created; the file will not reopen after a relaunch. path=\(fileURL.path, privacy: .private) detail=\(error.localizedDescription, privacy: .public)"
+                )
+            }
+        } else {
+            bookmarkData = nil
         }
         let take = TakeFactory.makeTake(
             existing: takes(in: scene, languageCode: normalized).map(\.take),
@@ -968,6 +1135,7 @@ final class RecordingController {
             note: note
         )
         append(take, to: scene, languageCode: normalized)
+        DurationRevisionCounter.shared.bump()
         gateway.markProjectChanged()
         lastTakeID = take.id
         return true
@@ -994,6 +1162,6 @@ final class RecordingController {
     }
 
     private func normalizedLanguage(_ code: String) -> String {
-        code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        DurationEstimator.normalizedLanguageCode(code)
     }
 }

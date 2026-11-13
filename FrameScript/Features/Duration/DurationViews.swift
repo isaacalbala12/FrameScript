@@ -22,7 +22,9 @@ struct SceneDurationInlineText: View {
             }
         }
         .font(.system(size: 11))
-        .foregroundStyle(theme.secondaryText.opacity(0.82))
+        // Plain `secondaryText`: the old `.opacity(0.82)` dropped the contrast
+        // on the sidebar to 3.18:1 for this 11 pt label.
+        .foregroundStyle(theme.secondaryText)
         .monospacedDigit()
         .lineLimit(1)
         .accessibilityElement(children: .combine)
@@ -238,12 +240,11 @@ struct ProjectDurationControl: View {
 
     @State private var isPopoverPresented = false
 
-    private var summary: ProjectDurationSummary {
-        appState.projectDurationSummary()
-    }
-
     var body: some View {
-        Button {
+        // One summary per body evaluation: `projectDurationSummary()` hashes the
+        // text of every scene, so reading it eight times was measurable.
+        let summary = appState.projectDurationSummary()
+        return Button {
             isPopoverPresented.toggle()
         } label: {
             HStack(spacing: 5) {
@@ -291,7 +292,7 @@ struct ProjectDurationControl: View {
             seedDurationDemoIfNeeded()
             appState.recomputeLearnedWPMInBackground(markDirty: false)
         }
-        .onChange(of: appState.durationLearningSignature) { _, _ in
+        .onChange(of: appState.durationRevision) { _, _ in
             DurationLearningScheduler.shared.schedule {
                 appState.recomputeLearnedWPMInBackground()
             }
@@ -312,12 +313,11 @@ struct ProjectDurationPopover: View {
     @State private var targetText = ""
     @State private var learningReport: DurationLearningResult = .empty
 
-    private var summary: ProjectDurationSummary {
-        appState.projectDurationSummary()
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // Same reason as `ProjectDurationControl`: one whole-project summary per
+        // body evaluation, not one per read.
+        let summary = appState.projectDurationSummary()
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Text(appState.localized("duration.projectInfo"))
                     .font(.system(size: 15, weight: .semibold))
@@ -485,7 +485,7 @@ struct ProjectDurationPopover: View {
         if accepted < minimum {
             return String(format: appState.localized("duration.learningSamples"), accepted, minimum)
         }
-        return String(format: appState.localized("duration.samples"), accepted)
+        return L10n.plural("duration.samples", count: accepted, language: appState.currentLanguage)
     }
 
     private var parsedTarget: TimeInterval? {

@@ -128,4 +128,24 @@ public struct OBSConnectionConfig: Sendable, Equatable {
         components.port = port
         return components.url
     }
+
+    /// `true` when the host can only reach this Mac: `localhost`, `127.0.0.0/8`
+    /// or the IPv6 loopback. Anything else crosses the network in clear text
+    /// (`ws://`), which is worth warning about in the settings UI.
+    public var isLoopbackHost: Bool {
+        var trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
+            trimmed.removeFirst()
+            trimmed.removeLast()
+        }
+        if trimmed == "localhost" || trimmed == "::1" || trimmed == "0:0:0:0:0:0:0:1" {
+            return true
+        }
+        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4,
+              parts.allSatisfy({ UInt8($0) != nil }) else {
+            return false
+        }
+        return parts[0] == "127"
+    }
 }

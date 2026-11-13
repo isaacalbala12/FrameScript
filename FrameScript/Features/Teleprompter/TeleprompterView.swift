@@ -24,7 +24,8 @@ struct TeleprompterRootView: View {
                     viewportSize: proxy.size,
                     readingLineFraction: model.settings.readingLineFraction,
                     mirrorVertical: model.settings.mirrorVertical,
-                    emptyScenePlaceholder: model.emptyScenePlaceholder
+                    emptyScenePlaceholder: model.emptyScenePlaceholder,
+                    language: model.language
                 )
                 .scaleEffect(
                     x: model.settings.mirrorHorizontal ? -1 : 1,
@@ -207,6 +208,7 @@ private struct TeleprompterTextCanvas: NSViewRepresentable {
     let readingLineFraction: Double
     let mirrorVertical: Bool
     let emptyScenePlaceholder: String
+    let language: AppLanguage
 
     func makeNSView(context: Context) -> TeleprompterTextRenderer {
         let renderer = TeleprompterTextRenderer(frame: .zero)
@@ -233,6 +235,7 @@ private struct TeleprompterTextCanvas: NSViewRepresentable {
             readingLineFraction: readingLineFraction,
             mirrorVertical: mirrorVertical,
             emptyScenePlaceholder: emptyScenePlaceholder,
+            language: language,
             onMetrics: { metrics in
                 Task { @MainActor in
                     model.updateTextMetrics(metrics)

@@ -1,4 +1,5 @@
 import AppKit
+import FrameScriptCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -53,6 +54,16 @@ struct OBSSettingsSheet: View {
                     .textFieldStyle(QuietTextFieldStyle())
             }
 
+            if showsNonLoopbackWarning {
+                Label(
+                    appState.localized("recording.obs.nonLoopbackWarning"),
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(theme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(alignment: .top, spacing: 14) {
                 QuietField(appState.localized("recording.obs.port")) {
                     TextField("4455", text: $portText)
@@ -71,6 +82,7 @@ struct OBSSettingsSheet: View {
             QuietField(appState.localized("recording.obs.password")) {
                 SecureField("", text: $password)
                     .textFieldStyle(QuietTextFieldStyle())
+                    .accessibilityLabel(appState.localized("recording.obs.password"))
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -163,6 +175,12 @@ struct OBSSettingsSheet: View {
         portText = String(preferences.port)
         password = preferences.password
         autoConnect = preferences.autoConnect
+    }
+
+    private var showsNonLoopbackWarning: Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return !OBSConnectionConfig(host: trimmed).isLoopbackHost
     }
 
     private func runTest() {
@@ -291,6 +309,7 @@ struct ManualTakeSheet: View {
                     DatePicker("", selection: $startedAt)
                         .labelsHidden()
                         .datePickerStyle(.compact)
+                        .accessibilityLabel(appState.localized("recording.manual.date"))
                 }
                 QuietField(appState.localized("recording.manual.duration")) {
                     HStack(spacing: 6) {
@@ -356,6 +375,8 @@ struct ManualTakeSheet: View {
             if let duration {
                 minutes = String(Int(duration) / 60)
                 seconds = String(Int(duration) % 60)
+            } else {
+                errorMessage = appState.localized("recording.manual.probeFailed")
             }
         }
     }

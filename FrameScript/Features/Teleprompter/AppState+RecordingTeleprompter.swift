@@ -13,11 +13,33 @@ protocol RecordingTeleprompterPresenting: AnyObject {
         wordsPerMinute: Double
     )
     func pauseActiveSession()
+    /// Pause durations the prompter's markup must use.
+    var pauseDefaults: PauseDefaults { get set }
+    /// Live scene provider for the take's language. `nil` keeps the snapshot
+    /// passed to `present`.
+    var sceneProvider: (@MainActor () -> [TeleprompterSceneText])? { get set }
+}
+
+extension RecordingTeleprompterPresenting {
+    // Defaults keep in-memory test doubles minimal; the live presenter
+    // overrides both.
+    var pauseDefaults: PauseDefaults {
+        get { .standard }
+        set {}
+    }
+
+    var sceneProvider: (@MainActor () -> [TeleprompterSceneText])? {
+        get { nil }
+        set {}
+    }
 }
 
 /// Production wiring to the shared teleprompter window.
 @MainActor
 final class LiveRecordingTeleprompter: RecordingTeleprompterPresenting {
+    var pauseDefaults: PauseDefaults = .standard
+    var sceneProvider: (@MainActor () -> [TeleprompterSceneText])?
+
     func present(
         sections: [TeleprompterSceneText],
         startingSectionIndex: Int,
@@ -26,19 +48,25 @@ final class LiveRecordingTeleprompter: RecordingTeleprompterPresenting {
         wordsPerMinute: Double
     ) {
         guard !sections.isEmpty else { return }
+        let provider: TeleprompterSceneProvider = if sceneProvider == nil {
+            { sections }
+        } else {
+            { [weak self] in self?.sceneProvider?() ?? sections }
+        }
         TeleprompterPresenter.shared.show(
-            source: StaticTeleprompterSource(sections: TeleprompterContentBuilder.sections(from: sections)),
-            provider: { sections },
+            source: StaticTeleprompterSource(
+                sections: TeleprompterContentBuilder.sections(
+                    from: sections,
+                    pauseDefaults: pauseDefaults
+                )
+            ),
+            provider: provider,
             startingSectionIndex: startingSectionIndex,
             language: uiLanguage,
             speechLanguage: speechLanguage,
-            fallbackWordsPerMinuteProvider: { wordsPerMinute }
+            fallbackWordsPerMinuteProvider: { wordsPerMinute },
+            pauseDefaults: pauseDefaults
         )
-        // An already-open window keeps its own content; at least move it to the
-        // scene being recorded when the section count still matches.
-        if TeleprompterPresenter.shared.activeModel?.sections.count == sections.count {
-            TeleprompterPresenter.shared.activeModel?.jump(to: startingSectionIndex)
-        }
     }
 
     func pauseActiveSession() {
@@ -78,6 +106,13 @@ extension AppState: RecordingTeleprompterHook {
         TeleprompterPresenter.shared.languageProvider = { [weak self] in
             self?.currentLanguage ?? .english
         }
+        // The live presenter reads the configured pauses and the current
+        // document, so a project edit or a settings change reaches an already
+        // open window.
+        recordingTeleprompter.pauseDefaults = settings.editorPreferences.markupPauseDefaults
+        recordingTeleprompter.sceneProvider = { [weak self] in
+            self?.teleprompterSceneTexts(forLanguageCode: languageCode) ?? []
+        }
         recordingTeleprompter.present(
             sections: sections,
             startingSectionIndex: startIndex,
@@ -91,16 +126,12 @@ extension AppState: RecordingTeleprompterHook {
     /// that translated variant when the scene has one; otherwise the original
     /// script is read.
     func teleprompterSceneTexts(forLanguageCode languageCode: String) -> [TeleprompterSceneText] {
-        let normalized = languageCode
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        let normalized = DurationEstimator.normalizedLanguageCode(languageCode)
         return project.scenes.sortedByOrder.map { scene in
             let variantText = normalized.isEmpty
                 ? nil
                 : scene.languageVariants.first {
-                    $0.languageCode
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .lowercased() == normalized
+                    DurationEstimator.normalizedLanguageCode($0.languageCode) == normalized
                 }?.text
             return TeleprompterSceneText(
                 id: scene.id,

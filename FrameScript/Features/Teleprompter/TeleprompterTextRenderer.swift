@@ -39,9 +39,14 @@ enum TeleprompterAttributedStringBuilder {
     static func build(
         sections: [TeleprompterSection],
         fontSize: Double,
-        emptyScenePlaceholder: String = ""
+        emptyScenePlaceholder: String = "",
+        language: AppLanguage = .english
     ) -> TeleprompterAttributedDocument {
-        let builder = Builder(fontSize: CGFloat(fontSize), emptyScenePlaceholder: emptyScenePlaceholder)
+        let builder = Builder(
+            fontSize: CGFloat(fontSize),
+            emptyScenePlaceholder: emptyScenePlaceholder,
+            locale: RhythmWarningFormatter.locale(for: language)
+        )
         for (index, section) in sections.enumerated() {
             builder.appendSectionHeader(index: index, title: section.title, isFirst: index == 0)
             for run in section.runs {
@@ -91,6 +96,7 @@ enum TeleprompterAttributedStringBuilder {
     private final class Builder {
         private let fontSize: CGFloat
         private let emptyScenePlaceholder: String
+        private let locale: Locale
         private let attributed = NSMutableAttributedString()
         private var sectionHeaderLocations: [Int] = []
         private var sectionHeaderRanges: [NSRange] = []
@@ -102,9 +108,10 @@ enum TeleprompterAttributedStringBuilder {
         private var lastAppendedWasNewline = true
         private var pendingBlockBreak = false
 
-        init(fontSize: CGFloat, emptyScenePlaceholder: String) {
+        init(fontSize: CGFloat, emptyScenePlaceholder: String, locale: Locale) {
             self.fontSize = fontSize
             self.emptyScenePlaceholder = emptyScenePlaceholder
+            self.locale = locale
         }
 
         var document: TeleprompterAttributedDocument {
@@ -217,7 +224,7 @@ enum TeleprompterAttributedStringBuilder {
             // absent and rendered as a tofu box on its own line.
             var label = "·  ·  ·"
             if seconds >= 1 {
-                label += String(format: "  %.1f s", seconds)
+                label += String(format: "  %.1f s", locale: locale, seconds)
             }
             append(label, attributes: attributes)
             appendNewline(attributes: attributes)
@@ -408,6 +415,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
     private var lastFontSize: Double = 0
     private var lastColumnWidth: Double = 0
     private var lastEmptyScenePlaceholder = ""
+    private var lastLanguage: AppLanguage = .english
     private var lastViewportSize: CGSize = .zero
     private var lastReadingLineFraction: Double = 0
     private var lastMirrorVertical = false
@@ -511,6 +519,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         readingLineFraction: Double,
         mirrorVertical: Bool,
         emptyScenePlaceholder: String = "",
+        language: AppLanguage = .english,
         onMetrics: @escaping (TeleprompterTextMetrics) -> Void
     ) {
         self.onMetrics = onMetrics
@@ -520,6 +529,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
             || abs(fontSize - lastFontSize) > 0.001
             || abs(columnWidth - lastColumnWidth) > 0.5
             || emptyScenePlaceholder != lastEmptyScenePlaceholder
+            || language != lastLanguage
         let layoutChanged = viewportSize != lastViewportSize
             || abs(readingLineFraction - lastReadingLineFraction) > 0.0001
             || mirrorVertical != lastMirrorVertical
@@ -529,11 +539,13 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
             lastFontSize = fontSize
             lastColumnWidth = columnWidth
             lastEmptyScenePlaceholder = emptyScenePlaceholder
+            lastLanguage = language
             rebuildDocument(
                 sections: sections,
                 fontSize: fontSize,
                 columnWidth: columnWidth,
-                emptyScenePlaceholder: emptyScenePlaceholder
+                emptyScenePlaceholder: emptyScenePlaceholder,
+                language: language
             )
         }
         if documentChanged || layoutChanged {
@@ -561,12 +573,14 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         sections: [TeleprompterSection],
         fontSize: Double,
         columnWidth: Double,
-        emptyScenePlaceholder: String
+        emptyScenePlaceholder: String,
+        language: AppLanguage
     ) {
         let document = TeleprompterAttributedStringBuilder.build(
             sections: sections,
             fontSize: fontSize,
-            emptyScenePlaceholder: emptyScenePlaceholder
+            emptyScenePlaceholder: emptyScenePlaceholder,
+            language: language
         )
         sectionHeaderLocations = document.sectionHeaderLocations
         sectionHeaderRanges = document.sectionHeaderRanges

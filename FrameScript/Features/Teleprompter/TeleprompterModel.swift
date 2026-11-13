@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import OSLog
 
 // MARK: - Rendering input
 
@@ -76,12 +77,15 @@ enum TeleprompterBlockText {
 }
 
 enum TeleprompterContentBuilder {
-    static func sections(from scenes: [TeleprompterSceneText]) -> [TeleprompterSection] {
+    static func sections(
+        from scenes: [TeleprompterSceneText],
+        pauseDefaults: PauseDefaults = .standard
+    ) -> [TeleprompterSection] {
         scenes.map { scene in
             TeleprompterSection(
                 sceneID: scene.id,
                 title: scene.title,
-                runs: ScriptMarkup.runs(scene.text)
+                runs: ScriptMarkup.runs(scene.text, defaults: pauseDefaults)
             )
         }
     }
@@ -141,12 +145,20 @@ typealias TeleprompterSceneProvider = @MainActor () -> [TeleprompterSceneText]
 // MARK: - Timing
 
 enum TeleprompterTiming {
+    /// Same rule as `ScriptMarkup.spokenWordCount`: a word is a
+    /// whitespace-separated run containing at least one letter or digit, so a
+    /// lone dash or an emoji does not inflate the reading time. Implemented on
+    /// the runs (rather than re-parsing the text) because this is called for
+    /// every section on every body evaluation.
     static func wordCount(in runs: [MarkupRun]) -> Int {
         var count = 0
         for run in runs {
             switch run {
             case .text(let value), .emphasis(let value, _):
-                count += value.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+                for word in value.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+                where word.contains(where: { $0.isLetter || $0.isNumber }) {
+                    count += 1
+                }
             case .pause, .cue:
                 break
             }
@@ -346,7 +358,9 @@ enum TeleprompterLayout {
 
 struct TeleprompterSettings: Codable, Equatable, Sendable {
     enum Limits {
-        static let wordsPerMinute = 60.0...300.0
+        /// One shared reading-speed range for the whole app (`DurationEstimator`
+        /// uses the same bounds for learned values).
+        static let wordsPerMinute = 60.0...400.0
         static let fontSize = 24.0...160.0
         static let columnWidth = 320.0...1600.0
         /// Allows ⅔ and beyond, which beam-splitter users need for a low guide.
@@ -448,7 +462,15 @@ struct TeleprompterSettings: Codable, Equatable, Sendable {
 @MainActor
 final class TeleprompterSettingsStore {
     static let settingsKey = "teleprompter.settings.v1"
+    /// Copy of a blob that could not be decoded. Kept so a hand-edited or
+    /// newer-version file is never silently destroyed by the next save.
+    static let unreadableSettingsKey = "teleprompter.settings.v1.unreadable"
     static let namespace = "teleprompter."
+
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "Teleprompter"
+    )
 
     private let userDefaults: UserDefaults
 
@@ -457,16 +479,30 @@ final class TeleprompterSettingsStore {
     }
 
     func load() -> TeleprompterSettings {
-        guard let data = userDefaults.data(forKey: Self.settingsKey),
-              let decoded = try? JSONDecoder().decode(TeleprompterSettings.self, from: data) else {
+        guard let data = userDefaults.data(forKey: Self.settingsKey) else {
             return .defaults
         }
-        return decoded.clamped()
+        do {
+            return try JSONDecoder().decode(TeleprompterSettings.self, from: data).clamped()
+        } catch {
+            // Keep the raw blob before the first save can overwrite it.
+            userDefaults.set(data, forKey: Self.unreadableSettingsKey)
+            Self.logger.error(
+                "Teleprompter settings could not be decoded; the original blob was kept under \(Self.unreadableSettingsKey, privacy: .public). detail=\(error.localizedDescription, privacy: .public)"
+            )
+            return .defaults
+        }
     }
 
     func save(_ settings: TeleprompterSettings) {
-        guard let data = try? JSONEncoder().encode(settings.clamped()) else { return }
-        userDefaults.set(data, forKey: Self.settingsKey)
+        do {
+            let data = try JSONEncoder().encode(settings.clamped())
+            userDefaults.set(data, forKey: Self.settingsKey)
+        } catch {
+            Self.logger.error(
+                "Teleprompter settings could not be encoded; the previous blob is unchanged. detail=\(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 }
 

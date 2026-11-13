@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import Observation
 
 /// Debounces learning refreshes triggered by edits. The recomputation itself
 /// runs off the main actor; this only delays repeated keystrokes.
@@ -28,6 +29,65 @@ final class DurationLearningScheduler {
     func cancel() {
         task?.cancel()
         task = nil
+    }
+}
+
+/// Runs one learning pass off the main actor and cancels the previous one.
+///
+/// The parse of every take used to happen on the main actor before the detached
+/// EMA step, so a settled keystroke cost tens of milliseconds. A generation
+/// token makes a superseded pass drop its result instead of overwriting newer
+/// state.
+@MainActor
+final class DurationLearningWorker {
+    static let shared = DurationLearningWorker()
+
+    private var task: Task<DurationLearningResult?, Never>?
+    private var generation = 0
+
+    func start(
+        inputs: [DurationLearningTakeInput],
+        resetCutoffs: [String: Date]
+    ) -> (generation: Int, task: Task<DurationLearningResult?, Never>) {
+        task?.cancel()
+        generation += 1
+        let currentGeneration = generation
+        let task = Task.detached(priority: .userInitiated) { () -> DurationLearningResult? in
+            guard !Task.isCancelled else { return nil }
+            let samples = DurationLearning.samples(from: inputs)
+            guard !Task.isCancelled else { return nil }
+            return DurationLearning.recompute(samples: samples, resetCutoffs: resetCutoffs)
+        }
+        self.task = task
+        return (currentGeneration, task)
+    }
+
+    func isCurrent(_ generation: Int) -> Bool {
+        generation == self.generation
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        generation += 1
+    }
+}
+
+/// Cheap change counter for the duration UI.
+///
+/// `durationLearningSignature` hashes every script text and every take, so it
+/// must not be evaluated from a SwiftUI body. Mutations that can change a
+/// duration estimate bump this counter instead, and the toolbar observes the
+/// integer.
+@MainActor
+@Observable
+final class DurationRevisionCounter {
+    static let shared = DurationRevisionCounter()
+
+    private(set) var value = 0
+
+    func bump() {
+        value &+= 1
     }
 }
 
@@ -166,6 +226,11 @@ extension AppState {
 
     // MARK: Targets
 
+    /// Cheap counter the toolbar observes instead of `durationLearningSignature`.
+    var durationRevision: Int {
+        DurationRevisionCounter.shared.value
+    }
+
     func setProjectTargetDuration(_ duration: TimeInterval?) {
         if let duration {
             guard let sanitized = DurationLimits.sanitizedTarget(duration) else { return }
@@ -173,6 +238,7 @@ extension AppState {
         } else {
             project.targetDuration = nil
         }
+        DurationRevisionCounter.shared.bump()
         touchProject()
     }
 
@@ -184,6 +250,7 @@ extension AppState {
         } else {
             scene.targetDuration = nil
         }
+        DurationRevisionCounter.shared.bump()
         touchProject()
     }
 
@@ -194,25 +261,32 @@ extension AppState {
     func durationLearningReport() -> DurationLearningResult {
         guard hasOpenProject else { return .empty }
         return DurationLearning.recompute(
-            samples: DurationLearning.samples(
-                from: project.scenes,
-                primaryLanguage: project.primaryLanguage
-            ),
+            samples: DurationLearning.samples(from: durationLearningInputs()),
             resetCutoffs: project.learnedWordsPerMinuteResetAtByLanguage
         )
     }
 
-    /// Popover-friendly report: sampling happens on the main actor, the EMA
-    /// work does not block it.
-    func durationLearningReportAsync() async -> DurationLearningResult {
-        guard hasOpenProject else { return .empty }
-        let samples = DurationLearning.samples(
+    /// Sendable take copies for the off-main learner. Built on the main actor
+    /// because it reads the document model, but it only copies value types.
+    func durationLearningInputs() -> [DurationLearningTakeInput] {
+        guard hasOpenProject else { return [] }
+        return DurationLearning.inputs(
             from: project.scenes,
             primaryLanguage: project.primaryLanguage
         )
+    }
+
+    /// Popover-friendly report: only the value copies are made on the main
+    /// actor, the parse and the EMA run off it.
+    func durationLearningReportAsync() async -> DurationLearningResult {
+        guard hasOpenProject else { return .empty }
+        let inputs = durationLearningInputs()
         let cutoffs = project.learnedWordsPerMinuteResetAtByLanguage
         return await Task.detached(priority: .userInitiated) {
-            DurationLearning.recompute(samples: samples, resetCutoffs: cutoffs)
+            DurationLearning.recompute(
+                samples: DurationLearning.samples(from: inputs),
+                resetCutoffs: cutoffs
+            )
         }.value
     }
 
@@ -229,24 +303,23 @@ extension AppState {
         )
     }
 
-    /// Open-time and edit-time recompute. Learning samples are gathered on the
-    /// main actor (they read the model), while the EMA work runs off-main so a
-    /// large project does not stall the window.
+    /// Open-time and edit-time recompute. Only value copies are made on the main
+    /// actor; the markup parse of every take and the EMA run in a detached task,
+    /// and a newer pass cancels the previous one.
     func recomputeLearnedWPMInBackground(markDirty: Bool = false) {
         guard hasOpenProject else { return }
         let projectID = project.id
         let signature = durationLearningSignature
-        let samples = DurationLearning.samples(
-            from: project.scenes,
-            primaryLanguage: project.primaryLanguage
-        )
+        let inputs = durationLearningInputs()
         let cutoffs = project.learnedWordsPerMinuteResetAtByLanguage
+        let worker = DurationLearningWorker.shared
+        let (generation, task) = worker.start(inputs: inputs, resetCutoffs: cutoffs)
 
         Task { @MainActor [weak self] in
-            let report = await Task.detached(priority: .userInitiated) {
-                DurationLearning.recompute(samples: samples, resetCutoffs: cutoffs)
-            }.value
-            guard let self else { return }
+            let report = await task.value
+            guard let self,
+                  let report,
+                  worker.isCurrent(generation) else { return }
             self.applyLearningReport(
                 report,
                 projectID: projectID,
@@ -272,15 +345,17 @@ extension AppState {
         }
         // Rebuilding from takes must not discard a pace learned from
         // teleprompter sessions (F9). Sessions are not stored in the document,
-        // so when a language has no take samples at all, keep the value that is
-        // already in use. As soon as takes exist, the take rebuild wins.
+        // and the take learner needs three accepted samples before it reports a
+        // value, so with one or two good takes the rebuild would still be
+        // empty. Keep the value already in use until the take rebuild has
+        // enough evidence to win.
+        let minimumSamples = max(1, WPMConfiguration().minimumAcceptedSamples)
         var learned = report.learnedWordsPerMinuteByLanguage
         for (code, existing) in project.learnedWordsPerMinuteByLanguage {
             let statistics = report.statistics(for: code)
-            let hasTakeSamples = (statistics?.acceptedSampleCount ?? 0)
-                + (statistics?.rejectedSampleCount ?? 0) > 0
+            let acceptedSamples = statistics?.acceptedSampleCount ?? 0
             if learned[code] == nil,
-               !hasTakeSamples,
+               acceptedSamples < minimumSamples,
                existing.isFinite,
                DurationLimits.plausibleWordsPerMinute.contains(existing) {
                 learned[code] = existing
@@ -288,11 +363,14 @@ extension AppState {
         }
 
         let valuesChanged = project.learnedWordsPerMinuteByLanguage != learned
+        var estimatesChanged = false
         if valuesChanged {
             project.learnedWordsPerMinuteByLanguage = learned
+            // Nothing else can have changed the stored estimates here: the
+            // whole-project re-parse is only needed when the pace changed.
+            estimatesChanged = refreshEstimatedDurationsUsingLearnedWPM()
         }
 
-        let estimatesChanged = refreshEstimatedDurationsUsingLearnedWPM()
         guard valuesChanged || estimatesChanged else { return }
         if markDirty {
             touchProject()
@@ -308,6 +386,7 @@ extension AppState {
         project.learnedWordsPerMinuteResetAtByLanguage[code] = date
         project.learnedWordsPerMinuteByLanguage[code] = nil
         _ = refreshEstimatedDurationsUsingLearnedWPM()
+        DurationRevisionCounter.shared.bump()
         touchProject()
     }
 
