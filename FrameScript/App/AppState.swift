@@ -1878,13 +1878,13 @@ final class AppState {
     private static let customTemplatesKey = "FrameScript.customTemplates.v1"
 
     private static func loadCustomTemplates() -> [FrameTemplate] {
-        guard let data = UserDefaults.standard.data(forKey: customTemplatesKey) else { return [] }
+        guard let data = AppEnvironment.defaults.data(forKey: customTemplatesKey) else { return [] }
         return (try? JSONDecoder().decode([FrameTemplate].self, from: data)) ?? []
     }
 
     private static func saveCustomTemplates(_ templates: [FrameTemplate]) {
         guard let data = try? JSONEncoder().encode(templates) else { return }
-        UserDefaults.standard.set(data, forKey: customTemplatesKey)
+        AppEnvironment.defaults.set(data, forKey: customTemplatesKey)
     }
 }
 
@@ -2479,23 +2479,24 @@ final class SettingsStore {
 
     init(
         settings: AppSettings? = nil,
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = AppEnvironment.defaults,
         key: String = "FrameScript.settings.v1",
         encoder: @escaping SettingsEncoder = { try JSONEncoder().encode($0) },
         decoder: SettingsDecoder = { try JSONDecoder().decode(AppSettings.self, from: $0) }
     ) {
-        self.userDefaults = userDefaults
+        let resolvedDefaults = AppEnvironment.isolatedDefaults(userDefaults)
+        self.userDefaults = resolvedDefaults
         self.key = key
         self.encoder = encoder
         if let settings {
             self.settings = settings
-        } else if let data = userDefaults.data(forKey: key) {
+        } else if let data = resolvedDefaults.data(forKey: key) {
             do {
                 self.settings = try decoder(data)
             } catch {
                 // Keep the unreadable blob so a later build or a manual rescue
                 // can recover preferences instead of losing them to defaults.
-                userDefaults.set(data, forKey: key + ".unreadable-backup")
+                resolvedDefaults.set(data, forKey: key + ".unreadable-backup")
                 self.settings = .defaults
                 self.errorEvent = AppError(
                     kind: .settingsRead,

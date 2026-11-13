@@ -5,7 +5,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class TeleprompterTests: XCTestCase {
+final class TeleprompterTests: FrameScriptTestCase {
     // MARK: Content builder
 
     func testContentBuilderUsesSharedMarkupParser() {
@@ -356,9 +356,7 @@ final class TeleprompterTests: XCTestCase {
     func testSettingsStoreUsesTeleprompterNamespaceAndPersists() throws {
         XCTAssertTrue(TeleprompterSettingsStore.settingsKey.hasPrefix(TeleprompterSettingsStore.namespace))
 
-        let suiteName = "TeleprompterTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = makeDefaults()
         let store = TeleprompterSettingsStore(userDefaults: defaults)
 
         XCTAssertEqual(store.load(), .defaults)
@@ -629,11 +627,7 @@ final class TeleprompterTests: XCTestCase {
         start: Int,
         provider: TeleprompterSceneProvider? = nil
     ) throws -> TeleprompterModel {
-        let suiteName = "TeleprompterModel-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = makeDefaults()
         let model = TeleprompterModel(
             sections: sections,
             startingSectionIndex: start,

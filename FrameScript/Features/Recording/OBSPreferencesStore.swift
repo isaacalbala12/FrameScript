@@ -55,10 +55,10 @@ final class OBSPreferencesStore {
     private(set) var keychainReadFailed = false
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppEnvironment.defaults,
         secretStore: any OBSSecretStoring = KeychainOBSSecretStore()
     ) {
-        self.defaults = defaults
+        self.defaults = AppEnvironment.isolatedDefaults(defaults)
         self.secretStore = secretStore
         host = defaults.string(forKey: Key.host) ?? Self.defaultHost
         let storedPort = defaults.integer(forKey: Key.port)

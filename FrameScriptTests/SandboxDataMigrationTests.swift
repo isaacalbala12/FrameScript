@@ -2,7 +2,7 @@ import Foundation
 @testable import FrameScript
 import XCTest
 
-final class SandboxDataMigrationTests: XCTestCase {
+final class SandboxDataMigrationTests: FrameScriptTestCase {
     func testMigratesFrameScriptKeysWithoutOverwritingExistingValues() throws {
         let defaults = makeDefaults()
         let plistURL = try makeContainerPlist([
@@ -81,13 +81,6 @@ final class SandboxDataMigrationTests: XCTestCase {
 
         XCTAssertTrue(result.skippedAlreadyMigrated)
         XCTAssertFalse(result.didMigrate)
-    }
-
-    private func makeDefaults() -> UserDefaults {
-        let suite = "SandboxDataMigrationTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
     }
 
     private func makeContainerPlist(_ values: [String: Any]) throws -> URL {

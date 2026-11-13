@@ -2,7 +2,7 @@ import Foundation
 @testable import FrameScript
 import XCTest
 
-final class SimracingTemplatesTests: XCTestCase {
+final class SimracingTemplatesTests: FrameScriptTestCase {
     func testFiveBuiltInSimracingTemplatesAreCompleteBlueprints() {
         let definitions = SimracingTemplates.all
         XCTAssertEqual(definitions.count, 5)
@@ -183,7 +183,7 @@ final class SimracingTemplatesTests: XCTestCase {
     @MainActor
     func testAppStateCreatesSpanishSimracingProjectFromTemplate() throws {
         let definition = try XCTUnwrap(SimracingTemplates.all.first { $0.kind == .updateAnalysis })
-        let suite = UserDefaults(suiteName: "SimracingTemplatesTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.language = .spanish
         let store = ProjectStore()

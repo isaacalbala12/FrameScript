@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
-final class RecordingTakeTests: XCTestCase {
+final class RecordingTakeTests: FrameScriptTestCase {
     // MARK: - Take numbering
 
     func testTakeNumberingUsesMaxPlusOnePerSceneAndLanguage() {
@@ -350,9 +350,7 @@ final class RecordingTakeTests: XCTestCase {
     func testTestConnectionUsesASeparateClientAndLeavesTheLiveSessionAlone() async {
         let live = FakeOBSClient()
         let probe = FakeOBSClient()
-        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = makeDefaults()
         let preferences = OBSPreferencesStore(defaults: defaults, secretStore: FakeOBSSecretStore())
         let controller = RecordingController(
             client: live,
@@ -551,9 +549,7 @@ final class RecordingTakeTests: XCTestCase {
     }
 
     func testOBSKeychainReadIsLazyAndOnlyHappensOnce() {
-        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = makeDefaults()
         let secrets = FakeOBSSecretStore()
         secrets.password = "secreto"
         let preferences = OBSPreferencesStore(defaults: defaults, secretStore: secrets)
@@ -567,9 +563,7 @@ final class RecordingTakeTests: XCTestCase {
     }
 
     func testFailedPasswordSaveKeepsThePreviousPassword() {
-        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = makeDefaults()
         let secrets = FakeOBSSecretStore()
         secrets.password = "old"
         let preferences = OBSPreferencesStore(defaults: defaults, secretStore: secrets)
@@ -789,9 +783,7 @@ final class RecordingTakeTests: XCTestCase {
     }
 
     private func makeFixture(sceneText: String) -> Fixture {
-        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = makeDefaults()
         let preferences = OBSPreferencesStore(defaults: defaults, secretStore: FakeOBSSecretStore())
         let client = FakeOBSClient()
         let controller = RecordingController(

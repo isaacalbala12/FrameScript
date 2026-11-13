@@ -230,7 +230,7 @@ final class ResolvedThemeManager {
             return match == .darkAqua ? .dark : .light
         }
 
-        return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark" ? .dark : .light
+        return AppEnvironment.systemDefaults.string(forKey: "AppleInterfaceStyle") == "Dark" ? .dark : .light
     }
 }
 

@@ -114,13 +114,13 @@ final class RecordingController {
         client: any OBSRecordingClient = OBSClient(),
         clientFactory: @escaping () -> any OBSRecordingClient = { OBSClient() },
         preferences: OBSPreferencesStore = OBSPreferencesStore(),
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = AppEnvironment.defaults,
         now: @escaping () -> Date = Date.init
     ) {
         self.client = client
         self.clientFactory = clientFactory
         self.preferences = preferences
-        self.defaults = defaults
+        self.defaults = AppEnvironment.isolatedDefaults(defaults)
         self.now = now
         self.isPanelVisible = defaults.bool(forKey: DefaultsKey.panelVisible)
         if let storedCountdown = defaults.object(forKey: DefaultsKey.countdownEnabled) as? Bool {

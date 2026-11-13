@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class AutosaveTests: XCTestCase {
+final class AutosaveTests: FrameScriptTestCase {
     private final class WriteRecorder {
         var count = 0
         var lastWrittenProject: FrameProject?
@@ -138,7 +138,7 @@ final class AutosaveTests: XCTestCase {
             .appendingPathComponent("AutosaveTests-\(UUID().uuidString).fscr")
         store.openProject(project, fileURL: url, wordsPerMinute: 150, markUnsaved: false)
 
-        let suite = UserDefaults(suiteName: "AutosaveTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.autosaveEnabled = true
         settings.generalPreferences.autosaveIntervalSeconds = interval

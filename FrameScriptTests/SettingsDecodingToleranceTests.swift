@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class SettingsDecodingToleranceTests: XCTestCase {
+final class SettingsDecodingToleranceTests: FrameScriptTestCase {
     func testEmptySettingsObjectFallsBackToDefaults() throws {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertEqual(decoded, AppSettings.defaults)
@@ -186,9 +186,7 @@ extension SettingsDecodingToleranceTests {
 
 extension SettingsDecodingToleranceTests {
     func testUnreadableSettingsBlobIsBackedUp() throws {
-        let suite = "SettingsDecodingToleranceTests-backup-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = makeDefaults()
         let key = "FrameScript.settings.v1"
         let original = Data("{not valid settings".utf8)
         defaults.set(original, forKey: key)

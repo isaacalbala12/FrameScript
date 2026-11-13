@@ -4,7 +4,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class AIServiceLayerTests: XCTestCase {
+final class AIServiceLayerTests: FrameScriptTestCase {
     func testPromptLanguageUsesDominantScriptLanguageAndInterfaceFallback() {
         let prompts = PromptBuilder()
 
@@ -126,7 +126,11 @@ final class AIServiceLayerTests: XCTestCase {
             llmProvider: provider,
             providerCredentials: session
         )
-        let appState = AppState(dependencies: dependencies)
+        let appState = AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
+            dependencies: dependencies
+        )
         appState.openDemoProject()
         appState.settings.aiPreferences.provider = .openRouter
 
@@ -244,6 +248,8 @@ final class AIServiceLayerTests: XCTestCase {
         let provider = CancelledAutocompleteProvider()
         let errorCenter = ErrorCenter()
         let appState = AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
             errorCenter: errorCenter,
             dependencies: AppDependencies(
                 rewriteService: RewriteService(provider: provider),
@@ -254,6 +260,7 @@ final class AIServiceLayerTests: XCTestCase {
             )
         )
         appState.settings.aiPreferences.provider = .openAICompatible
+        appState.settings.aiPreferences.enableInlineAutocomplete = true
 
         let result = await appState.autocompleteScript(context: AutocompleteContext(prefix: "Draft script", suffix: "", sceneTitle: "Hook", language: .english))
         XCTAssertEqual(result, .none)
@@ -276,7 +283,7 @@ final class AIServiceLayerTests: XCTestCase {
 
     func testAutocompleteStoredKeyMetadataGatesCredentialReadsAndUpdatesInPlace() async {
         var credentialReads = 0
-        let defaults = UserDefaults(suiteName: "FrameScriptTests.autocomplete-metadata.\(UUID().uuidString)")!
+        let defaults = makeDefaults()
         let configurationStore = AIProviderConfigurationStore(userDefaults: defaults)
         let provider = CapturingAutocompleteProvider(response: LLMResponse(text: "continues."))
         let dependencies = AppDependencies(
@@ -289,8 +296,14 @@ final class AIServiceLayerTests: XCTestCase {
                 return "secret"
             })
         )
-        let appState = AppState(dependencies: dependencies, aiProviderConfigurationStore: configurationStore)
+        let appState = AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
+            dependencies: dependencies,
+            aiProviderConfigurationStore: configurationStore
+        )
         appState.settings.aiPreferences.provider = .openAICompatible
+        appState.settings.aiPreferences.enableInlineAutocomplete = true
         let context = AutocompleteContext(prefix: "A narrator introduces the topic", suffix: "", sceneTitle: "Hook", language: .english)
 
         let missingMetadata = await appState.autocompleteScript(context: context)
@@ -312,7 +325,7 @@ final class AIServiceLayerTests: XCTestCase {
     }
 
     func testAutocompleteConfigurationEligibilityDistinguishesDisabledProviderAndMissingKeyMetadata() {
-        let defaults = UserDefaults(suiteName: "FrameScriptTests.autocomplete-eligibility.\(UUID().uuidString)")!
+        let defaults = makeDefaults()
         let configurationStore = AIProviderConfigurationStore(userDefaults: defaults)
         let appState = autocompleteAppState(
             provider: StaticResponseProvider(text: "unused"),
@@ -681,13 +694,17 @@ final class AIServiceLayerTests: XCTestCase {
         var reads = 0
         let session = ProviderCredentialSession(reader: { _ in reads += 1; return "secret" })
         let provider = StaticResponseProvider(text: "unused")
-        let appState = AppState(dependencies: AppDependencies(
-            rewriteService: RewriteService(provider: provider),
-            analysisService: AnalysisService(provider: provider),
-            exportService: ExportService(),
-            llmProvider: provider,
-            providerCredentials: session
-        ))
+        let appState = AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
+            dependencies: AppDependencies(
+                rewriteService: RewriteService(provider: provider),
+                analysisService: AnalysisService(provider: provider),
+                exportService: ExportService(),
+                llmProvider: provider,
+                providerCredentials: session
+            )
+        )
 
         appState.openSettings()
         appState.openSettings(tab: .ai)
@@ -932,11 +949,13 @@ final class AIServiceLayerTests: XCTestCase {
         if let configurationStore {
             store = configurationStore
         } else {
-            let defaults = UserDefaults(suiteName: "FrameScriptTests.autocomplete.\(UUID().uuidString)")!
+            let defaults = makeDefaults()
             store = AIProviderConfigurationStore(userDefaults: defaults)
         }
         store.setHasStoredKey(hasStoredKey, for: .openAICompatible)
         let appState = AppState(
+            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
             errorCenter: errorCenter,
             dependencies: AppDependencies(
                 rewriteService: RewriteService(provider: provider),
@@ -948,6 +967,7 @@ final class AIServiceLayerTests: XCTestCase {
             aiProviderConfigurationStore: store
         )
         appState.settings.aiPreferences.provider = .openAICompatible
+        appState.settings.aiPreferences.enableInlineAutocomplete = true
         return appState
     }
 

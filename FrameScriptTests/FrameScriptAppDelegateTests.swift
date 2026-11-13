@@ -4,7 +4,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class FrameScriptAppDelegateTests: XCTestCase {
+final class FrameScriptAppDelegateTests: FrameScriptTestCase {
     func testOpeningAProjectWhileRunningUsesTheExistingOpenFlow() throws {
         let url = try projectFileURL(title: "From Finder")
         let appState = makeAppState()
@@ -179,7 +179,7 @@ final class FrameScriptAppDelegateTests: XCTestCase {
         saveAsDestinationProvider: AppState.SaveAsDestinationProvider? = nil,
         projectStore: ProjectStore = ProjectStore()
     ) -> AppState {
-        let suite = UserDefaults(suiteName: "FrameScriptAppDelegateTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.autosaveEnabled = autosaveEnabled
         return AppState(

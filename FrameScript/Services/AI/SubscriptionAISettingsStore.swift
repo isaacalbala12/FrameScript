@@ -22,9 +22,10 @@ final class SubscriptionAISettingsStore {
         }
     }
 
-    init(userDefaults: UserDefaults = .standard) {
-        self.userDefaults = userDefaults
-        if let data = userDefaults.data(forKey: Self.storageKey),
+    init(userDefaults: UserDefaults = AppEnvironment.defaults) {
+        let resolvedDefaults = AppEnvironment.isolatedDefaults(userDefaults)
+        self.userDefaults = resolvedDefaults
+        if let data = resolvedDefaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode(SubscriptionAISettings.self, from: data) {
             settings = decoded
         } else {

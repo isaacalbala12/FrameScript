@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 @MainActor
-final class SpanishDemoProjectTests: XCTestCase {
+final class SpanishDemoProjectTests: FrameScriptTestCase {
     private let expectedTitle = "Análisis de Apexia: la actualización 3.0"
 
     func testSpanishDemoIsCompleteAnchorFirstShowcase() throws {
@@ -60,7 +60,7 @@ final class SpanishDemoProjectTests: XCTestCase {
     }
 
     func testOpenDemoProjectUsesSpanishWhenSelected() {
-        let suite = UserDefaults(suiteName: "SpanishDemoProjectTests-\(UUID().uuidString)")!
+        let suite = makeDefaults()
         var settings = AppSettings.defaults
         settings.generalPreferences.language = .spanish
         let store = ProjectStore()
