@@ -111,6 +111,16 @@ struct FrameTheme {
         accent.color.opacity(colorScheme == .dark ? 0.24 : 0.32)
     }
 
+    /// Accent darkened/lightened to reach at least 4.5:1 against white text (filled buttons).
+    var accentStrong: Color {
+        Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: .white, minimum: 4.5))
+    }
+
+    /// Accent usable as text: at least 4.5:1 against `appBackground` in light and dark.
+    var accentText: Color {
+        Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: NSColor(appBackground), minimum: 4.5))
+    }
+
     var softAccent: Color {
         accentSoft
     }

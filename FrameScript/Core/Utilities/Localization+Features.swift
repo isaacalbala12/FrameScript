@@ -18,6 +18,14 @@ extension L10n {
         editorMarkupStrings,
         durationStrings,
         recordingStrings,
-        voiceFollowStrings
+        voiceFollowStrings,
+        wp1Strings,
+        wp2Strings,
+        wp3Strings,
+        wp4Strings,
+        wp5Strings,
+        wp6Strings,
+        wp7Strings,
+        wp8Strings
     ]
 }
