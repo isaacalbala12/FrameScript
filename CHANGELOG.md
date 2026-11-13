@@ -4,6 +4,9 @@
 
 ### Added
 
+- Added the video board (F25): a separate "Tablero" window with a read-only, incremental `.fscr` library scan (bookmarked folders plus recents), kanban columns by production status with drag-to-change, a sortable list, filters/grouping by status, game and video type, real-or-estimated duration, pending counts by kind, and double-click to open a project.
+- Added editable game/topic and video-type catalogs with autocomplete, template-based default video types, and classification editing from both the board and the project info popover. Board writes reuse the editor's atomic codec write, backups and external-change detection, and preserve imported escaleta notes stored in the topic field.
+- Added explicit, preview-first Plane export of a project's pending tasks, with connection settings under Settings → Tablero, the API token in the Keychain, and a per-project export ledger for idempotency.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.

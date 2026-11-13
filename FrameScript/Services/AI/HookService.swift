@@ -186,7 +186,8 @@ enum HookContextBuilder {
     }
 
     private static func thesis(project: FrameProject, scene: Scene) -> String {
-        let topic = project.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let topic = BoardProjectTopic.strippingMarker(from: project.topic)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if !topic.isEmpty { return truncated(topic, limit: 320) }
         return labelledNote(in: scene.notes, keys: ["tesis", "thesis"]) ?? ""
     }

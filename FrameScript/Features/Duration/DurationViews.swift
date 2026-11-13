@@ -329,6 +329,12 @@ struct ProjectDurationPopover: View {
                     .truncationMode(.middle)
             }
 
+            Divider()
+
+            BoardProjectInfoSection(catalog: .shared)
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 7) {
                 durationRow(
                     label: appState.localized("duration.estimated"),

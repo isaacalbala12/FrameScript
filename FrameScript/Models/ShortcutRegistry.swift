@@ -196,7 +196,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
     case importEscaleta, exportEscaleta
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
-    case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
+    case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter, showBoard
     case recordTake, toggleRecordingPanel
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
     case generateHook, suggestRehooks
@@ -278,6 +278,7 @@ enum ShortcutRegistry {
         .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 7),
         .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 8),
         .init(command: .toggleRecordingPanel, localizationKey: "recording.menu.togglePanel", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .option]), order: 9),
+        .init(command: .showBoard, localizationKey: "board.menu", category: .workspace, factoryDefault: .init("b", modifiers: [.command, .option]), order: 10),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),
