@@ -2123,7 +2123,10 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
-        scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        // The scene-level estimate is owned by `SceneMetricsDebouncer`: one
+        // off-main parse per settled edit. Recomputing it here would parse the
+        // same script a second time on the main actor, just before the debounced
+        // pass lands. Saves, restores and exports still refresh it synchronously.
         project.updatedAt = Date()
         if markUnsaved {
             hasUnsavedFileChanges = true
