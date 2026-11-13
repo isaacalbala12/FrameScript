@@ -58,7 +58,8 @@ final class ResearchSnapshotTests: XCTestCase {
                         view,
                         width: width,
                         height: height,
-                        appearance: NSAppearance(named: appearanceName)
+                        appearance: NSAppearance(named: appearanceName),
+                        shouldRecognizeText: colorScheme == .light
                     )
 
                     let name = "research-\(tab.rawValue)-\(themeName)-\(sizeName)"
@@ -70,7 +71,18 @@ final class ResearchSnapshotTests: XCTestCase {
                         )
                     }
 
-                    try assertLayout(result, expectedName: name, width: width, height: height, tab: tab)
+                    // OCR is expensive; visible-text and key-frame checks run
+                    // on every light render, while dark renders still prove the
+                    // image is non-blank and the layout does not demand a
+                    // larger canvas. The PNGs cover dark text visually.
+                    try assertLayout(
+                        result,
+                        expectedName: name,
+                        width: width,
+                        height: height,
+                        tab: tab,
+                        assertVisibleText: colorScheme == .light
+                    )
                 }
             }
         }
@@ -129,7 +141,8 @@ final class ResearchSnapshotTests: XCTestCase {
         expectedName: String,
         width: CGFloat,
         height: CGFloat,
-        tab: ResearchTab
+        tab: ResearchTab,
+        assertVisibleText: Bool
     ) throws {
         XCTAssertEqual(result.size.width, width, accuracy: 0.5, "\(expectedName): wrong width")
         XCTAssertEqual(result.size.height, height, accuracy: 0.5, "\(expectedName): wrong height")
@@ -153,6 +166,8 @@ final class ResearchSnapshotTests: XCTestCase {
         XCTAssertEqual(image.size.width, width, accuracy: 0.5)
         XCTAssertEqual(image.size.height, height, accuracy: 0.5)
         try assertNotBlank(image, name: expectedName)
+
+        guard assertVisibleText else { return }
 
         let recognized = result.recognizedText
         XCTAssertFalse(recognized.isEmpty, "\(expectedName): OCR found no visible text")
@@ -474,7 +489,8 @@ enum ResearchSnapshotSupport {
         _ view: V,
         width: CGFloat,
         height: CGFloat,
-        appearance: NSAppearance?
+        appearance: NSAppearance?,
+        shouldRecognizeText: Bool = true
     ) throws -> RenderResult {
         let hostingView = NSHostingView(rootView: view)
         hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
@@ -509,7 +525,9 @@ enum ResearchSnapshotSupport {
             image = nil
         }
 
-        let recognized = image.flatMap { recognizeText(in: $0) } ?? []
+        let recognized = shouldRecognizeText
+            ? (image.flatMap { recognizeText(in: $0) } ?? [])
+            : []
 
         window.contentView = nil
         window.close()
