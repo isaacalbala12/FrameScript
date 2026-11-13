@@ -452,7 +452,7 @@ final class TeleprompterSettingsStore {
 
     private let userDefaults: UserDefaults
 
-    init(userDefaults: UserDefaults = .standard) {
+    init(userDefaults: UserDefaults = AppEnvironment.defaults) {
         self.userDefaults = userDefaults
     }
 
