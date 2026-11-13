@@ -55,6 +55,9 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("recording.menu.togglePanel"), detail: shortcut(.toggleRecordingPanel)) {
                 appState.recording.isPanelVisible.toggle()
             },
+            PaletteResult(title: appState.localized("production.menu"), detail: shortcut(.productionChecklist)) {
+                ProductionPresentation.shared.presentAfterPaletteDismissal()
+            },
             PaletteResult(title: appState.localized("recording.obs.settings"), detail: "") {
                 appState.recording.isSettingsPresented = true
             },
