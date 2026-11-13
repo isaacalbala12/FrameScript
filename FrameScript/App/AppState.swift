@@ -227,7 +227,7 @@ final class AppState {
         consumeRecentProjectStoreError()
         installAppActivationObserverIfNeeded()
         projectStore.configure(
-            wordsPerMinute: settings.editorPreferences.wordsPerMinute
+            wordsPerMinute: currentDurationWordsPerMinute
         )
 #if DEBUG
         if arguments.contains("--framescript-ui-test-language-english") {
@@ -397,9 +397,9 @@ final class AppState {
             language: currentLanguage,
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
-        projectStore.openProject(project, fileURL: nil, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: true)
+        projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true)
         resetProjectFileTracking()
-        projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+        projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
         editorState.isFocusModeEnabled = false
         windowState.newProjectRequest = nil
@@ -411,12 +411,12 @@ final class AppState {
         projectStore.openProject(
             project,
             fileURL: nil,
-            wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+            wordsPerMinute: durationWordsPerMinute(for: project),
             markUnsaved: false,
             origin: .builtInDemo
         )
         resetProjectFileTracking()
-        projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+        projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
         projectStore.clearDemoDirtyState()
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
     }
@@ -438,9 +438,9 @@ final class AppState {
             let project = try securityScope.withAccess(to: url) {
                 try FrameScriptFileStore.read(from: url)
             }
-            projectStore.openProject(project, fileURL: url, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
+            projectStore.openProject(project, fileURL: url, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: false)
             rememberRecentProject(url)
-            projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
+            projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute, markUnsaved: false)
             setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
             startTrackingProjectFile(at: url)
         } catch {
@@ -465,9 +465,9 @@ final class AppState {
             let url = try recentProjectStore.validatedURL(for: entry)
             try securityScope.withAccess(to: url) {
                 let project = try FrameScriptFileStore.read(from: url)
-                projectStore.openProject(project, fileURL: url, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
+                projectStore.openProject(project, fileURL: url, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: false)
                 rememberRecentProject(url)
-                projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: settings.editorPreferences.wordsPerMinute, markUnsaved: false)
+                projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute, markUnsaved: false)
                 setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
                 startTrackingProjectFile(at: url)
             }
@@ -503,7 +503,7 @@ final class AppState {
         }
         do {
             try securityScope.withAccess(to: url) {
-                try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+                try projectStore.saveCurrentProject(wordsPerMinute: currentDurationWordsPerMinute)
             }
             recordProjectFileSnapshot(at: url)
             errorCenter.clearAutosaveFailureSuppression()
@@ -534,7 +534,7 @@ final class AppState {
             url = chosenURL
         }
         do {
-            try projectStore.saveCurrentProject(to: url, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            try projectStore.saveCurrentProject(to: url, wordsPerMinute: currentDurationWordsPerMinute)
             startTrackingProjectFile(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
@@ -698,7 +698,7 @@ final class AppState {
         if let text {
             projectStore.commitScriptText(text, sceneID: sceneID, previousText: oldText)
         }
-        projectStore.updateCurrentSceneMetrics(sceneID: sceneID, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+        projectStore.updateCurrentSceneMetrics(sceneID: sceneID, wordsPerMinute: currentDurationWordsPerMinute)
         validateProductionSelection()
         projectStore.markProjectDirty()
         scheduleSegmentRebuild(for: sceneID)
@@ -897,7 +897,7 @@ final class AppState {
     func rebuildProductionSegments(markUnsaved: Bool = true) {
         projectStore.synchronizeTextSegments(
             splitMode: settings.generalPreferences.defaultSplitMode,
-            wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+            wordsPerMinute: currentDurationWordsPerMinute,
             markUnsaved: markUnsaved
         )
         scheduleAutosaveIfNeeded()
@@ -1035,7 +1035,7 @@ final class AppState {
         guard hasOpenProject else { return }
         let scene = projectStore.makeScene(order: project.scenes.count, title: localized("templates.defaultScene"))
         transitionEditorContext(sceneID: .some(scene.id), mode: .script) {
-            projectStore.addScene(scene, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            projectStore.addScene(scene, wordsPerMinute: currentDurationWordsPerMinute)
             scheduleAutosaveIfNeeded()
         }
     }
@@ -1046,7 +1046,7 @@ final class AppState {
         let targetIndex = ordered.firstIndex { $0.id == sceneID } ?? max(0, ordered.count - 1)
         let scene = projectStore.makeScene(order: targetIndex + 1, title: localized("templates.defaultScene"))
         transitionEditorContext(sceneID: .some(scene.id), mode: .script) {
-            projectStore.addScene(scene, afterSortedIndex: targetIndex, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            projectStore.addScene(scene, afterSortedIndex: targetIndex, wordsPerMinute: currentDurationWordsPerMinute)
             scheduleAutosaveIfNeeded()
         }
     }
@@ -1055,7 +1055,7 @@ final class AppState {
         guard let scene = selectedScene else { return }
         let copy = projectStore.duplicate(scene, copySuffix: localized("templates.copySuffix"))
         transitionEditorContext(sceneID: .some(copy.id)) {
-            projectStore.addScene(copy, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            projectStore.addScene(copy, wordsPerMinute: currentDurationWordsPerMinute)
             scheduleAutosaveIfNeeded()
         }
     }
@@ -1076,7 +1076,7 @@ final class AppState {
                 ? orderedScenes[selectedSceneIndex - 1].id
                 : orderedScenes.indices.contains(selectedSceneIndex) ? orderedScenes[selectedSceneIndex].id : nil
         transitionEditorContext(sceneID: .some(nextID)) {
-            projectStore.deleteScene(at: selectedSceneIndex, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+            projectStore.deleteScene(at: selectedSceneIndex, wordsPerMinute: currentDurationWordsPerMinute)
             scheduleAutosaveIfNeeded()
         }
     }
@@ -1091,7 +1091,7 @@ final class AppState {
 
     private func moveSelectedScene(by delta: Int) {
         guard let selectedSceneIndex else { return }
-        projectStore.moveScene(at: selectedSceneIndex, by: delta, wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+        projectStore.moveScene(at: selectedSceneIndex, by: delta, wordsPerMinute: currentDurationWordsPerMinute)
         scheduleAutosaveIfNeeded()
     }
 
@@ -1437,7 +1437,7 @@ final class AppState {
             self.projectStore.synchronizeTextSegments(
                 forSceneID: sceneID,
                 splitMode: self.settings.generalPreferences.defaultSplitMode,
-                wordsPerMinute: self.settings.editorPreferences.wordsPerMinute,
+                wordsPerMinute: self.currentDurationWordsPerMinute,
                 markUnsaved: false
             )
             self.segmentRebuildTasks[sceneID] = nil
@@ -1450,7 +1450,7 @@ final class AppState {
         projectStore.synchronizeTextSegments(
             forSceneID: sceneID,
             splitMode: settings.generalPreferences.defaultSplitMode,
-            wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+            wordsPerMinute: currentDurationWordsPerMinute,
             markUnsaved: false
         )
     }
@@ -1471,7 +1471,7 @@ final class AppState {
         }
         do {
             try securityScope.withAccess(to: url) {
-                try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+                try projectStore.saveCurrentProject(wordsPerMinute: currentDurationWordsPerMinute)
             }
             recordProjectFileSnapshot(at: url)
             errorCenter.clearAutosaveFailureSuppression()

@@ -156,7 +156,8 @@ enum SimracingTemplates {
                 title: title,
                 templateID: template.id,
                 scenes: builtScenes,
-                exportPresets: [ExportPreset(id: UUID(), name: exportPresetName, format: .productionOutline)]
+                exportPresets: [ExportPreset(id: UUID(), name: exportPresetName, format: .productionOutline)],
+                primaryLanguage: SimracingCopy.resolvedLanguage(language).contentLanguageCode
             )
         }
     }

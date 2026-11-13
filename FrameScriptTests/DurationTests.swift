@@ -1,5 +1,6 @@
 import Foundation
 @testable import FrameScript
+import FrameScriptCore
 import XCTest
 
 @MainActor
@@ -14,13 +15,12 @@ final class DurationTests: XCTestCase {
         ]
 
         let selected = DurationTakeSelector.selectedTake(
-            from: takes,
-            language: "es",
-            primaryLanguage: "es"
+            from: records(from: takes),
+            language: "es"
         )
 
-        XCTAssertEqual(selected?.id, takes[1].id)
-        XCTAssertEqual(selected?.duration, 75)
+        XCTAssertEqual(selected?.take.id, takes[1].id)
+        XCTAssertEqual(selected?.take.duration, 75)
     }
 
     func testFallsBackToLatestNonBadTakeWhenNoGoodTakeExists() {
@@ -31,13 +31,12 @@ final class DurationTests: XCTestCase {
         ]
 
         let selected = DurationTakeSelector.selectedTake(
-            from: takes,
-            language: "es",
-            primaryLanguage: "es"
+            from: records(from: takes),
+            language: "es"
         )
 
-        XCTAssertEqual(selected?.id, takes[2].id)
-        XCTAssertEqual(selected?.duration, 66)
+        XCTAssertEqual(selected?.take.id, takes[2].id)
+        XCTAssertEqual(selected?.take.duration, 66)
     }
 
     func testBadTakesAndTakesWithoutMeasuredDurationAreIgnored() {
@@ -48,31 +47,39 @@ final class DurationTests: XCTestCase {
         ]
 
         let selected = DurationTakeSelector.selectedTake(
-            from: takes,
-            language: "es",
-            primaryLanguage: "es"
+            from: records(from: takes),
+            language: "es"
         )
 
-        XCTAssertEqual(selected?.id, takes[0].id)
+        XCTAssertEqual(selected?.take.id, takes[0].id)
+    }
+
+    func testUnboundedTakeDurationIsIgnored() {
+        let takes = [
+            makeTake(number: 1, daysAgo: 2, duration: 70, rating: .good),
+            makeTake(number: 2, daysAgo: 1, duration: 1e300, rating: .good)
+        ]
+
+        let selected = DurationTakeSelector.selectedTake(
+            from: records(from: takes),
+            language: "es"
+        )
+
+        XCTAssertEqual(selected?.take.id, takes[0].id)
     }
 
     func testEmptyTakeLanguageMeansPrimaryLanguageButNotAnotherLanguage() {
-        let primaryTake = makeTake(number: 1, daysAgo: 1, duration: 70, rating: .good, language: "")
-        let englishTake = makeTake(number: 2, daysAgo: 2, duration: 40, rating: .good, language: "en-GB")
+        let primaryTake = makeTake(number: 1, daysAgo: 2, duration: 70, rating: .good, language: "")
+        let englishTake = makeTake(number: 2, daysAgo: 1, duration: 40, rating: .good, language: "en-GB")
+        let scene = makeScene(text: "text", takes: [primaryTake, englishTake])
 
-        let spanish = DurationTakeSelector.selectedTake(
-            from: [englishTake, primaryTake],
-            language: "es-ES",
-            primaryLanguage: "es"
-        )
-        let english = DurationTakeSelector.selectedTake(
-            from: [englishTake, primaryTake],
-            language: "en",
-            primaryLanguage: "es"
-        )
+        let spanishProject = FrameProject(title: "Spanish", scenes: [scene], primaryLanguage: "es")
+        let englishProject = FrameProject(title: "English", scenes: [scene], primaryLanguage: "en")
+        let spanishState = makeAppState(project: spanishProject)
+        let englishState = makeAppState(project: englishProject)
 
-        XCTAssertEqual(spanish?.id, primaryTake.id)
-        XCTAssertEqual(english?.id, englishTake.id)
+        XCTAssertEqual(spanishState.sceneDurationSummary(for: scene).realTakeID, primaryTake.id)
+        XCTAssertEqual(englishState.sceneDurationSummary(for: scene).realTakeID, englishTake.id)
     }
 
     func testLanguageMatchPrefersLatestMatchingTake() {
@@ -81,12 +88,72 @@ final class DurationTests: XCTestCase {
         let newestEnglish = makeTake(number: 3, daysAgo: 1, duration: 44, rating: .good, language: "en")
 
         let selected = DurationTakeSelector.selectedTake(
-            from: [olderSpanish, newerSpanish, newestEnglish],
-            language: "es",
-            primaryLanguage: "es"
+            from: records(from: [olderSpanish, newerSpanish, newestEnglish]),
+            language: "es"
         )
 
-        XCTAssertEqual(selected?.id, newerSpanish.id)
+        XCTAssertEqual(selected?.take.id, newerSpanish.id)
+    }
+
+    func testStaleTakeIsIgnoredForRealDuration() {
+        let sceneText = "the current script"
+        let stale = makeTake(
+            number: 1,
+            daysAgo: 1,
+            duration: 70,
+            rating: .good,
+            sceneTextHash: FrameScriptDocument.TextHash.hash("an older script")
+        )
+        let current = makeTake(
+            number: 2,
+            daysAgo: 2,
+            duration: 62,
+            rating: .good,
+            sceneTextHash: FrameScriptDocument.TextHash.hash(sceneText)
+        )
+        let scene = makeScene(text: sceneText, takes: [stale, current])
+        let appState = makeAppState(project: FrameProject(title: "Stale", scenes: [scene], primaryLanguage: "es"))
+
+        let summary = appState.sceneDurationSummary(for: scene)
+
+        XCTAssertEqual(summary.realTakeID, current.id)
+        XCTAssertEqual(summary.real, 62)
+    }
+
+    func testLegacyTakeWithoutHashStillCounts() {
+        let scene = makeScene(
+            text: "current",
+            takes: [makeTake(number: 1, daysAgo: 1, duration: 55, rating: .good, sceneTextHash: "")]
+        )
+        let appState = makeAppState(project: FrameProject(title: "Legacy", scenes: [scene], primaryLanguage: "es"))
+
+        XCTAssertEqual(appState.sceneDurationSummary(for: scene).real, 55)
+    }
+
+    func testVariantTakeCanSupplyRealDurationForItsLanguage() throws {
+        let variantText = "translated scene"
+        let variantTake = makeTake(
+            number: 1,
+            daysAgo: 1,
+            duration: 47,
+            rating: .good,
+            language: "en",
+            readText: variantText,
+            sceneTextHash: FrameScriptDocument.TextHash.hash(variantText)
+        )
+        let variant = SceneLanguageVariant(
+            languageCode: "en",
+            text: variantText,
+            sourceHash: FrameScriptDocument.TextHash.hash("original"),
+            takes: [variantTake]
+        )
+        let scene = makeScene(text: "original", takes: [], languageVariants: [variant])
+        let project = FrameProject(title: "Variants", scenes: [scene], primaryLanguage: "es")
+        let appState = makeAppState(project: project)
+
+        XCTAssertEqual(appState.durationTakeRecords(for: scene).count, 1)
+        XCTAssertEqual(appState.sceneDurationSummary(for: scene, language: "en").realTakeID, variantTake.id)
+        XCTAssertNil(appState.sceneDurationSummary(for: scene).real)
     }
 
     // MARK: Target and progress math
@@ -152,6 +219,7 @@ final class DurationTests: XCTestCase {
         XCTAssertEqual(summary.sceneCount, 2)
         XCTAssertEqual(summary.estimated, 170)
         XCTAssertEqual(summary.realOrEstimated, 175)
+        XCTAssertEqual(summary.displayTotal, 175)
         XCTAssertEqual(summary.recorded, 95)
         XCTAssertEqual(summary.scenesWithReal, 1)
         XCTAssertFalse(summary.allScenesHaveReal)
@@ -176,8 +244,38 @@ final class DurationTests: XCTestCase {
 
         XCTAssertTrue(summary.allScenesHaveReal)
         XCTAssertEqual(summary.realOrEstimated, 173)
+        XCTAssertEqual(summary.displayTotal, 173)
         XCTAssertEqual(summary.recorded, 173)
         XCTAssertEqual(summary.overrun, 0)
+    }
+
+    func testProjectToolbarTotalMatchesWarningBasis() {
+        let summaries = [
+            SceneDurationSummary(sceneID: UUID(), estimated: 200, real: 220)
+        ]
+        let summary = ProjectDurationSummary(sceneSummaries: summaries, target: 210)
+
+        XCTAssertEqual(summary.estimated, 200)
+        XCTAssertEqual(summary.displayTotal, 220)
+        XCTAssertEqual(summary.overrun, 10, accuracy: 0.001)
+        XCTAssertTrue(summary.isOverTarget)
+    }
+
+    func testUnboundedDurationsAndTargetsAreSanitized() {
+        let summary = SceneDurationSummary(
+            sceneID: UUID(),
+            estimated: 1e300,
+            real: 1e300,
+            target: 1e300
+        )
+
+        XCTAssertEqual(summary.estimated, DurationLimits.maximumDuration)
+        XCTAssertNil(summary.real)
+        XCTAssertNil(summary.target)
+
+        let project = ProjectDurationSummary(sceneSummaries: [summary], target: 1e300)
+        XCTAssertNil(project.target)
+        XCTAssertFalse(project.isOverTarget)
     }
 
     // MARK: WPM learning
@@ -274,6 +372,33 @@ final class DurationTests: XCTestCase {
         XCTAssertEqual(samples.first?.languageCode, "es")
     }
 
+    func testSamplesSubtractPausesFromSpeakingTime() throws {
+        let spoken = Array(repeating: "palabra", count: 150).joined(separator: " ")
+        let text = "\(spoken) [pausa 10s]"
+        let scene = makeScene(
+            text: text,
+            takes: [
+                makeTake(
+                    number: 1,
+                    daysAgo: 1,
+                    duration: 60,
+                    rating: .good,
+                    readText: text,
+                    sceneTextHash: FrameScriptDocument.TextHash.hash(text)
+                )
+            ]
+        )
+
+        let sample = try XCTUnwrap(DurationLearning.samples(from: [scene], primaryLanguage: "es").first)
+
+        XCTAssertEqual(sample.wordCount, 150)
+        XCTAssertEqual(sample.duration, 50, accuracy: 0.001)
+        let learned = DurationLearning.recompute(
+            samples: [sample, sample, sample]
+        )
+        XCTAssertEqual(learned.learnedWordsPerMinuteByLanguage["es"] ?? 0, 180, accuracy: 0.001)
+    }
+
     func testSamplesFallBackToSceneTextWhenReadTextIsMissing() {
         let scene = makeScene(
             text: "uno dos tres cuatro",
@@ -283,6 +408,22 @@ final class DurationTests: XCTestCase {
         let samples = DurationLearning.samples(from: [scene], primaryLanguage: "es")
 
         XCTAssertEqual(samples.first?.wordCount, 4)
+    }
+
+    func testStaleTakeWithoutReadTextDoesNotLearnFromEditedScene() {
+        let stale = makeTake(
+            number: 1,
+            daysAgo: 1,
+            duration: 20,
+            rating: .good,
+            readText: "",
+            sceneTextHash: FrameScriptDocument.TextHash.hash("old text")
+        )
+        let scene = makeScene(text: "completely different current text", takes: [stale])
+
+        let samples = DurationLearning.samples(from: [scene], primaryLanguage: "es")
+
+        XCTAssertTrue(samples.isEmpty)
     }
 
     func testOnlyGoodTakesFeedLearning() {
@@ -300,9 +441,39 @@ final class DurationTests: XCTestCase {
         XCTAssertTrue(samples.isEmpty)
     }
 
+    func testVariantTakesFeedLearningWithVariantTextAndLanguage() throws {
+        let variantText = Array(repeating: "word", count: 150).joined(separator: " ")
+        let variantTakes = (1...3).map { number in
+            makeTake(
+                number: number,
+                daysAgo: Double(4 - number),
+                duration: 60,
+                rating: .good,
+                language: "en",
+                readText: variantText,
+                sceneTextHash: FrameScriptDocument.TextHash.hash(variantText)
+            )
+        }
+        let variant = SceneLanguageVariant(
+            languageCode: "en",
+            text: variantText,
+            sourceHash: FrameScriptDocument.TextHash.hash("original"),
+            takes: variantTakes
+        )
+        let scene = makeScene(text: "original", takes: [], languageVariants: [variant])
+
+        let samples = DurationLearning.samples(from: [scene], primaryLanguage: "es")
+        let result = DurationLearning.recompute(samples: samples)
+
+        XCTAssertEqual(samples.count, 3)
+        XCTAssertEqual(samples.first?.languageCode, "en")
+        XCTAssertEqual(result.learnedWordsPerMinuteByLanguage["en"] ?? 0, 150, accuracy: 0.0001)
+    }
+
     // MARK: Persistence
 
-    func testDocumentRoundTripPreservesLearnedWPMAndTargets() throws {
+    func testDocumentRoundTripPreservesLearnedWPMTargetsAndReset() throws {
+        let resetDate = Date(timeIntervalSince1970: 1_700_000_900)
         let scene = makeScene(
             text: "uno dos tres",
             takes: [makeTake(number: 1, daysAgo: 1, duration: 62, rating: .good)],
@@ -315,14 +486,91 @@ final class DurationTests: XCTestCase {
         )
         project.targetDuration = 420
         project.learnedWordsPerMinuteByLanguage = ["es": 143.5]
+        project.learnedWordsPerMinuteResetAtByLanguage = ["es": resetDate]
 
         let restored = try FrameScriptFile(project: project).makeProject()
 
         XCTAssertEqual(restored.targetDuration, 420)
         XCTAssertEqual(restored.learnedWordsPerMinuteByLanguage["es"] ?? 0, 143.5, accuracy: 0.0001)
+        XCTAssertEqual(restored.learnedWordsPerMinuteResetAtByLanguage["es"], resetDate)
         XCTAssertEqual(restored.scenes.first?.targetDuration, 75)
         XCTAssertEqual(restored.scenes.first?.takes.first?.duration, 62)
         XCTAssertEqual(restored.scenes.first?.takes.first?.rating, .good)
+    }
+
+    func testResetPersistsInDocumentAndSurvivesRelaunch() throws {
+        let text = Array(repeating: "palabra", count: 150).joined(separator: " ")
+        let scenes = (0..<3).map { index in
+            makeScene(
+                text: text,
+                takes: [
+                    makeTake(
+                        number: 1,
+                        daysAgo: Double(3 - index),
+                        duration: 60,
+                        rating: .good,
+                        readText: text,
+                        sceneTextHash: FrameScriptDocument.TextHash.hash(text)
+                    )
+                ]
+            )
+        }
+        let project = FrameProject(title: "Reset", scenes: scenes, primaryLanguage: "es")
+        let appState = makeAppState(project: project)
+        appState.recomputeLearnedWPM(markDirty: false)
+        XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 150, accuracy: 0.0001)
+
+        let resetDate = Date(timeIntervalSinceNow: -1)
+        appState.resetLearnedWPM(language: "es", at: resetDate)
+        XCTAssertNil(project.learnedWordsPerMinuteByLanguage["es"])
+        XCTAssertEqual(project.learnedWordsPerMinuteResetAtByLanguage["es"], resetDate)
+
+        let restored = try FrameScriptFile(project: project).makeProject()
+        let relaunched = makeAppState(project: restored)
+        relaunched.recomputeLearnedWPM(markDirty: false)
+
+        XCTAssertNil(restored.learnedWordsPerMinuteByLanguage["es"])
+
+        for index in 0..<3 {
+            restored.scenes[0].takes.append(
+                makeTake(
+                    number: 10 + index,
+                    daysAgo: -Double(index + 1),
+                    duration: 60,
+                    rating: .good,
+                    readText: text,
+                    sceneTextHash: FrameScriptDocument.TextHash.hash(text)
+                )
+            )
+        }
+        relaunched.recomputeLearnedWPM(markDirty: false)
+
+        XCTAssertEqual(restored.learnedWordsPerMinuteByLanguage["es"] ?? 0, 150, accuracy: 0.0001)
+    }
+
+    func testPrimaryLanguageIsSetForNewProjectsAndDemos() {
+        let english = SampleData.project(
+            named: "English",
+            template: SampleData.templates.first,
+            language: .english
+        )
+        let spanish = SampleData.project(
+            named: "Spanish",
+            template: SampleData.templates.first,
+            language: .spanish
+        )
+        let russian = SampleData.project(
+            named: "Russian",
+            template: SampleData.templates.first,
+            language: .russian
+        )
+
+        XCTAssertEqual(english.primaryLanguage, "en")
+        XCTAssertEqual(spanish.primaryLanguage, "es")
+        XCTAssertEqual(russian.primaryLanguage, "ru")
+        XCTAssertEqual(SampleData.demoProject(language: .english).primaryLanguage, "en")
+        XCTAssertEqual(SampleData.demoProject(language: .spanish).primaryLanguage, "es")
+        XCTAssertEqual(SampleData.demoProject(language: .russian).primaryLanguage, "ru")
     }
 
     // MARK: App integration
@@ -338,60 +586,90 @@ final class DurationTests: XCTestCase {
         XCTAssertEqual(appState.effectiveWPM(language: "en"), 140, accuracy: 0.0001)
     }
 
-    func testEstimatedDurationUsesLearnedPace() {
-        let words = Array(repeating: "palabra", count: 160).joined(separator: " ")
-        let scene = makeScene(text: words)
+    func testUnboundedLearnedWPMFallsBackToSettings() {
+        let project = FrameProject(title: "Speech", scenes: [], primaryLanguage: "es")
+        project.learnedWordsPerMinuteByLanguage = ["es": 1e300]
+        let appState = makeAppState(project: project)
+
+        XCTAssertEqual(appState.effectiveWPM(language: "es"), 150, accuracy: 0.0001)
+    }
+
+    func testEstimatedDurationUsesLearnedPaceAndMarkupPauses() {
+        let text = "uno dos / tres [pausa 3s] [IMAGEN: coche] cuatro"
+        let scene = makeScene(text: text)
         let project = FrameProject(title: "Speech", scenes: [scene], primaryLanguage: "es")
-        project.learnedWordsPerMinuteByLanguage = ["es": 160]
+        project.learnedWordsPerMinuteByLanguage = ["es": 300]
         let appState = makeAppState(project: project)
 
-        XCTAssertEqual(appState.estimatedDuration(for: scene), 60, accuracy: 0.001)
-        XCTAssertEqual(appState.sceneDurationSummary(for: scene).estimated, 60, accuracy: 0.001)
+        // 4 spoken words at 300 WPM (0.8 s) plus a 0.5 s slash and a 3 s pause.
+        XCTAssertEqual(appState.estimatedDuration(for: scene), 4.3, accuracy: 0.001)
     }
 
-    func testRecomputeLearnedWPMPersistsValueFromGoodTakes() {
-        let text = Array(repeating: "palabra", count: 150).joined(separator: " ")
-        let scenes = (0..<3).map { _ in
-            makeScene(
-                text: text,
-                takes: [makeTake(number: 1, daysAgo: 1, duration: 60, rating: .good, readText: text)]
-            )
-        }
-        let project = FrameProject(title: "Learning", scenes: scenes, primaryLanguage: "es")
+    func testStoredEstimateAfterEditUsesLearnedPaceAndPauses() {
+        let text = "uno dos / tres [pausa 3s] [IMAGEN: coche] cuatro"
+        let scene = makeScene(text: text)
+        let project = FrameProject(title: "Speech", scenes: [scene], primaryLanguage: "es")
+        project.learnedWordsPerMinuteByLanguage = ["es": 300]
         let appState = makeAppState(project: project)
 
-        appState.recomputeLearnedWPM(markDirty: false)
+        appState.commitScriptTextChange(sceneID: scene.id)
 
-        XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 150, accuracy: 0.0001)
-        XCTAssertEqual(project.scenes.first?.estimatedDuration ?? 0, 60, accuracy: 0.001)
-
-        let restored = try? FrameScriptFile(project: project).makeProject()
-        XCTAssertEqual(restored?.learnedWordsPerMinuteByLanguage["es"] ?? 0, 150, accuracy: 0.0001)
+        XCTAssertEqual(appState.currentDurationWordsPerMinute, 300)
+        XCTAssertEqual(scene.estimatedDuration, 4.3, accuracy: 0.001)
     }
 
-    func testRecomputeReactsWhenATakeIsRatedGood() {
-        let text = Array(repeating: "palabra", count: 150).joined(separator: " ")
-        let scenes = (0..<3).map { _ in
-            makeScene(
-                text: text,
-                takes: [makeTake(number: 1, daysAgo: 1, duration: 60, rating: .safe, readText: text)]
-            )
-        }
-        let project = FrameProject(title: "Learning", scenes: scenes, primaryLanguage: "es")
+    func testSummaryUsesStoredEstimateInsteadOfReparsingText() {
+        let scene = makeScene(text: "text with [pausa 10s] markup")
+        let appState = makeAppState(project: FrameProject(
+            title: "Stored",
+            scenes: [scene],
+            primaryLanguage: "es"
+        ))
+
+        scene.estimatedDuration = 42
+
+        XCTAssertEqual(appState.sceneDurationSummary(for: scene).estimated, 42)
+    }
+
+    func testExportedTimestampUsesStoredLearnedEstimate() throws {
+        let text = Array(repeating: "palabra", count: 300).joined(separator: " ")
+        let scene = makeScene(text: text)
+        let project = FrameProject(title: "Export", scenes: [scene], primaryLanguage: "es")
+        project.learnedWordsPerMinuteByLanguage = ["es": 300]
         let appState = makeAppState(project: project)
+        appState.commitScriptTextChange(sceneID: scene.id)
 
-        appState.recomputeLearnedWPM(markDirty: false)
-        XCTAssertNil(project.learnedWordsPerMinuteByLanguage["es"])
+        var preferences = AppSettings.defaults.exportPreferences
+        preferences.includeTimestamps = true
+        preferences.includeSectionNames = true
+        let output = ExportService().render(
+            project: project,
+            format: .plainText,
+            preferences: preferences,
+            language: .english
+        )
 
-        for scene in scenes {
-            scene.takes[0].rating = .good
-        }
-        appState.recomputeLearnedWPM(markDirty: false)
-
-        XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 150, accuracy: 0.0001)
+        XCTAssertTrue(output.contains("[1:00]"), output)
     }
 
-    func testSceneAndProjectTargetSettersIgnoreNonPositiveValues() {
+    func testSavedEstimateUsesLearnedPace() throws {
+        let text = Array(repeating: "palabra", count: 300).joined(separator: " ")
+        let scene = makeScene(text: text)
+        let project = FrameProject(title: "Speech", scenes: [scene], primaryLanguage: "es")
+        project.learnedWordsPerMinuteByLanguage = ["es": 300]
+        let appState = makeAppState(project: project)
+        let url = temporaryProjectURL()
+
+        try appState.projectStore.saveCurrentProject(
+            to: url,
+            wordsPerMinute: appState.currentDurationWordsPerMinute
+        )
+
+        let restored = try FrameScriptFileStore.read(from: url)
+        XCTAssertEqual(restored.scenes.first?.estimatedDuration ?? 0, 60, accuracy: 0.001)
+    }
+
+    func testSceneAndProjectTargetSettersRejectOutOfRangeValues() {
         let scene = makeScene(text: "uno dos")
         let project = FrameProject(title: "Targets", scenes: [scene], primaryLanguage: "es")
         let appState = makeAppState(project: project)
@@ -401,23 +679,56 @@ final class DurationTests: XCTestCase {
         XCTAssertEqual(scene.targetDuration, 90)
         XCTAssertEqual(project.targetDuration, 600)
 
-        appState.setSceneTargetDuration(0, sceneID: scene.id)
-        appState.setProjectTargetDuration(-5)
+        appState.setSceneTargetDuration(1e300, sceneID: scene.id)
+        appState.setProjectTargetDuration(1e300)
+        XCTAssertEqual(scene.targetDuration, 90)
+        XCTAssertEqual(project.targetDuration, 600)
+
+        appState.setSceneTargetDuration(0.05, sceneID: scene.id)
+        appState.setProjectTargetDuration(0.05)
+        XCTAssertEqual(scene.targetDuration, 90)
+        XCTAssertEqual(project.targetDuration, 600)
+
+        appState.setSceneTargetDuration(nil, sceneID: scene.id)
+        appState.setProjectTargetDuration(nil)
         XCTAssertNil(scene.targetDuration)
         XCTAssertNil(project.targetDuration)
     }
 
-    // MARK: Input
+    // MARK: Input and formatting bounds
 
-    func testDurationInputParsesMinutesAndSeconds() {
+    func testDurationInputParsesMinutesAndSecondsWithinBounds() {
         XCTAssertEqual(DurationInput.parse("1:30") ?? 0, 90, accuracy: 0.001)
         XCTAssertEqual(DurationInput.parse("90") ?? 0, 90, accuracy: 0.001)
         XCTAssertEqual(DurationInput.parse("1,5") ?? 0, 1.5, accuracy: 0.001)
         XCTAssertEqual(DurationInput.parse(" 0:45 ") ?? 0, 45, accuracy: 0.001)
+        XCTAssertEqual(DurationInput.parse("0.1") ?? 0, 0.1, accuracy: 0.001)
+        XCTAssertEqual(DurationInput.parse("86400") ?? 0, 86_400, accuracy: 0.001)
         XCTAssertNil(DurationInput.parse(""))
+        XCTAssertNil(DurationInput.parse("0"))
         XCTAssertNil(DurationInput.parse("1:75"))
         XCTAssertNil(DurationInput.parse("abc"))
         XCTAssertNil(DurationInput.parse("1:2:3"))
+        XCTAssertNil(DurationInput.parse("86400.1"))
+        XCTAssertNil(DurationInput.parse("999999999999999999999"))
+    }
+
+    func testFractionalTargetFieldRoundTrips() throws {
+        XCTAssertEqual(try XCTUnwrap(DurationInput.parse(DurationInput.fieldValue(0.5))), 0.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(DurationInput.parse(DurationInput.fieldValue(90.25))), 90.25, accuracy: 0.001)
+        XCTAssertEqual(DurationInput.fieldValue(0.5), "0:00.5")
+        XCTAssertEqual(DurationInput.fieldValue(90.25), "1:30.25")
+        XCTAssertEqual(DurationInput.fieldValue(1e300), "1440:00")
+    }
+
+    func testFormattingIsOverflowSafe() {
+        XCTAssertEqual(DurationEstimator.formatted(1e300), "16666666:39")
+        XCTAssertEqual(DurationEstimator.formatted(.nan), "0:00")
+        XCTAssertEqual(DurationEstimator.formatted(.infinity), "0:00")
+        XCTAssertEqual(DurationEstimator.formatted(-5), "0:00")
+        XCTAssertEqual(DurationNumber.percent(1e300), 9_999)
+        XCTAssertEqual(DurationNumber.percent(.nan), 0)
+        XCTAssertEqual(DurationNumber.clampedInt(1e300, range: 0...500), 500)
     }
 
     // MARK: Helpers
@@ -428,7 +739,8 @@ final class DurationTests: XCTestCase {
         duration: TimeInterval,
         rating: TakeRating,
         language: String = "",
-        readText: String = ""
+        readText: String = "",
+        sceneTextHash: String = ""
     ) -> Take {
         Take(
             number: number,
@@ -436,8 +748,24 @@ final class DurationTests: XCTestCase {
             duration: duration,
             rating: rating,
             languageCode: language,
-            readText: readText
+            readText: readText,
+            sceneTextHash: sceneTextHash
         )
+    }
+
+    private func records(
+        from takes: [Take],
+        language: String = "es",
+        sourceText: String = "source"
+    ) -> [DurationTakeRecord] {
+        takes.map {
+            DurationTakeRecord(
+                take: $0,
+                languageCode: $0.languageCode.isEmpty ? language : $0.languageCode,
+                sourceText: sourceText,
+                sourceTextHash: FrameScriptDocument.TextHash.hash(sourceText)
+            )
+        }
     }
 
     private func makeSample(
@@ -458,7 +786,8 @@ final class DurationTests: XCTestCase {
     private func makeScene(
         text: String,
         takes: [Take] = [],
-        target: TimeInterval? = nil
+        target: TimeInterval? = nil,
+        languageVariants: [SceneLanguageVariant] = []
     ) -> Scene {
         Scene(
             order: 0,
@@ -466,7 +795,8 @@ final class DurationTests: XCTestCase {
             title: "Scene",
             scriptText: text,
             targetDuration: target,
-            takes: takes
+            takes: takes,
+            languageVariants: languageVariants
         )
     }
 
@@ -482,5 +812,10 @@ final class DurationTests: XCTestCase {
             recentProjectStore: RecentProjectStore(userDefaults: suite),
             settingsStore: SettingsStore(settings: settings, userDefaults: suite, key: "settings")
         )
+    }
+
+    private func temporaryProjectURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("DurationTests-\(UUID().uuidString).fscr")
     }
 }

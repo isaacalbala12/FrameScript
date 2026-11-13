@@ -1,34 +1,33 @@
 import Foundation
 import FrameScriptCore
 
-/// Session-scoped "forget this language" cutoffs. Reset means older takes stop
-/// teaching the learner; new good takes teach it again.
-///
-/// The v4 document stores only the learned value per language, not learner
-/// history, so a cutoff cannot survive an app relaunch. Reopening the project
-/// deliberately recomputes from the takes it contains (F11).
+/// Debounces learning refreshes triggered by edits. The recomputation itself
+/// runs off the main actor; this only delays repeated keystrokes.
 @MainActor
-final class DurationLearningResetStore {
-    static let shared = DurationLearningResetStore()
+final class DurationLearningScheduler {
+    static let shared = DurationLearningScheduler()
 
-    private var cutoffsByProject: [UUID: [String: Date]] = [:]
+    private var task: Task<Void, Never>?
 
-    func cutoffs(for projectID: UUID) -> [String: Date] {
-        cutoffsByProject[projectID] ?? [:]
+    func schedule(
+        after delay: Duration = .milliseconds(450),
+        operation: @escaping @MainActor () -> Void
+    ) {
+        task?.cancel()
+        task = Task { @MainActor in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            operation()
+        }
     }
 
-    func reset(projectID: UUID, language: String, at date: Date = Date()) {
-        let code = DurationLanguage.normalized(language)
-        guard !code.isEmpty else { return }
-        cutoffsByProject[projectID, default: [:]][code] = date
-    }
-
-    func clear(projectID: UUID) {
-        cutoffsByProject[projectID] = nil
-    }
-
-    func clearAll() {
-        cutoffsByProject.removeAll()
+    func cancel() {
+        task?.cancel()
+        task = nil
     }
 }
 
@@ -41,81 +40,158 @@ extension AppState {
     /// Language the visible scene text is written in. The scene editor always
     /// shows the original script, so estimates use the project language.
     var durationProjectLanguage: String {
-        DurationLanguage.normalized(project.primaryLanguage)
+        let code = DurationLanguage.normalized(project.primaryLanguage)
+        if !code.isEmpty { return code }
+        return currentLanguage.contentLanguageCode
     }
 
     /// Learned personal pace for a language, falling back to the reading-speed
     /// setting. This is the single value estimates use.
     func effectiveWPM(language: String? = nil) -> Double {
-        let code = DurationLanguage.normalized(language ?? project.primaryLanguage)
+        let code = DurationLanguage.normalized(language ?? durationProjectLanguage)
         if let learned = project.learnedWordsPerMinuteByLanguage[code],
-           learned.isFinite,
-           learned > 0 {
+           DurationLimits.plausibleWordsPerMinute.contains(learned) {
             return learned
         }
-        return Double(max(1, settings.editorPreferences.wordsPerMinute))
+        let configured = Double(settings.editorPreferences.wordsPerMinute)
+        guard configured.isFinite, DurationLimits.plausibleWordsPerMinute.contains(configured) else {
+            return 150
+        }
+        return configured
     }
 
-    /// Single estimate entry point. W2-A owns `DurationEstimator`; when its
-    /// markup-aware per-language API lands, switch **only this line** to:
-    ///
-    ///     DurationEstimator.estimate(
-    ///         text: scene.scriptText,
-    ///         language: durationProjectLanguage,
-    ///         settings: settings
-    ///     )
-    ///
-    /// For now it uses the current estimator with ``effectiveWPM(language:)``,
-    /// so learned WPM already affects every duration shown by this feature.
-    func estimatedDuration(for scene: Scene) -> TimeInterval {
+    /// Integer WPM passed into `ProjectStore`, which keeps stored estimates in
+    /// sync on text edits and before saves.
+    var currentDurationWordsPerMinute: Int {
+        durationWordsPerMinute(for: project)
+    }
+
+    /// Learned pace for a project that is about to be opened (before it
+    /// becomes `self.project`).
+    func durationWordsPerMinute(for project: FrameProject) -> Int {
+        let code = DurationLanguage.normalized(project.primaryLanguage)
+        if let learned = project.learnedWordsPerMinuteByLanguage[code],
+           DurationLimits.plausibleWordsPerMinute.contains(learned) {
+            return DurationNumber.clampedInt(learned, range: 30...400)
+        }
+        let configured = Double(settings.editorPreferences.wordsPerMinute)
+        guard configured.isFinite, DurationLimits.plausibleWordsPerMinute.contains(configured) else {
+            return 150
+        }
+        return DurationNumber.clampedInt(configured, range: 30...400)
+    }
+
+    /// Single estimate entry point for text. Markup-aware (`ScriptMarkup`
+    /// ignores cues and adds pauses) and driven by the learned pace.
+    func estimatedDuration(for text: String) -> TimeInterval {
         DurationEstimator.estimate(
-            text: scene.scriptText,
-            wordsPerMinute: max(1, Int(effectiveWPM(language: durationProjectLanguage).rounded()))
+            text: text,
+            wordsPerMinute: effectiveWPM(language: durationProjectLanguage)
         )
+    }
+
+    func estimatedDuration(for scene: Scene) -> TimeInterval {
+        estimatedDuration(for: scene.scriptText)
     }
 
     // MARK: Per-scene and project summaries
 
+    /// Scene takes plus translated-variant takes, paired with the text each
+    /// take was recorded against so stale hashes can be rejected.
+    func durationTakeRecords(for scene: Scene) -> [DurationTakeRecord] {
+        guard !scene.takes.isEmpty || scene.languageVariants.contains(where: { !$0.takes.isEmpty }) else {
+            return []
+        }
+        var records: [DurationTakeRecord] = []
+        let sceneHash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        for take in scene.takes {
+            let language = take.languageCode
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ? project.primaryLanguage : take.languageCode
+            records.append(
+                DurationTakeRecord(
+                    take: take,
+                    languageCode: language,
+                    sourceText: scene.scriptText,
+                    sourceTextHash: sceneHash
+                )
+            )
+        }
+        for variant in scene.languageVariants {
+            let variantHash = FrameScriptDocument.TextHash.hash(variant.text)
+            for take in variant.takes {
+                records.append(
+                    DurationTakeRecord(
+                        take: take,
+                        languageCode: variant.languageCode,
+                        sourceText: variant.text,
+                        sourceTextHash: variantHash
+                    )
+                )
+            }
+        }
+        return records
+    }
+
     func sceneDurationSummary(for scene: Scene) -> SceneDurationSummary {
-        let take = DurationTakeSelector.selectedTake(
-            from: scene.takes,
-            language: durationProjectLanguage,
-            primaryLanguage: project.primaryLanguage
+        sceneDurationSummary(for: scene, language: durationProjectLanguage)
+    }
+
+    func sceneDurationSummary(for scene: Scene, language: String) -> SceneDurationSummary {
+        let selected = DurationTakeSelector.selectedTake(
+            from: durationTakeRecords(for: scene),
+            language: language
         )
         return SceneDurationSummary(
             sceneID: scene.id,
-            estimated: estimatedDuration(for: scene),
-            real: take?.duration,
-            realTakeID: take?.id,
-            realTakeNumber: take?.number,
-            realTakeRating: take?.rating,
+            estimated: storedEstimatedDuration(for: scene),
+            real: selected?.take.duration,
+            realTakeID: selected?.take.id,
+            realTakeNumber: selected?.take.number,
+            realTakeRating: selected?.take.rating,
             target: scene.targetDuration
         )
     }
 
     func projectDurationSummary() -> ProjectDurationSummary {
         ProjectDurationSummary(
-            sceneSummaries: project.scenes.sortedByOrder.map(sceneDurationSummary),
+            sceneSummaries: project.scenes.sortedByOrder.map { sceneDurationSummary(for: $0) },
             target: project.targetDuration
         )
+    }
+
+    /// Display uses the stored estimate that `ProjectStore` refreshes on every
+    /// edit and save. That keeps summaries cheap enough to evaluate during
+    /// normal typing instead of re-parsing every scene per keystroke.
+    private func storedEstimatedDuration(for scene: Scene) -> TimeInterval {
+        let stored = scene.estimatedDuration
+        if stored.isFinite, stored >= 0, stored <= DurationLimits.maximumDuration {
+            return stored
+        }
+        return estimatedDuration(for: scene)
     }
 
     // MARK: Targets
 
     func setProjectTargetDuration(_ duration: TimeInterval?) {
-        project.targetDuration = Self.sanitizedTarget(duration)
+        if let duration {
+            guard let sanitized = DurationLimits.sanitizedTarget(duration) else { return }
+            project.targetDuration = sanitized
+        } else {
+            project.targetDuration = nil
+        }
         touchProject()
     }
 
     func setSceneTargetDuration(_ duration: TimeInterval?, sceneID: UUID) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
-        scene.targetDuration = Self.sanitizedTarget(duration)
+        if let duration {
+            guard let sanitized = DurationLimits.sanitizedTarget(duration) else { return }
+            scene.targetDuration = sanitized
+        } else {
+            scene.targetDuration = nil
+        }
         touchProject()
-    }
-
-    private static func sanitizedTarget(_ duration: TimeInterval?) -> TimeInterval? {
-        guard let duration, duration.isFinite, duration > 0 else { return nil }
-        return duration
     }
 
     // MARK: WPM learning
@@ -129,18 +205,80 @@ extension AppState {
                 from: project.scenes,
                 primaryLanguage: project.primaryLanguage
             ),
-            resetCutoffs: DurationLearningResetStore.shared.cutoffs(for: project.id)
+            resetCutoffs: project.learnedWordsPerMinuteResetAtByLanguage
         )
     }
 
-    /// Persists the learned value per language. Unsupported languages and
-    /// languages without enough good takes keep using the reading-speed
-    /// setting.
+    /// Popover-friendly report: sampling happens on the main actor, the EMA
+    /// work does not block it.
+    func durationLearningReportAsync() async -> DurationLearningResult {
+        guard hasOpenProject else { return .empty }
+        let samples = DurationLearning.samples(
+            from: project.scenes,
+            primaryLanguage: project.primaryLanguage
+        )
+        let cutoffs = project.learnedWordsPerMinuteResetAtByLanguage
+        return await Task.detached(priority: .userInitiated) {
+            DurationLearning.recompute(samples: samples, resetCutoffs: cutoffs)
+        }.value
+    }
+
+    /// Synchronous variant used by tests and explicit UI actions.
     func recomputeLearnedWPM(markDirty: Bool = true) {
         guard hasOpenProject else { return }
-        let report = durationLearningReport()
-        let previousValues = project.learnedWordsPerMinuteByLanguage
-        let valuesChanged = previousValues != report.learnedWordsPerMinuteByLanguage
+        let projectID = project.id
+        applyLearningReport(
+            durationLearningReport(),
+            projectID: projectID,
+            signature: durationLearningSignature,
+            resetCutoffs: project.learnedWordsPerMinuteResetAtByLanguage,
+            markDirty: markDirty
+        )
+    }
+
+    /// Open-time and edit-time recompute. Learning samples are gathered on the
+    /// main actor (they read the model), while the EMA work runs off-main so a
+    /// large project does not stall the window.
+    func recomputeLearnedWPMInBackground(markDirty: Bool = false) {
+        guard hasOpenProject else { return }
+        let projectID = project.id
+        let signature = durationLearningSignature
+        let samples = DurationLearning.samples(
+            from: project.scenes,
+            primaryLanguage: project.primaryLanguage
+        )
+        let cutoffs = project.learnedWordsPerMinuteResetAtByLanguage
+
+        Task { @MainActor [weak self] in
+            let report = await Task.detached(priority: .userInitiated) {
+                DurationLearning.recompute(samples: samples, resetCutoffs: cutoffs)
+            }.value
+            guard let self else { return }
+            self.applyLearningReport(
+                report,
+                projectID: projectID,
+                signature: signature,
+                resetCutoffs: cutoffs,
+                markDirty: markDirty
+            )
+        }
+    }
+
+    private func applyLearningReport(
+        _ report: DurationLearningResult,
+        projectID: UUID,
+        signature: Int,
+        resetCutoffs: [String: Date],
+        markDirty: Bool
+    ) {
+        guard hasOpenProject,
+              project.id == projectID,
+              durationLearningSignature == signature,
+              project.learnedWordsPerMinuteResetAtByLanguage == resetCutoffs else {
+            return
+        }
+        let valuesChanged = project.learnedWordsPerMinuteByLanguage
+            != report.learnedWordsPerMinuteByLanguage
         if valuesChanged {
             project.learnedWordsPerMinuteByLanguage = report.learnedWordsPerMinuteByLanguage
         }
@@ -152,12 +290,13 @@ extension AppState {
         }
     }
 
-    /// Forgets the learned pace for one language and ignores takes recorded
-    /// before the reset. The next few good takes teach it again.
-    func resetLearnedWPM(language: String) {
+    /// Forgets the learned pace for one language and persists the cutoff in
+    /// the project document. Takes recorded at or before `date` stop teaching
+    /// the learner; the next few good takes teach it again.
+    func resetLearnedWPM(language: String, at date: Date = Date()) {
         let code = DurationLanguage.normalized(language)
         guard !code.isEmpty else { return }
-        DurationLearningResetStore.shared.reset(projectID: project.id, language: code)
+        project.learnedWordsPerMinuteResetAtByLanguage[code] = date
         project.learnedWordsPerMinuteByLanguage[code] = nil
         _ = refreshEstimatedDurationsUsingLearnedWPM()
         touchProject()
@@ -179,27 +318,44 @@ extension AppState {
         return changed
     }
 
-    /// Cheap value that changes when take ratings, durations or read texts
-    /// change. Views use it to trigger a learning refresh.
+    /// Cheap value that changes when take ratings, durations, read texts,
+    /// scene texts, variant texts or targets change.
     var durationLearningSignature: Int {
         var hasher = Hasher()
         hasher.combine(project.id)
+        hasher.combine(project.primaryLanguage)
         let scenes = project.scenes.sortedByOrder
         hasher.combine(scenes.count)
         for scene in scenes {
             hasher.combine(scene.id)
+            hasher.combine(scene.scriptText)
+            hasher.combine(scene.targetDuration)
             hasher.combine(scene.takes.count)
             for take in scene.takes {
-                hasher.combine(take.id)
-                hasher.combine(take.number)
-                hasher.combine(take.rating)
-                hasher.combine(take.duration)
-                hasher.combine(take.startedAt)
-                hasher.combine(take.languageCode)
-                hasher.combine(take.readText.count)
+                hash(take, into: &hasher)
+            }
+            hasher.combine(scene.languageVariants.count)
+            for variant in scene.languageVariants {
+                hasher.combine(variant.languageCode)
+                hasher.combine(variant.text)
+                hasher.combine(variant.takes.count)
+                for take in variant.takes {
+                    hash(take, into: &hasher)
+                }
             }
         }
         return hasher.finalize()
+    }
+
+    private func hash(_ take: Take, into hasher: inout Hasher) {
+        hasher.combine(take.id)
+        hasher.combine(take.number)
+        hasher.combine(take.rating)
+        hasher.combine(take.duration)
+        hasher.combine(take.startedAt)
+        hasher.combine(take.languageCode)
+        hasher.combine(take.readText)
+        hasher.combine(take.sceneTextHash)
     }
 
 #if DEBUG
@@ -233,7 +389,8 @@ extension AppState {
                 duration: duration,
                 rating: rating,
                 languageCode: "",
-                readText: scene.scriptText
+                readText: scene.scriptText,
+                sceneTextHash: FrameScriptDocument.TextHash.hash(scene.scriptText)
             )
         }
 

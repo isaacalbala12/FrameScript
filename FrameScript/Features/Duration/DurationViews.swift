@@ -123,7 +123,10 @@ private struct SceneDurationPopover: View {
                     value: DurationEstimator.formatted(summary.estimated),
                     detail: String(
                         format: appState.localized("duration.atWordsPerMinute"),
-                        Int(appState.effectiveWPM(language: appState.durationProjectLanguage).rounded())
+                        DurationNumber.clampedInt(
+                            appState.effectiveWPM(language: appState.durationProjectLanguage),
+                            range: 30...400
+                        )
                     )
                 )
                 durationRow(
@@ -140,7 +143,7 @@ private struct SceneDurationPopover: View {
                     value: DurationEstimator.formatted(target),
                     detail: String(
                         format: appState.localized("duration.percentOfTarget"),
-                        Int((progress * 100).rounded())
+                        DurationNumber.percent(progress)
                     )
                 )
                 DurationProgressBar(
@@ -161,7 +164,7 @@ private struct SceneDurationPopover: View {
             targetEditor
         }
         .padding(14)
-        .frame(width: 310)
+        .frame(width: 340)
         .onAppear(perform: syncTargetText)
     }
 
@@ -244,7 +247,7 @@ struct ProjectDurationControl: View {
             isPopoverPresented.toggle()
         } label: {
             HStack(spacing: 5) {
-                Text(DurationEstimator.formatted(summary.estimated))
+                Text(DurationEstimator.formatted(summary.displayTotal))
 
                 if summary.scenesWithReal > 0 {
                     Text("·")
@@ -282,14 +285,16 @@ struct ProjectDurationControl: View {
         }
         .onAppear {
             seedDurationDemoIfNeeded()
-            appState.recomputeLearnedWPM(markDirty: false)
+            appState.recomputeLearnedWPMInBackground(markDirty: false)
         }
         .onChange(of: appState.project.id) { _, _ in
             seedDurationDemoIfNeeded()
-            appState.recomputeLearnedWPM(markDirty: false)
+            appState.recomputeLearnedWPMInBackground(markDirty: false)
         }
         .onChange(of: appState.durationLearningSignature) { _, _ in
-            appState.recomputeLearnedWPM()
+            DurationLearningScheduler.shared.schedule {
+                appState.recomputeLearnedWPMInBackground()
+            }
         }
     }
 
@@ -305,13 +310,10 @@ struct ProjectDurationPopover: View {
     @Environment(\.frameTheme) private var theme
 
     @State private var targetText = ""
+    @State private var learningReport: DurationLearningResult = .empty
 
     private var summary: ProjectDurationSummary {
         appState.projectDurationSummary()
-    }
-
-    private var learningReport: DurationLearningResult {
-        appState.durationLearningReport()
     }
 
     var body: some View {
@@ -351,7 +353,7 @@ struct ProjectDurationPopover: View {
                     value: DurationEstimator.formatted(target),
                     detail: String(
                         format: appState.localized("duration.percentOfTarget"),
-                        Int((progress * 100).rounded())
+                        DurationNumber.percent(progress)
                     )
                 )
                 DurationProgressBar(
@@ -375,8 +377,21 @@ struct ProjectDurationPopover: View {
             learnedSection
         }
         .padding(14)
-        .frame(width: 330)
+        .frame(width: 400)
+        .task {
+            await refreshLearningReport()
+        }
         .onAppear(perform: syncTargetText)
+        .onChange(of: appState.project.learnedWordsPerMinuteByLanguage) { _, _ in
+            Task { await refreshLearningReport() }
+        }
+    }
+
+    private func refreshLearningReport() async {
+        let signature = appState.durationLearningSignature
+        let report = await appState.durationLearningReportAsync()
+        guard appState.durationLearningSignature == signature else { return }
+        learningReport = report
     }
 
     private var targetEditor: some View {
@@ -430,7 +445,10 @@ struct ProjectDurationPopover: View {
         let statistics = learningReport.statistics(for: language.rawValue)
         let accepted = statistics?.acceptedSampleCount ?? 0
         let minimum = WPMConfiguration().minimumAcceptedSamples
-        let wordsPerMinute = Int(appState.effectiveWPM(language: language.rawValue).rounded())
+        let wordsPerMinute = DurationNumber.clampedInt(
+            appState.effectiveWPM(language: language.rawValue),
+            range: 30...400
+        )
         let hasAnythingToReset = accepted > 0
             || appState.project.learnedWordsPerMinuteByLanguage[language.rawValue] != nil
 
@@ -534,7 +552,7 @@ private func durationRow(label: String, value: String, detail: String?) -> some 
 
 @MainActor
 private func overrunText(_ seconds: TimeInterval, appState: AppState) -> String {
-    let rounded = max(1, Int(seconds.rounded()))
+    let rounded = max(1, DurationNumber.clampedInt(seconds, range: 0...999_999_999))
     if rounded < 60 {
         return String(format: appState.localized("duration.overSeconds"), rounded)
     }

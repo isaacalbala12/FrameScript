@@ -126,12 +126,12 @@ extension AppState {
             projectStore.openProject(
                 project,
                 fileURL: url,
-                wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+                wordsPerMinute: durationWordsPerMinute(for: project),
                 markUnsaved: false
             )
             projectStore.synchronizeTextSegments(
                 splitMode: settings.generalPreferences.defaultSplitMode,
-                wordsPerMinute: settings.editorPreferences.wordsPerMinute,
+                wordsPerMinute: currentDurationWordsPerMinute,
                 markUnsaved: false
             )
             let orderedScenes = project.scenes.sortedByOrder
@@ -165,7 +165,7 @@ extension AppState {
         guard projectStore.currentFileURL == expectedURL else { return false }
         do {
             try securityScope.withAccess(to: expectedURL) {
-                try projectStore.saveCurrentProject(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+                try projectStore.saveCurrentProject(wordsPerMinute: currentDurationWordsPerMinute)
             }
             recordProjectFileSnapshot(at: expectedURL)
             errorCenter.clearAutosaveFailureSuppression()

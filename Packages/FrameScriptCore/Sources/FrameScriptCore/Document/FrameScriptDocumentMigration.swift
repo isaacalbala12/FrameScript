@@ -29,9 +29,22 @@ extension FrameScriptDocument {
             break
         }
         document.fileVersion = FrameScriptFormat.currentFileVersion
+        document.normalizePrimaryLanguage()
         try document.validateSceneIdentifiers()
         try document.validateAnchors()
         return document
+    }
+
+    // MARK: Shared normalization
+
+    /// Older and hand-edited documents can omit the original script language or
+    /// leave it empty. Durations key takes by this code, so fall back to the
+    /// historical Spanish default instead of keeping an unusable empty code.
+    private mutating func normalizePrimaryLanguage() {
+        let trimmed = project.primaryLanguage
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        project.primaryLanguage = trimmed.isEmpty ? "es" : trimmed
     }
 
     // MARK: Legacy segment links (v1 -> v2, kept for v2/v3 too)

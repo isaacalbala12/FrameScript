@@ -1,5 +1,28 @@
 import Foundation
 
+/// Duration values read from disk are untrusted input. Keep them inside the
+/// range the duration UI can safely format and compare.
+private let maximumStoredDuration: TimeInterval = 86_400
+
+private func sanitizedStoredDuration(
+    _ value: TimeInterval,
+    minimum: TimeInterval = 0,
+    rejectingValuesAboveMaximum: Bool = false
+) -> TimeInterval {
+    guard value.isFinite else { return minimum }
+    guard value <= maximumStoredDuration else {
+        return rejectingValuesAboveMaximum ? minimum : maximumStoredDuration
+    }
+    return max(value, minimum)
+}
+
+private func sanitizedStoredTarget(_ value: TimeInterval?) -> TimeInterval? {
+    guard let value, value.isFinite, value >= 0.1, value <= maximumStoredDuration else {
+        return nil
+    }
+    return value
+}
+
 /// Version metadata for the `.fscr` project file.
 public enum FrameScriptFormat {
     /// Files written by this build always use schema version 4.
@@ -642,7 +665,10 @@ extension FrameScriptDocument {
             id = try container.decode(UUID.self, forKey: .id)
             number = try container.decodeIfPresent(Int.self, forKey: .number) ?? 1
             startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt) ?? Date(timeIntervalSince1970: 0)
-            duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+            duration = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0,
+                rejectingValuesAboveMaximum: true
+            )
             filePath = try container.decodeIfPresent(String.self, forKey: .filePath) ?? ""
             bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
             rating = try container.decodeIfPresent(TakeRating.self, forKey: .rating) ?? .unrated
@@ -787,12 +813,16 @@ extension FrameScriptDocument {
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
             scriptText = try container.decodeIfPresent(String.self, forKey: .scriptText) ?? ""
             notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
-            estimatedDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .estimatedDuration) ?? 0
+            estimatedDuration = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .estimatedDuration) ?? 0
+            )
             textSegments = try container.decodeIfPresent([TextSegment].self, forKey: .textSegments) ?? []
             aiComments = try container.decodeIfPresent([AIComment].self, forKey: .aiComments) ?? []
             bRollItems = try container.decodeIfPresent([BRollItem].self, forKey: .bRollItems) ?? []
             editingItems = try container.decodeIfPresent([EditingItem].self, forKey: .editingItems) ?? []
-            targetDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .targetDuration)
+            targetDuration = sanitizedStoredTarget(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .targetDuration)
+            )
             takes = try container.decodeIfPresent([Take].self, forKey: .takes) ?? []
             languageVariants = try container.decodeIfPresent([SceneLanguageVariant].self, forKey: .languageVariants) ?? []
             obsSceneName = try container.decodeIfPresent(String.self, forKey: .obsSceneName)
@@ -1580,6 +1610,9 @@ extension FrameScriptDocument {
         // F11 durations and learned speech rate
         public var targetDuration: TimeInterval?
         public var learnedWordsPerMinuteByLanguage: [String: Double]
+        /// Per-language reset timestamps. Takes recorded at or before the reset
+        /// stop teaching the learner until new takes arrive.
+        public var learnedWordsPerMinuteResetAtByLanguage: [String: Date]
 
         // F14 assets
         public var assets: [ProjectAsset]
@@ -1631,6 +1664,7 @@ extension FrameScriptDocument {
             publishDate: Date? = nil,
             targetDuration: TimeInterval? = nil,
             learnedWordsPerMinuteByLanguage: [String: Double] = [:],
+            learnedWordsPerMinuteResetAtByLanguage: [String: Date] = [:],
             assets: [ProjectAsset] = [],
             publishingPacks: [String: PublishingPack] = [:],
             checklistTasks: [ChecklistTask] = [],
@@ -1661,6 +1695,7 @@ extension FrameScriptDocument {
             self.publishDate = publishDate
             self.targetDuration = targetDuration
             self.learnedWordsPerMinuteByLanguage = learnedWordsPerMinuteByLanguage
+            self.learnedWordsPerMinuteResetAtByLanguage = learnedWordsPerMinuteResetAtByLanguage
             self.assets = assets
             self.publishingPacks = publishingPacks
             self.checklistTasks = checklistTasks
@@ -1693,6 +1728,7 @@ extension FrameScriptDocument {
             case publishDate
             case targetDuration
             case learnedWordsPerMinuteByLanguage
+            case learnedWordsPerMinuteResetAtByLanguage
             case assets
             case publishingPacks
             case checklistTasks
@@ -1724,8 +1760,17 @@ extension FrameScriptDocument {
             productionStatus = try container.decodeIfPresent(ProductionStatus.self, forKey: .productionStatus) ?? .idea
             targetDate = try container.decodeIfPresent(Date.self, forKey: .targetDate)
             publishDate = try container.decodeIfPresent(Date.self, forKey: .publishDate)
-            targetDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .targetDuration)
-            learnedWordsPerMinuteByLanguage = try container.decodeIfPresent([String: Double].self, forKey: .learnedWordsPerMinuteByLanguage) ?? [:]
+            targetDuration = sanitizedStoredTarget(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .targetDuration)
+            )
+            learnedWordsPerMinuteByLanguage = (try container.decodeIfPresent(
+                [String: Double].self,
+                forKey: .learnedWordsPerMinuteByLanguage
+            ) ?? [:]).filter { $0.value.isFinite && (30...400).contains($0.value) }
+            learnedWordsPerMinuteResetAtByLanguage = try container.decodeIfPresent(
+                [String: Date].self,
+                forKey: .learnedWordsPerMinuteResetAtByLanguage
+            ) ?? [:]
             assets = try container.decodeIfPresent([ProjectAsset].self, forKey: .assets) ?? []
             publishingPacks = try container.decodeIfPresent([String: PublishingPack].self, forKey: .publishingPacks) ?? [:]
             checklistTasks = try container.decodeIfPresent([ChecklistTask].self, forKey: .checklistTasks) ?? []

@@ -686,6 +686,7 @@ final class FrameProject: Identifiable {
     var publishDate: Date?
     var targetDuration: TimeInterval?
     var learnedWordsPerMinuteByLanguage: [String: Double]
+    var learnedWordsPerMinuteResetAtByLanguage: [String: Date]
     var assets: [ProjectAsset]
     /// Keyed by language code.
     var publishingPacks: [String: PublishingPack]
@@ -719,6 +720,7 @@ final class FrameProject: Identifiable {
         publishDate: Date? = nil,
         targetDuration: TimeInterval? = nil,
         learnedWordsPerMinuteByLanguage: [String: Double] = [:],
+        learnedWordsPerMinuteResetAtByLanguage: [String: Date] = [:],
         assets: [ProjectAsset] = [],
         publishingPacks: [String: PublishingPack] = [:],
         checklistTasks: [ChecklistTask] = [],
@@ -749,6 +751,7 @@ final class FrameProject: Identifiable {
         self.publishDate = publishDate
         self.targetDuration = targetDuration
         self.learnedWordsPerMinuteByLanguage = learnedWordsPerMinuteByLanguage
+        self.learnedWordsPerMinuteResetAtByLanguage = learnedWordsPerMinuteResetAtByLanguage
         self.assets = assets
         self.publishingPacks = publishingPacks
         self.checklistTasks = checklistTasks
