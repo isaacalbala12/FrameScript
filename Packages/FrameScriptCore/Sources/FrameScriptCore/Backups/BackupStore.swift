@@ -56,7 +56,9 @@ public struct BackupStore: Sendable {
         projectID: String,
         force: Bool = false
     ) -> BackupOutcome {
-        let source = fileURL.standardizedFileURL
+        // Follow a symlinked project file: the backup must contain the target's
+        // bytes and be named after the file the user sees.
+        let source = fileURL.resolvingSymlinksInPath().standardizedFileURL
         guard fileManager.fileExists(atPath: source.path) else {
             return .skipped(.sourceMissing)
         }
@@ -66,7 +68,6 @@ public struct BackupStore: Sendable {
             return .skipped(.sourceMissing)
         }
 
-        let directory = projectDirectory(forProjectID: projectID)
         let existing = listing(projectID: projectID).entries
         let date = now()
 
@@ -74,6 +75,52 @@ public struct BackupStore: Sendable {
             return .skipped(.intervalNotElapsed)
         }
 
+        let data: Data
+        do {
+            data = try fileManager.read(from: source)
+        } catch {
+            return .failed(failure(.readSource, url: source, error: error))
+        }
+        return writeBackup(
+            data,
+            originalFileName: source.lastPathComponent,
+            originalPath: source.path,
+            projectID: projectID,
+            date: date,
+            isSafetyCopy: force
+        )
+    }
+
+    /// Backs up bytes the caller already holds, for example the in-memory
+    /// project document before an external change replaces it. Forced by
+    /// design: this is always a safety copy, never a throttled automatic one.
+    @discardableResult
+    public func backUpData(
+        _ data: Data,
+        originalFileName: String,
+        originalPath: String?,
+        projectID: String,
+        isSafetyCopy: Bool = true
+    ) -> BackupOutcome {
+        writeBackup(
+            data,
+            originalFileName: originalFileName,
+            originalPath: originalPath,
+            projectID: projectID,
+            date: now(),
+            isSafetyCopy: isSafetyCopy
+        )
+    }
+
+    private func writeBackup(
+        _ data: Data,
+        originalFileName: String,
+        originalPath: String?,
+        projectID: String,
+        date: Date,
+        isSafetyCopy: Bool
+    ) -> BackupOutcome {
+        let directory = projectDirectory(forProjectID: projectID)
         do {
             try fileManager.createDirectory(
                 at: directory,
@@ -84,13 +131,7 @@ public struct BackupStore: Sendable {
             return .failed(failure(.createDirectory, url: directory, error: error))
         }
 
-        let data: Data
-        do {
-            data = try fileManager.read(from: source)
-        } catch {
-            return .failed(failure(.readSource, url: source, error: error))
-        }
-
+        let source = URL(fileURLWithPath: originalFileName)
         let target = uniqueBackupURL(for: source, date: date, in: directory)
         do {
             try fileManager.write(data, to: target)
@@ -99,10 +140,11 @@ public struct BackupStore: Sendable {
         }
 
         let metadata = BackupMetadata(
-            originalPath: source.path,
-            originalFileName: source.lastPathComponent,
+            originalPath: originalPath,
+            originalFileName: originalFileName,
             createdAt: date,
-            byteSize: data.count
+            byteSize: data.count,
+            isSafetyCopy: isSafetyCopy
         )
         var warning: BackupFailure?
         do {
@@ -119,8 +161,9 @@ public struct BackupStore: Sendable {
             url: target,
             createdAt: date,
             byteSize: data.count,
-            originalFileName: source.lastPathComponent,
-            originalPath: source.path
+            originalFileName: originalFileName,
+            originalPath: originalPath,
+            isSafetyCopy: isSafetyCopy
         )
         return .created(entry, warning: warning)
     }
@@ -159,9 +202,17 @@ public struct BackupStore: Sendable {
                 }
             }
 
-            let attributes = try? fileManager.attributesOfItem(atPath: url.path)
-            let fileSize = (attributes?[.size] as? NSNumber)?.intValue
-            let fileDate = attributes?[.creationDate] as? Date
+            let attributes: [FileAttributeKey: Any]
+            do {
+                attributes = try fileManager.attributesOfItem(atPath: url.path)
+            } catch {
+                // The listing still works from the metadata sidecar; report the
+                // unreadable attributes instead of silently showing size 0.
+                attributes = [:]
+                failures.append(failure(.readAttributes, url: url, error: error))
+            }
+            let fileSize = (attributes[.size] as? NSNumber)?.intValue
+            let fileDate = attributes[.creationDate] as? Date
             let originalFileName = metadata?.originalFileName
                 ?? Self.originalFileName(fromBackupFileName: url.lastPathComponent)
 
@@ -171,7 +222,8 @@ public struct BackupStore: Sendable {
                     createdAt: metadata?.createdAt ?? fileDate ?? .distantPast,
                     byteSize: fileSize ?? metadata?.byteSize ?? 0,
                     originalFileName: originalFileName,
-                    originalPath: metadata?.originalPath
+                    originalPath: metadata?.originalPath,
+                    isSafetyCopy: metadata?.isSafetyCopy ?? false
                 )
             )
         }
@@ -214,7 +266,14 @@ public struct BackupStore: Sendable {
             }
             let sidecar = metadataURL(for: entry.url)
             if fileManager.fileExists(atPath: sidecar.path) {
-                try? fileManager.removeItem(at: sidecar)
+                do {
+                    try fileManager.removeItem(at: sidecar)
+                } catch {
+                    // An orphaned sidecar is harmless but must not be silent.
+                    if firstFailure == nil {
+                        firstFailure = failure(.removeBackup, url: sidecar, error: error)
+                    }
+                }
             }
         }
         return firstFailure
@@ -340,17 +399,20 @@ public struct BackupStore: Sendable {
         let originalFileName: String?
         let createdAt: Date
         let byteSize: Int?
+        let isSafetyCopy: Bool?
 
         init(
             originalPath: String?,
             originalFileName: String?,
             createdAt: Date,
-            byteSize: Int?
+            byteSize: Int?,
+            isSafetyCopy: Bool? = nil
         ) {
             self.originalPath = originalPath
             self.originalFileName = originalFileName
             self.createdAt = createdAt
             self.byteSize = byteSize
+            self.isSafetyCopy = isSafetyCopy
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -359,6 +421,7 @@ public struct BackupStore: Sendable {
             case createdAt
             case createdAtMilliseconds
             case byteSize
+            case isSafetyCopy
         }
 
         init(from decoder: Decoder) throws {
@@ -366,6 +429,7 @@ public struct BackupStore: Sendable {
             originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
             originalFileName = try container.decodeIfPresent(String.self, forKey: .originalFileName)
             byteSize = try container.decodeIfPresent(Int.self, forKey: .byteSize)
+            isSafetyCopy = try container.decodeIfPresent(Bool.self, forKey: .isSafetyCopy)
             if let milliseconds = try container.decodeIfPresent(Int64.self, forKey: .createdAtMilliseconds) {
                 createdAt = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
             } else if let legacyDate = try container.decodeIfPresent(Date.self, forKey: .createdAt) {
@@ -387,6 +451,7 @@ public struct BackupStore: Sendable {
             try container.encodeIfPresent(originalPath, forKey: .originalPath)
             try container.encodeIfPresent(originalFileName, forKey: .originalFileName)
             try container.encodeIfPresent(byteSize, forKey: .byteSize)
+            try container.encodeIfPresent(isSafetyCopy, forKey: .isSafetyCopy)
             // Whole-second ISO dates collapsed sub-second backups and could
             // make pruning delete the actual newest copy.
             try container.encode(

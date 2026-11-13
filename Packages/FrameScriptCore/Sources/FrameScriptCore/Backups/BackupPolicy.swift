@@ -12,6 +12,9 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
     public static let defaultMaximumCount = 20
     /// How many calendar days keep one daily backup in addition to the newest ones.
     public static let defaultDailyRetentionDays = 14
+    /// Upper bound on retention-exempt safety copies. They do not count against
+    /// `maximumCount`, so they need their own cap.
+    public static let maximumSafetyCopyCount = 20
 
     /// Minimum number of seconds between two automatic backups of the same project.
     public var minimumInterval: TimeInterval
@@ -48,10 +51,13 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
 
     /// Existing backups that may be removed under this policy.
     ///
-    /// Keeps the newest `maximumCount` entries plus the newest entry of each
-    /// calendar day inside the last `dailyRetentionDays` days (today included).
-    /// At least the newest entry always survives, even if a decoded policy
-    /// carries degenerate values.
+    /// Keeps the newest `maximumCount` automatic entries plus the newest entry of
+    /// each calendar day inside the last `dailyRetentionDays` days (today
+    /// included). Forced safety copies (pre-restore, pre-reload, pre-overwrite
+    /// safeguards) never consume a slot in that newest-N window: a safeguard must
+    /// not evict an older automatic backup the user may still need. At least the
+    /// newest entry always survives, even if a decoded policy carries degenerate
+    /// values.
     public func backupsToDelete(
         from existing: [BackupEntry],
         now: Date,
@@ -69,7 +75,13 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
         }
 
         var kept = Set<URL>()
-        for entry in sorted.prefix(max(1, maximumCount)) {
+        let automatic = sorted.filter { !$0.isSafetyCopy }
+        for entry in automatic.prefix(max(1, maximumCount)) {
+            kept.insert(entry.url.standardizedFileURL)
+        }
+        // Safety copies are retention-exempt, but they are still bounded so a
+        // long restore session cannot fill the disk.
+        for entry in sorted.filter(\.isSafetyCopy).prefix(BackupPolicy.maximumSafetyCopyCount) {
             kept.insert(entry.url.standardizedFileURL)
         }
 

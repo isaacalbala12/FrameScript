@@ -31,7 +31,10 @@ extension FrameScriptDocument {
         document.fileVersion = FrameScriptFormat.currentFileVersion
         document.normalizePrimaryLanguage()
         try document.validateSceneIdentifiers()
-        try document.validateAnchors()
+        // A single out-of-range anchor used to make the whole project unopenable.
+        // Drop the anchor (never the scene text) so the user can reach and repair
+        // their script; the next save persists the repair.
+        document.dropInvalidAnchors()
         return document
     }
 
@@ -172,27 +175,35 @@ extension FrameScriptDocument {
         }
     }
 
-    private func validateAnchors() throws {
-        for scene in project.scenes {
+    /// Clears anchors that cannot describe a range in their scene. Bounds are
+    /// checked without `+` so `Int.max` cannot overflow.
+    mutating func dropInvalidAnchors() {
+        for sceneIndex in project.scenes.indices {
+            var scene = project.scenes[sceneIndex]
             let textLength = (scene.scriptText as NSString).length
-            for item in scene.bRollItems {
-                try validate(item.textAnchor, textLength: textLength)
+            var changed = false
+            for index in scene.bRollItems.indices where !isValid(scene.bRollItems[index].textAnchor, textLength: textLength) {
+                scene.bRollItems[index].textAnchor = nil
+                scene.bRollItems[index].linkedSegmentID = nil
+                changed = true
             }
-            for item in scene.editingItems {
-                try validate(item.textAnchor, textLength: textLength)
+            for index in scene.editingItems.indices where !isValid(scene.editingItems[index].textAnchor, textLength: textLength) {
+                scene.editingItems[index].textAnchor = nil
+                scene.editingItems[index].linkedSegmentID = nil
+                changed = true
+            }
+            if changed {
+                project.scenes[sceneIndex] = scene
             }
         }
     }
 
-    private func validate(_ anchor: TextAnchor?, textLength: Int) throws {
-        guard let anchor else { return }
-        // Subtraction instead of addition so Int.max cannot overflow.
-        guard anchor.startUTF16 >= 0,
-              anchor.lengthUTF16 >= 0,
-              anchor.startUTF16 <= textLength,
-              anchor.lengthUTF16 <= textLength - anchor.startUTF16 else {
-            throw FrameScriptDocumentError.invalidAnchor
-        }
+    private func isValid(_ anchor: TextAnchor?, textLength: Int) -> Bool {
+        guard let anchor else { return true }
+        return anchor.startUTF16 >= 0
+            && anchor.lengthUTF16 >= 0
+            && anchor.startUTF16 <= textLength
+            && anchor.lengthUTF16 <= textLength - anchor.startUTF16
     }
 }
 

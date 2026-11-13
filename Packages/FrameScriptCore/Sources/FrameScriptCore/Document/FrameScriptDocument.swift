@@ -23,6 +23,29 @@ private func sanitizedStoredTarget(_ value: TimeInterval?) -> TimeInterval? {
     return value
 }
 
+/// Reads a persisted enum as a string so a value written by a newer build (or a
+/// hand-edited file) falls back to a safe default instead of making the whole
+/// project unopenable. Raw values of the legacy enums never change.
+private func decodedEnumValue<T: RawRepresentable, K: CodingKey>(
+    _ container: KeyedDecodingContainer<K>,
+    _ key: K,
+    default defaultValue: T
+) -> T where T.RawValue == String {
+    (try? container.decodeIfPresent(String.self, forKey: key))
+        .flatMap { $0 }
+        .flatMap(T.init(rawValue:))
+        ?? defaultValue
+}
+
+private func decodedOptionalEnumValue<T: RawRepresentable, K: CodingKey>(
+    _ container: KeyedDecodingContainer<K>,
+    _ key: K
+) -> T? where T.RawValue == String {
+    (try? container.decodeIfPresent(String.self, forKey: key))
+        .flatMap { $0 }
+        .flatMap(T.init(rawValue:))
+}
+
 /// Version metadata for the `.fscr` project file.
 public enum FrameScriptFormat {
     /// Files written by this build always use schema version 4.
@@ -56,7 +79,21 @@ public struct FrameScriptDocument: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         fileVersion = try container.decode(Int.self, forKey: .fileVersion)
-        project = try container.decode(Project.self, forKey: .project)
+        // Version 4 always wrote `scenes`; a v4 file without it is truncated or
+        // hand-edited and must not silently open as an empty project.
+        if fileVersion == 4 {
+            let project = try container.nestedContainer(keyedBy: Project.CodingKeys.self, forKey: .project)
+            guard project.contains(.scenes) else {
+                throw DecodingError.keyNotFound(
+                    Project.CodingKeys.scenes,
+                    DecodingError.Context(
+                        codingPath: [CodingKeys.project],
+                        debugDescription: "A version-4 project must contain a scenes array."
+                    )
+                )
+            }
+        }
+        self.project = try container.decode(Project.self, forKey: .project)
     }
 }
 
@@ -258,7 +295,7 @@ extension FrameScriptDocument {
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             wordsPerMinute = try container.decodeIfPresent(Int.self, forKey: .wordsPerMinute)
-            defaultSplitMode = try container.decodeIfPresent(SegmentType.self, forKey: .defaultSplitMode)
+            defaultSplitMode = decodedOptionalEnumValue(container, .defaultSplitMode)
         }
     }
 
@@ -318,7 +355,7 @@ extension FrameScriptDocument {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(UUID.self, forKey: .id)
             name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
-            format = try container.decodeIfPresent(ExportFormat.self, forKey: .format) ?? .productionOutline
+            format = decodedEnumValue(container, .format, default: .productionOutline)
         }
     }
 
@@ -361,7 +398,7 @@ extension FrameScriptDocument {
             sceneID = try container.decode(UUID.self, forKey: .sceneID)
             order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
             sourceText = try container.decodeIfPresent(String.self, forKey: .sourceText) ?? ""
-            segmentType = try container.decodeIfPresent(SegmentType.self, forKey: .segmentType) ?? .scene
+            segmentType = decodedEnumValue(container, .segmentType, default: .scene)
             timingEstimate = try container.decodeIfPresent(TimeInterval.self, forKey: .timingEstimate) ?? 0
         }
     }
@@ -413,10 +450,10 @@ extension FrameScriptDocument {
             sceneID = try container.decodeIfPresent(UUID.self, forKey: .sceneID)
             segmentID = try container.decodeIfPresent(UUID.self, forKey: .segmentID)
             type = try container.decodeIfPresent(String.self, forKey: .type) ?? ""
-            severity = try container.decodeIfPresent(AICommentSeverity.self, forKey: .severity) ?? .note
+            severity = decodedEnumValue(container, .severity, default: .note)
             message = try container.decodeIfPresent(String.self, forKey: .message) ?? ""
             suggestion = try container.decodeIfPresent(String.self, forKey: .suggestion) ?? ""
-            status = try container.decodeIfPresent(AICommentStatus.self, forKey: .status) ?? .new
+            status = decodedEnumValue(container, .status, default: .new)
         }
     }
 
@@ -483,14 +520,16 @@ extension FrameScriptDocument {
             textAnchor = try container.decodeIfPresent(TextAnchor.self, forKey: .textAnchor)
             linkedSegmentID = try container.decodeIfPresent(UUID.self, forKey: .linkedSegmentID)
             templateType = try container.decodeIfPresent(String.self, forKey: .templateType) ?? ""
-            sourceType = try container.decodeIfPresent(BRollSourceType.self, forKey: .sourceType) ?? .custom
+            sourceType = decodedEnumValue(container, .sourceType, default: .custom)
             descriptionText = try container.decodeIfPresent(String.self, forKey: .descriptionText) ?? ""
             mood = try container.decodeIfPresent(String.self, forKey: .mood) ?? ""
             framing = try container.decodeIfPresent(String.self, forKey: .framing) ?? ""
             motion = try container.decodeIfPresent(String.self, forKey: .motion) ?? ""
-            duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+            duration = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+            )
             notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
-            status = try container.decodeIfPresent(BRollStatus.self, forKey: .status) ?? .idea
+            status = decodedEnumValue(container, .status, default: .idea)
         }
     }
 
@@ -579,7 +618,7 @@ extension FrameScriptDocument {
             musicCue = try container.decodeIfPresent(String.self, forKey: .musicCue) ?? ""
             graphics = try container.decodeIfPresent(String.self, forKey: .graphics) ?? ""
             notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
-            status = try container.decodeIfPresent(EditingStatus.self, forKey: .status) ?? .pending
+            status = decodedEnumValue(container, .status, default: .pending)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -671,7 +710,7 @@ extension FrameScriptDocument {
             )
             filePath = try container.decodeIfPresent(String.self, forKey: .filePath) ?? ""
             bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
-            rating = try container.decodeIfPresent(TakeRating.self, forKey: .rating) ?? .unrated
+            rating = decodedEnumValue(container, .rating, default: .unrated)
             note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
             languageCode = try container.decodeIfPresent(String.self, forKey: .languageCode) ?? ""
             readText = try container.decodeIfPresent(String.self, forKey: .readText) ?? ""
@@ -724,8 +763,12 @@ extension FrameScriptDocument {
             text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
             sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash) ?? ""
             takes = try container.decodeIfPresent([Take].self, forKey: .takes) ?? []
-            estimatedDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .estimatedDuration) ?? 0
-            actualDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .actualDuration) ?? 0
+            estimatedDuration = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .estimatedDuration) ?? 0
+            )
+            actualDuration = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .actualDuration) ?? 0
+            )
         }
 
         public func isStale(comparedToOriginal text: String) -> Bool {
@@ -809,7 +852,7 @@ extension FrameScriptDocument {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(UUID.self, forKey: .id)
             order = try container.decodeIfPresent(Int.self, forKey: .order) ?? 0
-            sectionType = try container.decodeIfPresent(SectionType.self, forKey: .sectionType) ?? .custom
+            sectionType = decodedEnumValue(container, .sectionType, default: .custom)
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
             scriptText = try container.decodeIfPresent(String.self, forKey: .scriptText) ?? ""
             notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -898,13 +941,14 @@ extension FrameScriptDocument {
             id = try container.decode(UUID.self, forKey: .id)
             path = try container.decodeIfPresent(String.self, forKey: .path) ?? ""
             bookmarkData = try container.decodeIfPresent(Data.self, forKey: .bookmarkData)
-            kind = try container.decodeIfPresent(AssetKind.self, forKey: .kind) ?? .web
+            kind = decodedEnumValue(container, .kind, default: .web)
             tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
             linkedSceneIDs = try container.decodeIfPresent([UUID].self, forKey: .linkedSceneIDs) ?? []
             linkedBRollItemIDs = try container.decodeIfPresent([UUID].self, forKey: .linkedBRollItemIDs) ?? []
             linkedTakeIDs = try container.decodeIfPresent([UUID].self, forKey: .linkedTakeIDs) ?? []
             isCopiedIntoProject = try container.decodeIfPresent(Bool.self, forKey: .isCopiedIntoProject) ?? false
-            duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration)
+            duration = (try container.decodeIfPresent(TimeInterval.self, forKey: .duration))
+                .map { sanitizedStoredDuration($0) }
             fileSize = try container.decodeIfPresent(Int64.self, forKey: .fileSize)
             modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt)
             isLastKnownMissing = try container.decodeIfPresent(Bool.self, forKey: .isLastKnownMissing) ?? false
@@ -945,7 +989,8 @@ extension FrameScriptDocument {
             id = try container.decode(UUID.self, forKey: .id)
             sceneID = try container.decodeIfPresent(UUID.self, forKey: .sceneID)
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
-            startSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .startSeconds)
+            startSeconds = (try container.decodeIfPresent(TimeInterval.self, forKey: .startSeconds))
+                .map { sanitizedStoredDuration($0) }
             isExcluded = try container.decodeIfPresent(Bool.self, forKey: .isExcluded) ?? false
         }
     }
@@ -1082,7 +1127,7 @@ extension FrameScriptDocument {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(UUID.self, forKey: .id)
             text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
-            kind = try container.decodeIfPresent(ChecklistTaskKind.self, forKey: .kind) ?? .other
+            kind = decodedEnumValue(container, .kind, default: .other)
             isDone = try container.decodeIfPresent(Bool.self, forKey: .isDone) ?? false
             sceneID = try container.decodeIfPresent(UUID.self, forKey: .sceneID)
         }
@@ -1150,7 +1195,7 @@ extension FrameScriptDocument {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(UUID.self, forKey: .id)
             text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
-            status = try container.decodeIfPresent(ClaimStatus.self, forKey: .status) ?? .probable
+            status = decodedEnumValue(container, .status, default: .probable)
             sourceIDs = try container.decodeIfPresent([UUID].self, forKey: .sourceIDs) ?? []
             sceneIDs = try container.decodeIfPresent([UUID].self, forKey: .sceneIDs) ?? []
         }
@@ -1318,15 +1363,17 @@ extension FrameScriptDocument {
             anchor = try container.decodeIfPresent(TextAnchor.self, forKey: .anchor)
             hook = try container.decodeIfPresent(String.self, forKey: .hook) ?? ""
             adaptedText = try container.decodeIfPresent(String.self, forKey: .adaptedText) ?? ""
-            targetSeconds = try container.decodeIfPresent(TimeInterval.self, forKey: .targetSeconds) ?? 30
-            format = try container.decodeIfPresent(ShortClipFormat.self, forKey: .format) ?? .reel
+            targetSeconds = sanitizedStoredDuration(
+                try container.decodeIfPresent(TimeInterval.self, forKey: .targetSeconds) ?? 30
+            )
+            format = decodedEnumValue(container, .format, default: .reel)
             onScreenText = try container.decodeIfPresent(String.self, forKey: .onScreenText) ?? ""
             description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
             hashtags = try container.decodeIfPresent([String].self, forKey: .hashtags) ?? []
             sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash) ?? ""
             languageCode = try container.decodeIfPresent(String.self, forKey: .languageCode) ?? ""
             sceneSourceHashes = try container.decodeIfPresent([SceneSourceHash].self, forKey: .sceneSourceHashes) ?? []
-            status = try container.decodeIfPresent(ShortClipStatus.self, forKey: .status) ?? .idea
+            status = decodedEnumValue(container, .status, default: .idea)
         }
 
         public func isStale(comparedToSourceText text: String) -> Bool {
@@ -1757,7 +1804,7 @@ extension FrameScriptDocument {
             primaryLanguage = try container.decodeIfPresent(String.self, forKey: .primaryLanguage) ?? "es"
             topic = try container.decodeIfPresent(String.self, forKey: .topic) ?? ""
             videoType = try container.decodeIfPresent(String.self, forKey: .videoType) ?? ""
-            productionStatus = try container.decodeIfPresent(ProductionStatus.self, forKey: .productionStatus) ?? .idea
+            productionStatus = decodedEnumValue(container, .productionStatus, default: .idea)
             targetDate = try container.decodeIfPresent(Date.self, forKey: .targetDate)
             publishDate = try container.decodeIfPresent(Date.self, forKey: .publishDate)
             targetDuration = sanitizedStoredTarget(

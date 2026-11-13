@@ -12,6 +12,10 @@ public struct BackupEntry: Identifiable, Hashable, Codable, Sendable {
     public let originalFileName: String
     /// Absolute path of the file that was copied, when it is known.
     public let originalPath: String?
+    /// Forced safeguard copies (taken right before a restore, a reload or an
+    /// overwrite of an externally changed file) are retention-exempt: they must
+    /// never push an older automatic backup out of the newest-N window.
+    public let isSafetyCopy: Bool
 
     public var id: URL { url }
 
@@ -20,13 +24,34 @@ public struct BackupEntry: Identifiable, Hashable, Codable, Sendable {
         createdAt: Date,
         byteSize: Int,
         originalFileName: String,
-        originalPath: String? = nil
+        originalPath: String? = nil,
+        isSafetyCopy: Bool = false
     ) {
         self.url = url
         self.createdAt = createdAt
         self.byteSize = byteSize
         self.originalFileName = originalFileName
         self.originalPath = originalPath
+        self.isSafetyCopy = isSafetyCopy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case url
+        case createdAt
+        case byteSize
+        case originalFileName
+        case originalPath
+        case isSafetyCopy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(URL.self, forKey: .url)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        byteSize = try container.decode(Int.self, forKey: .byteSize)
+        originalFileName = try container.decode(String.self, forKey: .originalFileName)
+        originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+        isSafetyCopy = try container.decodeIfPresent(Bool.self, forKey: .isSafetyCopy) ?? false
     }
 }
 
@@ -41,12 +66,13 @@ public enum BackupSkipReason: String, Codable, Hashable, Sendable {
 /// A non-fatal-or-fatal backup failure, reported instead of thrown so a backup
 /// can never take the app down with it.
 public struct BackupFailure: Error, Equatable, Sendable, LocalizedError {
-    public enum Operation: String, Codable, Hashable, Sendable {
+    public enum Operation: String, Codable, Hashable, Sendable, CaseIterable {
         case createDirectory
         case readSource
         case writeBackup
         case writeMetadata
         case readMetadata
+        case readAttributes
         case listBackups
         case removeBackup
         case readBackup
