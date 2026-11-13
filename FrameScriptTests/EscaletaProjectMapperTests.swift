@@ -12,7 +12,7 @@ final class EscaletaProjectMapperTests: XCTestCase {
         let scenes = project.scenes.sortedByOrder
 
         XCTAssertEqual(project.title, "VELOCITY RIDGE 3.0 — ESCALETA Y SEO")
-        XCTAssertEqual(project.primaryLanguage, "es")
+        XCTAssertEqual(project.primaryLanguage, "en")
         XCTAssertEqual(project.productionStatus, .script)
         XCTAssertEqual(scenes.count, 9)
         XCTAssertEqual(scenes.map(\.title), [
@@ -56,7 +56,7 @@ final class EscaletaProjectMapperTests: XCTestCase {
         XCTAssertTrue(firstItem.notes.contains("Cue original: [IMAGEN:"))
         XCTAssertTrue(firstItem.notes.contains("Posición: antes"))
 
-        let pack = try XCTUnwrap(project.publishingPacks["es"])
+        let pack = try XCTUnwrap(project.publishingPacks[project.primaryLanguage])
         XCTAssertEqual(pack.chosenTitle, "VELOCITY RIDGE 3.0: DOES IT FINALLY MAKE SENSE?")
         XCTAssertEqual(pack.titleCandidates.count, 4)
         XCTAssertEqual(pack.chaptersCount, 9)
@@ -70,7 +70,7 @@ final class EscaletaProjectMapperTests: XCTestCase {
         XCTAssertTrue(project.topic.contains("Promesa:"))
         XCTAssertTrue(project.topic.contains("Tesis:"))
         XCTAssertTrue(project.topic.contains("Nota de versión:"))
-        XCTAssertEqual(project.unparsedSections.map(\.heading), ["Evidencia utilizada"])
+        XCTAssertTrue(project.unparsedSections.isEmpty)
     }
 
     func testVRCFixtureMapsCameraGraphicAndTableSourcesAndClaims() throws {
@@ -93,7 +93,7 @@ final class EscaletaProjectMapperTests: XCTestCase {
         XCTAssertEqual(mapping.stats.anchorsResolved, mapping.stats.bRollCount)
         XCTAssertEqual(mapping.stats.anchorsUnresolved, 0)
 
-        let pack = try XCTUnwrap(project.publishingPacks["es"])
+        let pack = try XCTUnwrap(project.publishingPacks[project.primaryLanguage])
         XCTAssertEqual(pack.chosenTitle, pack.titleCandidates.first)
         XCTAssertEqual(pack.titleCandidates.count, 4)
         XCTAssertEqual(pack.chaptersCount, 12)
@@ -122,9 +122,9 @@ final class EscaletaProjectMapperTests: XCTestCase {
         XCTAssertEqual(mapping.stats.bRollCount, 13)
         XCTAssertEqual(mapping.stats.reHookCount, 1)
         XCTAssertEqual(mapping.stats.sceneCount, 9)
-        XCTAssertEqual(project.publishingPacks["es"]?.titleCandidates.count, 4)
-        XCTAssertEqual(project.publishingPacks["es"]?.hashtags.count, 3)
-        XCTAssertEqual(project.publishingPacks["es"]?.chaptersCount, 9)
+        XCTAssertEqual(project.publishingPacks[project.primaryLanguage]?.titleCandidates.count, 4)
+        XCTAssertEqual(project.publishingPacks[project.primaryLanguage]?.hashtags.count, 3)
+        XCTAssertEqual(project.publishingPacks[project.primaryLanguage]?.chaptersCount, 9)
     }
 
     func testEverySyntheticEscaletaAnchorResolves() throws {
@@ -227,6 +227,100 @@ final class EscaletaProjectMapperTests: XCTestCase {
         XCTAssertFalse(dossier.document.unparsedSections.isEmpty)
     }
 
+    func testLanguageDetectionUsesDocumentContent() {
+        let spanish = EscaletaParser.parse("""
+        # Análisis de la actualización
+
+        ## Promesa del vídeo
+
+        El vídeo explica qué cambia en el juego y por qué importa para el jugador.
+
+        # Guion
+
+        ## 0:00 — Gancho
+
+        Esto es una prueba del coche en la pista con la cámara y el volante.
+        """).document
+        let english = EscaletaParser.parse("""
+        # Update analysis
+
+        ## Promesa del vídeo
+
+        This video explains what changed in the game and why it matters to the player.
+
+        # Script
+
+        ## 0:00 — Hook
+
+        This is a test of the car on the track with the camera and the wheel.
+        """).document
+        let russian = EscaletaParser.parse("""
+        # Анализ обновления
+
+        ## Promesa del vídeo
+
+        В этом видео объясняется, что изменилось в игре и почему это важно.
+
+        # Сценарий
+
+        ## 0:00 — Начало
+
+        Это тест машины на трассе с камерой и рулём.
+        """).document
+        XCTAssertEqual(EscaletaLanguageDetector.detect(spanish), "es")
+        XCTAssertEqual(EscaletaLanguageDetector.detect(english), "en")
+        XCTAssertEqual(EscaletaLanguageDetector.detect(russian), "ru")
+    }
+
+    func testReHookIsStoredAsCueNotSpokenText() throws {
+        let result = try fixture("vrc-style.md")
+        let project = EscaletaProjectMapper.map(result).project
+        let scenes = project.scenes.sortedByOrder
+        XCTAssertEqual(scenes.filter(\.escaletaHasReHook).count, 2)
+        for scene in scenes {
+            XCTAssertFalse(scene.scriptText.contains("[RE-HOOK]"))
+            XCTAssertFalse(scene.scriptText.contains("RE-HOOK"))
+        }
+        let rehookScene = try XCTUnwrap(scenes.first(where: \.escaletaHasReHook))
+        XCTAssertTrue(rehookScene.editingItems.contains { $0.cutStyle == "RE-HOOK" })
+        let exported = EscaletaProjectExporter.markdown(from: project)
+        XCTAssertTrue(exported.contains("[RE-HOOK]"))
+    }
+
+    func testCandidatesOnlySourceStoresNoPrimaryTitleButUserEditExportsOne() throws {
+        let result = try fixture("vrc-style.md")
+        let project = EscaletaProjectMapper.map(result).project
+        var pack = try XCTUnwrap(project.publishingPacks[project.primaryLanguage])
+        XCTAssertEqual(pack.chosenTitle, pack.titleCandidates.first)
+
+        let unchanged = EscaletaParser.parse(EscaletaProjectExporter.markdown(from: project)).document
+        XCTAssertNil(unchanged.publishing?.primaryTitle)
+
+        pack.chosenTitle = "A user chosen title"
+        project.publishingPacks[project.primaryLanguage] = pack
+        let edited = EscaletaParser.parse(EscaletaProjectExporter.markdown(from: project)).document
+        XCTAssertEqual(edited.publishing?.primaryTitle, "A user chosen title")
+    }
+
+    func testFullDocumentRoundTripMatchesEverythingExceptLineNumbers() throws {
+        let directory = try fixturesDirectory()
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasSuffix(".md") }
+            .sorted()
+        var checked = 0
+        for name in names {
+            let result = try fixture(name)
+            guard result.document.kind == .escaleta else { continue }
+            let original = result.document
+            let mapping = EscaletaProjectMapper.map(EscaletaImportResult(document: original))
+            let markdown = EscaletaProjectExporter.markdown(from: mapping.project)
+            let reimported = EscaletaParser.parse(markdown).document
+            XCTAssertEqual(reimported, original, "Full document changed in \(name)")
+            checked += 1
+        }
+        XCTAssertGreaterThan(checked, 0)
+    }
+
     func testProjectNotesCodecKeepsFrontMatter() {
         let notes = EscaletaProjectNotes(
             promise: "Promesa\ncon dos líneas",
@@ -274,14 +368,16 @@ final class EscaletaProjectMapperTests: XCTestCase {
     // MARK: - Helpers
 
     private func fixture(_ name: String) throws -> EscaletaImportResult {
+        let url = try fixturesDirectory().appendingPathComponent(name)
+        let markdown = try String(contentsOf: url, encoding: .utf8)
+        return EscaletaParser.parse(markdown)
+    }
+
+    private func fixturesDirectory() throws -> URL {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let url = root
-            .appendingPathComponent("Packages/FrameScriptCore/Tests/FrameScriptCoreTests/Fixtures/MarkdownImport")
-            .appendingPathComponent(name)
-        let markdown = try String(contentsOf: url, encoding: .utf8)
-        return EscaletaParser.parse(markdown)
+        return root.appendingPathComponent("Packages/FrameScriptCore/Tests/FrameScriptCoreTests/Fixtures/MarkdownImport")
     }
 
     private func cueSignatures(_ scene: EscaletaScene) -> [String] {

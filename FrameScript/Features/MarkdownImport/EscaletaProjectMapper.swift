@@ -32,10 +32,11 @@ enum EscaletaBRollSource: String, CaseIterable, Sendable, Identifiable {
 }
 
 struct EscaletaMappingOptions: Sendable {
-    var primaryLanguage: String
+    /// Nil means detect the project language from the document content.
+    var primaryLanguage: String?
     var wordsPerMinute: Int
 
-    init(primaryLanguage: String = "es", wordsPerMinute: Int = 150) {
+    init(primaryLanguage: String? = nil, wordsPerMinute: Int = 150) {
         self.primaryLanguage = primaryLanguage
         self.wordsPerMinute = max(1, wordsPerMinute)
     }
@@ -96,34 +97,32 @@ enum EscaletaProjectMapper {
 
         let sceneStarts = document.scenes.map(\.startSeconds)
         var scenes: [Scene] = []
+        var sceneMetadata: [EscaletaRoundTripMetadata.SceneMetadata] = []
         var sceneIDsByStart: [Int: UUID] = [:]
+        var tableCursor = 0
 
         for (index, documentScene) in document.scenes.enumerated() {
             let nextStart = nextSceneStart(after: index, in: sceneStarts)
-            let scene = mapScene(
+            let mapped = mapScene(
                 documentScene,
                 order: index,
                 nextStart: nextStart,
+                tableStartIndex: tableCursor,
                 options: options,
                 warnings: &warnings,
                 stats: &stats
             )
-            scenes.append(scene)
+            scenes.append(mapped.scene)
+            sceneMetadata.append(mapped.metadata)
+            tableCursor += mapped.metadata.tableCount
             if let start = documentScene.startSeconds, sceneIDsByStart[start] == nil {
-                sceneIDsByStart[start] = scene.id
+                sceneIDsByStart[start] = mapped.scene.id
             }
         }
 
-        let notes = EscaletaProjectNotes(
-            promise: document.promise,
-            thesis: document.thesis,
-            versionNote: document.versionNote,
-            scriptIntro: document.scriptIntro,
-            pacingNotes: document.pacingNotes
-        )
+        let language = options.primaryLanguage ?? EscaletaLanguageDetector.detect(document)
         let pack = makePublishingPack(
             document.publishing,
-            scenes: scenes,
             sceneIDsByStart: sceneIDsByStart,
             stats: &stats
         )
@@ -132,6 +131,15 @@ enum EscaletaProjectMapper {
         let tables = makeTables(document)
         let unparsed = makeUnparsedSections(document)
         let videoType = guessVideoType(document)
+        let metadata = EscaletaRoundTripMetadata(document: document, scenes: sceneMetadata)
+        let notes = EscaletaProjectNotes(
+            promise: document.promise,
+            thesis: document.thesis,
+            versionNote: document.versionNote,
+            scriptIntro: document.scriptIntro,
+            pacingNotes: document.pacingNotes,
+            metadata: metadata
+        )
 
         var targetSeconds: TimeInterval = 0
         for scene in scenes {
@@ -141,12 +149,12 @@ enum EscaletaProjectMapper {
         let project = FrameProject(
             title: document.title,
             scenes: scenes,
-            primaryLanguage: options.primaryLanguage,
+            primaryLanguage: language,
             topic: notes.encoded(),
             videoType: videoType,
             productionStatus: document.scenes.isEmpty ? .outline : .script,
             targetDuration: targetSeconds > 0 ? targetSeconds : nil,
-            publishingPacks: hasPublishingContent(pack) ? [options.primaryLanguage: pack] : [:],
+            publishingPacks: hasPublishingContent(pack) ? [language: pack] : [:],
             checklistTasks: verification.tasks,
             sources: sources,
             claims: verification.claims,
@@ -191,10 +199,12 @@ enum EscaletaProjectMapper {
         _ scene: EscaletaScene,
         order: Int,
         nextStart: Int?,
+        tableStartIndex: Int,
         options: EscaletaMappingOptions,
         warnings: inout [EscaletaWarning],
         stats: inout EscaletaMappingStats
-    ) -> Scene {
+    ) -> (scene: Scene, metadata: EscaletaRoundTripMetadata.SceneMetadata) {
+        let sceneID = UUID()
         let script = ScriptBuilder(scene: scene)
         stats.cueCount += scene.cues.count
         stats.recordingNoteCount += scene.cues.filter { $0.kind == .recordingNote }.count
@@ -203,66 +213,100 @@ enum EscaletaProjectMapper {
         var bRollItems: [BRollItem] = []
         var editingItems: [EditingItem] = []
         var noteLines: [String] = []
+        var slots: [[EscaletaRoundTripMetadata.BlockRef]] = [[]]
+        var textBlockIndex = 0
+        var bRollIndex = 0
+        var editingIndex = 0
+        var noteIndex = 0
+        var tableIndex = 0
 
         for (blockIndex, block) in scene.blocks.enumerated() {
-            guard case .cue(let cue) = block else { continue }
-
-            switch cue.kind {
-            case .recordingNote:
-                let payload = cue.payload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if !payload.isEmpty {
-                    noteLines.append("Nota de grabación: \(payload)")
+            switch block {
+            case .paragraph, .blockquote:
+                textBlockIndex += 1
+                while slots.count <= textBlockIndex {
+                    slots.append([])
                 }
-            case .unknown:
-                let payload = cue.payload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                noteLines.append(payload.isEmpty ? "Cue desconocido [\(cue.label)]" : "Cue desconocido [\(cue.label)]: \(payload)")
-            case .rehook:
-                let anchor = script.anchor(forCueAt: blockIndex)
-                editingItems.append(
-                    EditingItem(
-                        textAnchor: anchor,
-                        linkedSegmentID: nil,
-                        templateType: "Escaleta",
-                        cutStyle: "RE-HOOK",
-                        transition: "",
-                        subtitleStyle: "",
-                        notes: L10n.tr("escaleta.rehook.note", language: .spanish)
-                    )
+            case .table:
+                slots[textBlockIndex].append(
+                    EscaletaRoundTripMetadata.BlockRef(kind: "table", index: tableStartIndex + tableIndex)
                 )
-            default:
-                guard cue.kind.isBRoll else { continue }
-                let source = bRollSource(for: cue)
-                stats.bRollBySource[source, default: 0] += 1
-                let anchor = script.anchor(forCueAt: blockIndex)
-                if anchor != nil {
-                    stats.anchorsResolved += 1
-                } else {
-                    stats.anchorsUnresolved += 1
-                    warnings.append(
-                        EscaletaWarning(
-                            kind: .unknownCue,
-                            message: "No se pudo anclar el cue [\(cue.label)] a un párrafo de «\(scene.title)».",
-                            line: cue.line
+                tableIndex += 1
+            case .cue(let cue):
+                switch cue.kind {
+                case .recordingNote:
+                    let payload = cue.payload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !payload.isEmpty {
+                        noteLines.append("Nota de grabación: \(payload)")
+                        slots[textBlockIndex].append(
+                            EscaletaRoundTripMetadata.BlockRef(kind: "note", index: noteIndex)
+                        )
+                        noteIndex += 1
+                    }
+                case .unknown:
+                    let payload = cue.payload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    noteLines.append(payload.isEmpty ? "Cue desconocido [\(cue.label)]" : "Cue desconocido [\(cue.label)]: \(payload)")
+                    slots[textBlockIndex].append(
+                        EscaletaRoundTripMetadata.BlockRef(kind: "note", index: noteIndex)
+                    )
+                    noteIndex += 1
+                case .rehook:
+                    let anchor = script.anchor(forCueAt: blockIndex)
+                    let position = script.cueIsAtEnd(blockIndex: blockIndex) ? "después" : "antes"
+                    editingItems.append(
+                        EditingItem(
+                            textAnchor: anchor,
+                            linkedSegmentID: nil,
+                            templateType: "Escaleta",
+                            cutStyle: "RE-HOOK",
+                            transition: "",
+                            subtitleStyle: "",
+                            notes: "Cue original: [RE-HOOK]\nPosición: \(position)"
                         )
                     )
-                }
-                let cueLine = cue.reconstructedCueLine
-                let position = script.cueIsAtEnd(blockIndex: blockIndex) ? "después" : "antes"
-                var notes = "Cue original: \(cueLine)\nPosición: \(position)"
-                if let suggestion = sourceSuggestionNote(for: cue, source: source) {
-                    notes += "\n\(suggestion)"
-                }
-                bRollItems.append(
-                    BRollItem(
-                        textAnchor: anchor,
-                        linkedSegmentID: nil,
-                        templateType: "Escaleta",
-                        sourceType: source.appSourceType,
-                        descriptionText: cueDescription(cue),
-                        notes: notes,
-                        status: .planned
+                    slots[textBlockIndex].append(
+                        EscaletaRoundTripMetadata.BlockRef(kind: "editing", index: editingIndex)
                     )
-                )
+                    editingIndex += 1
+                default:
+                    guard cue.kind.isBRoll else { continue }
+                    let source = bRollSource(for: cue)
+                    stats.bRollBySource[source, default: 0] += 1
+                    let anchor = script.anchor(forCueAt: blockIndex)
+                    if anchor != nil {
+                        stats.anchorsResolved += 1
+                    } else {
+                        stats.anchorsUnresolved += 1
+                        warnings.append(
+                            EscaletaWarning(
+                                kind: .unknownCue,
+                                message: "No se pudo anclar el cue [\(cue.label)] a un párrafo de «\(scene.title)».",
+                                line: cue.line
+                            )
+                        )
+                    }
+                    let cueLine = cue.reconstructedCueLine
+                    let position = script.cueIsAtEnd(blockIndex: blockIndex) ? "después" : "antes"
+                    var notes = "Cue original: \(cueLine)\nPosición: \(position)"
+                    if let suggestion = sourceSuggestionNote(for: cue, source: source) {
+                        notes += "\n\(suggestion)"
+                    }
+                    bRollItems.append(
+                        BRollItem(
+                            textAnchor: anchor,
+                            linkedSegmentID: nil,
+                            templateType: "Escaleta",
+                            sourceType: source.appSourceType,
+                            descriptionText: cueDescription(cue),
+                            notes: notes,
+                            status: .planned
+                        )
+                    )
+                    slots[textBlockIndex].append(
+                        EscaletaRoundTripMetadata.BlockRef(kind: "broll", index: bRollIndex)
+                    )
+                    bRollIndex += 1
+                }
             }
         }
 
@@ -272,7 +316,8 @@ enum EscaletaProjectMapper {
             return TimeInterval(nextStart - start)
         }()
 
-        return Scene(
+        let mappedScene = Scene(
+            id: sceneID,
             order: order,
             sectionType: sectionType(for: scene, order: order),
             title: scene.title.isEmpty ? L10n.tr("escaleta.scene.untitled", language: .spanish) : scene.title,
@@ -284,6 +329,22 @@ enum EscaletaProjectMapper {
             editingItems: editingItems,
             targetDuration: target
         )
+
+        let metadata = EscaletaRoundTripMetadata.SceneMetadata(
+            sceneID: sceneID.uuidString,
+            startSeconds: scene.startSeconds,
+            timestampText: scene.timestampText,
+            separator: scene.separator,
+            separatorAfter: scene.separatorAfter,
+            isOutlineFallback: scene.isOutlineFallback,
+            textBlockCount: textBlockIndex,
+            bRollCount: bRollIndex,
+            editingCount: editingIndex,
+            noteCount: noteIndex,
+            tableCount: tableIndex,
+            slots: slots
+        )
+        return (mappedScene, metadata)
     }
 
     private static func nextSceneStart(after index: Int, in starts: [Int?]) -> Int? {
@@ -373,7 +434,6 @@ enum EscaletaProjectMapper {
 
     private static func makePublishingPack(
         _ document: EscaletaPublishingPack?,
-        scenes: [Scene],
         sceneIDsByStart: [Int: UUID],
         stats: inout EscaletaMappingStats
     ) -> PublishingPack {
@@ -476,31 +536,12 @@ enum EscaletaProjectMapper {
     }
 
     private static func makeUnparsedSections(_ document: EscaletaDocument) -> [UnparsedSection] {
-        var sections = document.unparsedSections.map {
+        // Evidence, extra SEO labels and table notes are canonical document
+        // fields, not unknown content. They live in the round-trip metadata so
+        // they can be restored to the publishing pack on export.
+        document.unparsedSections.map {
             UnparsedSection(heading: $0.heading, body: $0.body)
         }
-        if let evidence = document.publishing?.evidence, !evidence.isEmpty {
-            sections.append(
-                UnparsedSection(
-                    heading: L10n.tr("escaleta.evidence.heading", language: .spanish),
-                    body: evidence.map { "- \($0)" }.joined(separator: "\n")
-                )
-            )
-        }
-        if let extraFields = document.publishing?.extraFields {
-            for field in extraFields {
-                sections.append(UnparsedSection(heading: field.label, body: field.value))
-            }
-        }
-        if let tableNotes = document.tableSectionNotes, !tableNotes.isEmpty {
-            sections.append(
-                UnparsedSection(
-                    heading: L10n.tr("escaleta.table.notesHeading", language: .spanish),
-                    body: tableNotes
-                )
-            )
-        }
-        return sections
     }
 
     // MARK: - Video type
@@ -558,8 +599,6 @@ private struct ScriptBuilder {
                     let quoted = trimmed.components(separatedBy: "\n").map { "> \($0)" }.joined(separator: "\n")
                     parts.append((index, quoted, true))
                 }
-            case .cue(let cue) where cue.kind == .rehook:
-                parts.append((index, "[\(cue.label)]", false))
             case .cue, .table:
                 continue
             }
@@ -625,11 +664,73 @@ extension EscaletaCue {
 }
 
 extension Scene {
-    /// Re-hook markers are kept as a literal `[RE-HOOK]` line in the script.
-    /// The app model has no boolean field, so this is the runtime flag.
+    /// Re-hook markers are stored as editing cues, never as spoken text. The
+    /// model has no boolean field, so the editing item is the runtime flag.
     var escaletaHasReHook: Bool {
-        scriptText
-            .components(separatedBy: "\n")
-            .contains { $0.trimmingCharacters(in: .whitespaces) == "[RE-HOOK]" }
+        editingItems.contains {
+            $0.cutStyle == "RE-HOOK" || $0.notes.contains("Cue original: [RE-HOOK]")
+        }
+    }
+}
+
+/// Lightweight content-language detection for imported escaletas. The app has
+/// no bundled NLP dependency, so this scores distinctive stopwords and
+/// characters; an ambiguous document falls back to Spanish, the creator's
+/// primary language.
+enum EscaletaLanguageDetector {
+    static func detect(_ document: EscaletaDocument) -> String {
+        let samples: [String?] = [
+            document.preTitleText,
+            document.title,
+            document.versionNote,
+            document.promise,
+            document.thesis,
+            document.scriptIntro
+        ] + document.pacingNotes + document.outline.map(\.text) + document.scenes.flatMap { scene in
+            [scene.title] + scene.blocks.flatMap { block -> [String] in
+                switch block {
+                case .paragraph(let text), .blockquote(let text): [text]
+                case .cue(let cue): [cue.label, cue.payload ?? ""]
+                case .table: []
+                }
+            }
+        }
+        let text = samples.compactMap { $0 }.joined(separator: "\n")
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard !letters.isEmpty else { return "es" }
+
+        let cyrillic = letters.filter { (0x0400...0x04FF).contains($0.value) }.count
+        if Double(cyrillic) / Double(letters.count) >= 0.15 {
+            return "ru"
+        }
+
+        let tokens = text.lowercased().split { !$0.isLetter }.map(String.init)
+        guard tokens.count >= 5 else { return "es" }
+
+        let spanishWords: Set<String> = [
+            "el", "la", "los", "las", "de", "del", "que", "y", "en", "un", "una", "unos", "unas",
+            "por", "para", "con", "sin", "pero", "como", "más", "esto", "esta", "estos", "estas",
+            "es", "son", "al", "se", "su", "sus", "lo", "le", "les", "ya", "muy", "hay", "fue",
+            "ser", "tiene", "tienen", "desde", "entre", "cuando", "donde", "porque", "sobre",
+            "también", "vídeo", "coche", "juego", "volante", "pista", "cámara", "prueba",
+            "actualización", "parche"
+        ]
+        let englishWords: Set<String> = [
+            "the", "and", "of", "to", "in", "is", "that", "this", "with", "for", "you", "it",
+            "we", "on", "as", "are", "be", "was", "but", "not", "have", "has", "from", "they",
+            "their", "at", "or", "an", "by", "my", "your", "our", "video", "game", "car", "track",
+            "camera", "test", "update", "patch"
+        ]
+
+        var spanishScore = tokens.filter(spanishWords.contains).count
+        var englishScore = tokens.filter(englishWords.contains).count
+        let lower = text.lowercased()
+        if lower.contains("ñ") || lower.contains("¿") || lower.contains("¡") {
+            spanishScore += 3
+        }
+        spanishScore += lower.filter { "áéíóú".contains($0) }.count
+
+        if spanishScore == englishScore { return "es" }
+        return spanishScore > englishScore ? "es" : "en"
     }
 }

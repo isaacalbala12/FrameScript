@@ -75,6 +75,7 @@ struct AppRootView: View {
 
 struct AppShellView: View {
     @Environment(AppState.self) private var appState
+    @Environment(EscaletaImportCoordinator.self) private var escaletaImport
     @Environment(\.frameTheme) private var theme
     @Environment(\.openSettings) private var openSettings
     @State private var sidebarDragStartWidth: Double?
@@ -118,6 +119,13 @@ struct AppShellView: View {
         .background(theme.background)
         .foregroundStyle(theme.primaryText)
         .frame(minWidth: 980, minHeight: 680)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: { $0.pathExtension.lowercased() == "md" }) else {
+                return false
+            }
+            escaletaImport.present(url: url, appState: appState)
+            return true
+        }
         .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
             CommandPaletteView()
                 .environment(appState)
