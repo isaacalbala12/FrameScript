@@ -1330,7 +1330,7 @@ struct AIPreferences: Codable, Hashable {
         temperature: Double,
         maxTokens: Int,
         privacyMode: Bool,
-        enableInlineAutocomplete: Bool = true
+        enableInlineAutocomplete: Bool = false
     ) {
         self.provider = provider
         self.model = model
@@ -1349,7 +1349,7 @@ struct AIPreferences: Codable, Hashable {
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0.4
         maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? 420
         privacyMode = try container.decodeIfPresent(Bool.self, forKey: .privacyMode) ?? true
-        enableInlineAutocomplete = try container.decodeIfPresent(Bool.self, forKey: .enableInlineAutocomplete) ?? true
+        enableInlineAutocomplete = try container.decodeIfPresent(Bool.self, forKey: .enableInlineAutocomplete) ?? false
     }
 }
 
@@ -1359,6 +1359,9 @@ enum AIProviderKind: String, Codable, CaseIterable, Identifiable {
     case openRouter = "OpenRouter"
     case groq = "Groq"
     case googleAIStudio = "Google AI Studio"
+    case t3Code = "T3 Code (suscripción)"
+    case claudeCode = "Claude Code (suscripción)"
+    case codex = "Codex (suscripción)"
 
     var id: String { rawValue }
 
@@ -1566,7 +1569,7 @@ extension AIPreferences {
         temperature: 0.4,
         maxTokens: 420,
         privacyMode: true,
-        enableInlineAutocomplete: true
+        enableInlineAutocomplete: false
     )
 }
 

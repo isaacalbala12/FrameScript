@@ -255,6 +255,10 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
         switch request.provider {
         case .disabled:
             return LLMResponse(text: "")
+        case .t3Code, .claudeCode, .codex:
+            // F12: subscription-backed providers share one protocol; the
+            // runtime maps the task to the configured CLI and model.
+            return try await SubscriptionAIRuntime.shared.complete(request: request)
         case .openAICompatible, .openRouter, .groq, .googleAIStudio:
             return try await completeChat(request: request, apiKey: apiKey)
         }
@@ -580,6 +584,7 @@ struct AIProviderConfigurationStore {
         case .openRouter: "openai/gpt-4.1-mini"
         case .openAICompatible: "gpt-4.1-mini"
         case .googleAIStudio: "gemini-3.5-flash"
+        case .t3Code, .claudeCode, .codex: ""
         case .disabled: ""
         }
     }

@@ -29,12 +29,12 @@ final class SettingsPreferencesTests: XCTestCase {
         XCTAssertFalse(LaunchBehavior.showProjectBrowser.shouldRestoreLastProject(hasOpenProject: false, hasRecentProject: true))
     }
 
-    func testMissingInlineAutocompletePreferenceDefaultsToEnabled() throws {
+    func testMissingInlineAutocompletePreferenceDefaultsToDisabled() throws {
         let data = Data("""
         {"provider":"Disabled","model":"gpt-4.1-mini","baseURL":"","temperature":0.4,"maxTokens":420,"privacyMode":true}
         """.utf8)
 
-        XCTAssertTrue(try JSONDecoder().decode(AIPreferences.self, from: data).enableInlineAutocomplete)
+        XCTAssertFalse(try JSONDecoder().decode(AIPreferences.self, from: data).enableInlineAutocomplete)
     }
 
     func testDisabledInlineAutocompleteBlocksOnlyAutocompleteEligibility() async {
@@ -63,20 +63,34 @@ final class SettingsPreferencesTests: XCTestCase {
         XCTAssertEqual(appState.autocompleteConfigurationEligibility, .eligible)
     }
 
-    func testNewAndResetSettingsEnableAIReviewAndInlineAutocomplete() {
+    func testNewAndResetSettingsEnableAIReviewAndKeepInlineAutocompleteOff() {
         XCTAssertTrue(AppSettings.defaults.editorPreferences.showAIReviewPanel)
-        XCTAssertTrue(AppSettings.defaults.aiPreferences.enableInlineAutocomplete)
+        XCTAssertFalse(AppSettings.defaults.aiPreferences.enableInlineAutocomplete)
 
         let suiteName = "SettingsPreferencesTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let store = SettingsStore(settings: .defaults, userDefaults: defaults, key: "settings")
         store.settings.editorPreferences.showAIReviewPanel = false
-        store.settings.aiPreferences.enableInlineAutocomplete = false
+        store.settings.aiPreferences.enableInlineAutocomplete = true
         store.reset()
 
         XCTAssertTrue(store.settings.editorPreferences.showAIReviewPanel)
-        XCTAssertTrue(store.settings.aiPreferences.enableInlineAutocomplete)
+        XCTAssertFalse(store.settings.aiPreferences.enableInlineAutocomplete)
+    }
+
+    func testProviderSwitchesNeverReEnableInlineAutocomplete() {
+        var preferences = AppSettings.defaults.aiPreferences
+        XCTAssertFalse(preferences.enableInlineAutocomplete)
+
+        preferences.provider = .t3Code
+        XCTAssertFalse(preferences.enableInlineAutocomplete)
+        preferences.provider = .claudeCode
+        XCTAssertFalse(preferences.enableInlineAutocomplete)
+        preferences.provider = .codex
+        XCTAssertFalse(preferences.enableInlineAutocomplete)
+        preferences.provider = .openAICompatible
+        XCTAssertFalse(preferences.enableInlineAutocomplete)
     }
 
     func testSavedAIReviewPreferenceIsPreservedAndFooterStateIsNotEncoded() throws {

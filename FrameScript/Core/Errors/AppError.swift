@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 import Observation
 import Security
 
@@ -33,12 +34,25 @@ struct AppErrorContext: Equatable, Sendable {
     var statusCode: Int?
     var reason: String?
     var diagnosticCode: String?
+    /// Localized suffix for CLI/subscription errors. `reason` remains the
+    /// English diagnostic used in logs.
+    var reasonKey: String?
+    var reasonArguments: [String]?
 
-    init(fileName: String? = nil, statusCode: Int? = nil, reason: String? = nil, diagnosticCode: String? = nil) {
+    init(
+        fileName: String? = nil,
+        statusCode: Int? = nil,
+        reason: String? = nil,
+        diagnosticCode: String? = nil,
+        reasonKey: String? = nil,
+        reasonArguments: [String]? = nil
+    ) {
         self.fileName = fileName
         self.statusCode = statusCode
         self.reason = reason.map { String($0.prefix(256)) }
         self.diagnosticCode = diagnosticCode
+        self.reasonKey = reasonKey
+        self.reasonArguments = reasonArguments
     }
 }
 
@@ -84,7 +98,16 @@ struct AppError: Identifiable, LocalizedError, Equatable, Sendable {
         if let fileName = context.fileName, !fileName.isEmpty {
             message += " \(String(format: L10n.tr("error.fileName", language: language), fileName))"
         }
-        if let reason = context.reason, !reason.isEmpty, kind == .aiProvider {
+        if let key = context.reasonKey {
+            let format = L10n.tr(key, language: language)
+            let arguments = context.reasonArguments ?? []
+            if arguments.isEmpty {
+                message += " \(format)"
+            } else {
+                message += " " + String(format: format, arguments: arguments.map { $0 as CVarArg })
+            }
+        } else if let reason = context.reason, !reason.isEmpty,
+                  kind == .aiProvider || kind == .aiConfiguration {
             message += " \(reason)"
         }
         let suggestion = recoveryAction.map {
@@ -284,8 +307,49 @@ extension AppError {
         return AppError(kind: kind, context: AppErrorContext(diagnosticCode: diagnosticCode(for: error)))
     }
 
+    private static func appError(
+        kind: AppErrorKind,
+        for error: Error,
+        recoveryAction: AppRecoveryAction?
+    ) -> AppError {
+        let mapping = SubscriptionAIErrorDescription.mapping(for: error)
+        return AppError(
+            kind: kind,
+            context: AppErrorContext(
+                reason: error.localizedDescription,
+                reasonKey: mapping?.key,
+                reasonArguments: mapping?.arguments
+            ),
+            recoveryAction: recoveryAction
+        )
+    }
+
     static func ai(_ error: Error) -> AppError? {
         if error is CancellationError { return nil }
+        if let error = error as? SubscriptionAIError {
+            switch error {
+            case .autocompleteNotSupported:
+                return nil
+            case .pendingQuestion:
+                // The sheet already explains the question and offers T3.
+                return nil
+            case .busy, .emptyReply:
+                return appError(kind: .aiProvider, for: error, recoveryAction: nil)
+            case .notConfigured:
+                return appError(kind: .aiConfiguration, for: error, recoveryAction: .openAISettings)
+            }
+        }
+        if let error = error as? AgentCLIError {
+            switch error {
+            case .cancelled:
+                return nil
+            case .invalidConfiguration, .binaryNotFound, .projectNotFound, .noProviderAvailable:
+                return appError(kind: .aiConfiguration, for: error, recoveryAction: .openAISettings)
+            case .timedOut, .launchFailed, .runFailed, .malformedOutput, .outputTruncated,
+                 .projectAlreadyExists, .projectNameLookupUnsupported, .serverUnavailable:
+                return appError(kind: .aiProvider, for: error, recoveryAction: nil)
+            }
+        }
         if let error = error as? LLMProviderError {
             switch error {
             case .missingAPIKey, .invalidBaseURL:

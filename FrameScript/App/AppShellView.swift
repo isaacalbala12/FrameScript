@@ -3,9 +3,13 @@ import UniformTypeIdentifiers
 
 struct AppRootView: View {
     @Environment(AppState.self) private var appState
+    @State private var subscriptionRuntime = SubscriptionAIRuntime.shared
 
     var body: some View {
         @Bindable var windowState = appState.windowState
+        // Read the observable property in the body so a pending question
+        // invalidates this view and presents the sheet.
+        let pendingPrompt = subscriptionRuntime.pendingPrompt
         let presentedError = Binding<AppError?>(
             get: { appState.errorCenter.presentedError },
             set: { if $0 == nil { appState.errorCenter.dismissCurrent() } }
@@ -66,6 +70,22 @@ struct AppRootView: View {
             }
             .sheet(isPresented: $windowState.isExportPresented) {
                 ExportSheetView()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
+            .overlay(alignment: .topTrailing) {
+                SubscriptionAIActivityOverlay()
+            }
+            .sheet(item: Binding(
+                get: { pendingPrompt },
+                set: { newValue in
+                    subscriptionRuntime.pendingPrompt = newValue
+                    if newValue == nil {
+                        subscriptionRuntime.clearOpenError()
+                    }
+                }
+            )) { prompt in
+                SubscriptionAIPendingQuestionSheet(prompt: prompt)
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }

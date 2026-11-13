@@ -658,92 +658,130 @@ private struct AISettings: View {
         settings.aiPreferences.provider == .disabled
     }
 
+    private var providerUsesSubscription: Bool {
+        settings.aiPreferences.provider.isSubscriptionBacked
+    }
+
     var body: some View {
-        SettingsSection(title: appState.localized("settings.ai"), resetAction: {
-            settings.aiPreferences = AppSettings.defaults.aiPreferences
-            apiKey = ""
-            status = ""
-            loadKeyMetadata()
-        }) {
-            SettingsRow(appState.localized("settings.provider"), help: appState.localized("help.provider")) {
-                Picker("", selection: $settings.aiPreferences.provider) {
-                    ForEach(AIProviderKind.allCases) { provider in
-                        Text(appState.displayName(provider)).tag(provider)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 220)
-            }
-
-            SettingsRow(appState.localized("settings.model"), help: appState.localized("help.model")) {
-                TextField("", text: $settings.aiPreferences.model)
-                    .textFieldStyle(QuietTextFieldStyle())
-                    .frame(width: 260)
-                    .disabled(providerDisabled)
-            }
-
-            SettingsRow(appState.localized("settings.baseURL"), help: appState.localized("help.baseURL")) {
-                TextField(defaultBaseURL(for: settings.aiPreferences.provider), text: $settings.aiPreferences.baseURL)
-                    .textFieldStyle(QuietTextFieldStyle())
-                    .frame(width: 300)
-                    .disabled(providerDisabled)
-            }
-
-            SettingsRow(appState.localized("settings.apiKey"), help: appState.localized("help.apiKey")) {
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(spacing: 8) {
-                        SecureField(hasStoredKey ? appState.localized("settings.keyStored") : appState.localized("settings.keyMissing"), text: $apiKey)
-                            .textFieldStyle(QuietTextFieldStyle())
-                            .frame(width: 240)
-                            .disabled(providerDisabled)
-                        Button(hasStoredKey ? appState.localized("settings.replaceKey") : appState.localized("settings.saveKey")) {
-                            saveAPIKeyFromField()
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsSection(title: appState.localized("settings.ai"), resetAction: {
+                settings.aiPreferences = AppSettings.defaults.aiPreferences
+                SubscriptionAISettingsStore.shared.reset()
+                apiKey = ""
+                status = ""
+                loadKeyMetadata()
+            }) {
+                SettingsRow(appState.localized("settings.provider"), help: appState.localized("help.provider")) {
+                    Picker("", selection: $settings.aiPreferences.provider) {
+                        ForEach(AIProviderKind.allCases) { provider in
+                            Text(appState.displayName(provider)).tag(provider)
                         }
-                        .disabled(providerDisabled || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .clickableCursor(enabled: !providerDisabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Button(appState.localized("settings.deleteKey")) {
-                            deleteAPIKey()
-                        }
-                        .disabled(providerDisabled || !hasStoredKey)
-                        .clickableCursor(enabled: !providerDisabled && hasStoredKey)
                     }
-
-                    Text(providerDisabled ? appState.localized("settings.notNeeded") : keyStatusText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                    .labelsHidden()
+                    .frame(width: 220)
                 }
-            }
 
-            SettingsRow("") {
-                HStack(spacing: 10) {
-                    Button(appState.localized("settings.testConnection")) {
-                        Task { await testConnection() }
-                    }
-                    .disabled(providerDisabled || isTesting)
-                    .clickableCursor(enabled: !providerDisabled && !isTesting)
+                SettingsRow(appState.localized("settings.model"), help: appState.localized("help.model")) {
+                    TextField("", text: $settings.aiPreferences.model)
+                        .textFieldStyle(QuietTextFieldStyle())
+                        .frame(width: 260)
+                        .disabled(providerDisabled || providerUsesSubscription)
+                }
 
-                    if !status.isEmpty {
-                        Text(status)
+                SettingsRow(appState.localized("settings.baseURL"), help: appState.localized("help.baseURL")) {
+                    TextField(defaultBaseURL(for: settings.aiPreferences.provider), text: $settings.aiPreferences.baseURL)
+                        .textFieldStyle(QuietTextFieldStyle())
+                        .frame(width: 300)
+                        .disabled(providerDisabled || providerUsesSubscription)
+                }
+
+                if providerUsesSubscription {
+                    SettingsRow(appState.localized("settings.apiKey"), help: appState.localized("help.apiKey")) {
+                        Text(appState.localized("settings.ai.subscription.usesCLI"))
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 360, alignment: .trailing)
+                    }
+                } else {
+                    SettingsRow(appState.localized("settings.apiKey"), help: appState.localized("help.apiKey")) {
+                        VStack(alignment: .trailing, spacing: 8) {
+                            HStack(spacing: 8) {
+                                SecureField(hasStoredKey ? appState.localized("settings.keyStored") : appState.localized("settings.keyMissing"), text: $apiKey)
+                                    .textFieldStyle(QuietTextFieldStyle())
+                                    .frame(width: 240)
+                                    .disabled(providerDisabled)
+                                Button(hasStoredKey ? appState.localized("settings.replaceKey") : appState.localized("settings.saveKey")) {
+                                    saveAPIKeyFromField()
+                                }
+                                .disabled(providerDisabled || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                .clickableCursor(enabled: !providerDisabled && !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                Button(appState.localized("settings.deleteKey")) {
+                                    deleteAPIKey()
+                                }
+                                .disabled(providerDisabled || !hasStoredKey)
+                                .clickableCursor(enabled: !providerDisabled && hasStoredKey)
+                            }
+
+                            Text(providerDisabled ? appState.localized("settings.notNeeded") : keyStatusText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                SettingsRow("") {
+                    HStack(spacing: 10) {
+                        Button(appState.localized("settings.testConnection")) {
+                            Task {
+                                if providerUsesSubscription {
+                                    await testSubscriptionConnection()
+                                } else {
+                                    await testConnection()
+                                }
+                            }
+                        }
+                        .disabled(providerDisabled || isTesting)
+                        .clickableCursor(enabled: !providerDisabled && !isTesting)
+
+                        if !status.isEmpty {
+                            Text(status)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                SettingsRow(appState.localized("settings.privacyMode"), help: appState.localized("help.privacyMode"), highlightKey: "ai.privacyMode") {
+                    Toggle("", isOn: $settings.aiPreferences.privacyMode)
+                        .labelsHidden()
+                        .disabled(providerDisabled)
+                }
+                SettingsRow(appState.localized("settings.inlineAutocomplete")) {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Toggle("", isOn: $settings.aiPreferences.enableInlineAutocomplete)
+                            .labelsHidden()
+                            .disabled(providerUsesSubscription)
+                        if providerUsesSubscription {
+                            Text(appState.localized("settings.ai.subscription.autocompleteNote"))
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: 320, alignment: .trailing)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
             }
 
-            SettingsRow(appState.localized("settings.privacyMode"), help: appState.localized("help.privacyMode"), highlightKey: "ai.privacyMode") {
-                Toggle("", isOn: $settings.aiPreferences.privacyMode)
-                    .labelsHidden()
-                    .disabled(providerDisabled)
-            }
-            SettingsRow(appState.localized("settings.inlineAutocomplete")) {
-                Toggle("", isOn: $settings.aiPreferences.enableInlineAutocomplete)
-                    .labelsHidden()
-            }
+            SubscriptionAISettingsView()
         }
         .task { loadKeyMetadata() }
         .onChange(of: settings.aiPreferences.provider) { oldProvider, newProvider in
             saveProviderConfiguration(oldProvider)
             appState.autocompleteProviderDidChange(from: oldProvider, to: newProvider)
+            if let kind = newProvider.agentCLIKind {
+                SubscriptionAISettingsStore.shared.settings.setDefaultKind(kind)
+            }
             apiKey = ""
             status = ""
             loadKeyMetadata()
@@ -759,6 +797,31 @@ private struct AISettings: View {
         }
         .onChange(of: settings.aiPreferences.enableInlineAutocomplete) { _, _ in
             appState.inlineAutocompletePreferenceDidChange()
+        }
+    }
+
+    private func testSubscriptionConnection() async {
+        isTesting = true
+        status = appState.localized("settings.ai.subscription.testing")
+        defer { isTesting = false }
+        let result = await SubscriptionAIRuntime.shared.probe()
+        switch result {
+        case let .reply(text):
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().contains("OK") {
+                status = appState.localized("settings.ai.subscription.probeSuccess")
+            } else {
+                status = String(
+                    format: appState.localized("settings.ai.subscription.probeReply"),
+                    String(text.prefix(200))
+                )
+            }
+        case .pending:
+            status = appState.localized("settings.ai.subscription.probePending")
+        case let .failure(message):
+            status = String(
+                format: appState.localized("settings.ai.subscription.probeFailure"),
+                message
+            )
         }
     }
 
@@ -957,7 +1020,7 @@ private struct AdvancedSettings: View {
     }
 }
 
-private struct SettingsSection<Content: View>: View {
+struct SettingsSection<Content: View>: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let title: String

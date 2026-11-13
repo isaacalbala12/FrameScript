@@ -896,6 +896,7 @@ final class EditorPersistenceTests: XCTestCase {
             hasAutocompleteStoredKey: true
         )
         appState.settings.aiPreferences.provider = .openAICompatible
+        appState.settings.aiPreferences.enableInlineAutocomplete = true
         let text = "This is enough editor context"
         let box = TextBox(text)
         let parent = makeRepresentable(
