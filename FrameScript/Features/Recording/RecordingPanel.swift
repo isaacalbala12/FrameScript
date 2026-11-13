@@ -3,7 +3,6 @@ import SwiftUI
 struct RecordingPanel: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
-    @State private var selectedLanguageCode = ""
     @State private var pendingDeletion: PendingTakeDeletion?
 
     private var recording: RecordingController { appState.recording }
@@ -37,7 +36,7 @@ struct RecordingPanel: View {
         .background(theme.panelBackground)
         .sheet(isPresented: $recording.isManualEntryPresented) {
             if let scene = appState.selectedScene {
-                ManualTakeSheet(scene: scene, languageCode: effectiveLanguage(for: scene))
+                ManualTakeSheet(scene: scene, languageCode: recording.effectiveLanguage(for: scene))
                     .environment(appState)
                     .environment(\.frameTheme, theme)
             }
@@ -59,9 +58,6 @@ struct RecordingPanel: View {
             }
         } message: { _ in
             Text(appState.localized("recording.take.delete.message"))
-        }
-        .onChange(of: appState.selectedScene?.id) { _, _ in
-            selectedLanguageCode = ""
         }
     }
 
@@ -222,7 +218,11 @@ struct RecordingPanel: View {
     // MARK: Scene
 
     private func sceneCard(_ scene: Scene, recording: RecordingController) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let previewText = recording.text(
+            in: scene,
+            languageCode: recording.effectiveLanguage(for: scene)
+        )
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(appState.localized("recording.scene.current"))
                     .font(.system(size: 11, weight: .medium))
@@ -265,7 +265,10 @@ struct RecordingPanel: View {
                         .font(.system(size: 11))
                         .foregroundStyle(theme.secondaryText)
                     Spacer()
-                    Picker("", selection: $selectedLanguageCode) {
+                    Picker("", selection: Binding(
+                        get: { recording.effectiveLanguage(for: scene) },
+                        set: { recording.selectedLanguageCode = $0 }
+                    )) {
                         Text(appState.localized("recording.scene.originalLanguage")).tag("")
                         ForEach(scene.languageVariants, id: \.languageCode) { variant in
                             Text(languageName(variant.languageCode)).tag(variant.languageCode)
@@ -280,11 +283,11 @@ struct RecordingPanel: View {
             Text(appState.localized("recording.scene.textPreview"))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(theme.secondaryText)
-            Text(scene.scriptText.isEmpty
+            Text(previewText.isEmpty
                  ? appState.localized("recording.scene.emptyText")
-                 : scene.scriptText)
+                 : previewText)
                 .font(.system(size: 11))
-                .foregroundStyle(scene.scriptText.isEmpty ? theme.tertiaryText : theme.primaryText)
+                .foregroundStyle(previewText.isEmpty ? theme.tertiaryText : theme.primaryText)
                 .lineLimit(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(8)
@@ -329,13 +332,6 @@ struct RecordingPanel: View {
 
     private func languageName(_ code: String) -> String {
         Locale.current.localizedString(forLanguageCode: code)?.capitalized ?? code.uppercased()
-    }
-
-    private func effectiveLanguage(for scene: Scene) -> String {
-        guard !selectedLanguageCode.isEmpty else { return "" }
-        return scene.languageVariants.contains {
-            $0.languageCode.caseInsensitiveCompare(selectedLanguageCode) == .orderedSame
-        } ? selectedLanguageCode : ""
     }
 
     // MARK: Latest take
@@ -489,6 +485,9 @@ struct RecordingPanel: View {
                     .foregroundStyle(appState.hasNextScene ? theme.accent.color : theme.tertiaryText)
                     .disabled(!appState.hasNextScene)
                 }
+            } else if recording.phase.isActive {
+                // The scene can disappear mid-take; keep a stop affordance.
+                stopOnlyButton(recording)
             } else {
                 Text(appState.localized("recording.error.noScene"))
                     .font(.system(size: 11))
@@ -498,15 +497,43 @@ struct RecordingPanel: View {
         .padding(12)
     }
 
+    private func stopOnlyButton(_ recording: RecordingController) -> some View {
+        Button {
+            Task { await recording.stopTake() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 12, weight: .bold))
+                Text(appState.localized("recording.stop"))
+                    .font(.system(size: 13, weight: .semibold))
+                if recording.phase.isRecording {
+                    Text(DurationEstimator.formatted(recording.elapsed))
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(theme.destructive)
+            }
+            .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .disabled(recording.phase == .stopping)
+    }
+
     private func recordButton(_ scene: Scene, recording: RecordingController) -> some View {
         Button {
-            let language = effectiveLanguage(for: scene)
+            let language = recording.effectiveLanguage(for: scene)
             switch recording.phase {
             case .countdown:
                 recording.cancelCountdown()
             case .idle, .recording:
                 Task { await recording.toggleRecording(sceneID: scene.id, languageCode: language) }
-            case .starting, .stopping:
+            case .starting:
+                Task { await recording.stopTake() }
+            case .stopping:
                 break
             }
         } label: {

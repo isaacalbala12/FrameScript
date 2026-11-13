@@ -22,10 +22,19 @@ extension AppState {
     /// Menu, toolbar and command palette entry point. Opens the panel so a
     /// connection problem is visible instead of silent.
     func toggleRecordingTake() {
-        guard let scene = selectedScene else { return }
         recording.isPanelVisible = true
+        // Keep the menu/⌘R path able to stop even if the selected scene was
+        // deleted while the take was running.
+        if recording.phase.isActive {
+            Task { [weak self] in
+                await self?.recording.stopTake()
+            }
+            return
+        }
+        guard let scene = selectedScene else { return }
+        let language = recording.effectiveLanguage(for: scene)
         Task { [weak self] in
-            await self?.recording.toggleRecording(sceneID: scene.id)
+            await self?.recording.toggleRecording(sceneID: scene.id, languageCode: language)
         }
     }
 

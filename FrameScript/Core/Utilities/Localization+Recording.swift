@@ -89,7 +89,7 @@ extension L10n {
             "recording.take.delete.confirm": "Delete Take",
             "recording.take.interrupted": "Interrupted",
             "recording.take.interruptedNote": "Recording interrupted: the connection to OBS was lost.",
-            "recording.take.stopFailedNote": "The end of the recording could not be confirmed: %@. Check OBS for the file.",
+            "recording.take.stopFailedNote": "The end of the recording could not be confirmed. Check OBS for the file.",
             "recording.take.quitNote": "Recording stopped because FrameScript quit.",
 
             "recording.takes.title": "Takes",
@@ -202,7 +202,7 @@ extension L10n {
             "recording.take.delete.confirm": "Eliminar toma",
             "recording.take.interrupted": "Interrumpida",
             "recording.take.interruptedNote": "Grabación interrumpida: se perdió la conexión con OBS.",
-            "recording.take.stopFailedNote": "No se pudo confirmar el final de la grabación: %@. Revisa el archivo en OBS.",
+            "recording.take.stopFailedNote": "No se pudo confirmar el final de la grabación. Revisa el archivo en OBS.",
             "recording.take.quitNote": "Grabación detenida al cerrar FrameScript.",
 
             "recording.takes.title": "Tomas",
@@ -315,7 +315,7 @@ extension L10n {
             "recording.take.delete.confirm": "Удалить дубль",
             "recording.take.interrupted": "Прерван",
             "recording.take.interruptedNote": "Запись прервана: соединение с OBS потеряно.",
-            "recording.take.stopFailedNote": "Не удалось подтвердить завершение записи: %@. Проверь файл в OBS.",
+            "recording.take.stopFailedNote": "Не удалось подтвердить завершение записи. Проверь файл в OBS.",
             "recording.take.quitNote": "Запись остановлена при выходе из FrameScript.",
 
             "recording.takes.title": "Дубли",

@@ -32,6 +32,7 @@ final class OBSPreferencesStore {
     }
 
     private let defaults: UserDefaults
+    private let secretStore: any OBSSecretStoring
 
     var host: String {
         didSet { defaults.set(host, forKey: Key.host) }
@@ -45,28 +46,36 @@ final class OBSPreferencesStore {
         didSet { defaults.set(autoConnect, forKey: Key.autoConnect) }
     }
 
-    /// Loaded from the dedicated `FrameScript.OBS` Keychain service.
-    private(set) var password: String
+    /// Loaded lazily: launch never blocks on Keychain. `connect()` and the OBS
+    /// settings sheet call `loadPasswordIfNeeded()`.
+    private(set) var password = ""
+    private(set) var hasLoadedPassword = false
     /// Set when the Keychain read failed, so the settings sheet can explain why
     /// the password field is empty.
     private(set) var keychainReadFailed = false
 
-    /// `loadPassword: false` keeps tests away from the user's Keychain.
-    init(defaults: UserDefaults = .standard, loadPassword: Bool = true) {
+    init(
+        defaults: UserDefaults = .standard,
+        secretStore: any OBSSecretStoring = KeychainOBSSecretStore()
+    ) {
         self.defaults = defaults
+        self.secretStore = secretStore
         host = defaults.string(forKey: Key.host) ?? Self.defaultHost
         let storedPort = defaults.integer(forKey: Key.port)
         port = storedPort > 0 ? storedPort : Self.defaultPort
         autoConnect = defaults.bool(forKey: Key.autoConnect)
-        if loadPassword {
-            do {
-                password = try KeychainStore.readOBSWebSocketPassword() ?? ""
-            } catch {
-                password = ""
-                keychainReadFailed = true
-            }
-        } else {
+    }
+
+    /// Reads the Keychain at most once. A failed read is not retried on every
+    /// keystroke; saving a new password clears the failure.
+    func loadPasswordIfNeeded() {
+        guard !hasLoadedPassword else { return }
+        hasLoadedPassword = true
+        do {
+            password = try secretStore.readPassword() ?? ""
+        } catch {
             password = ""
+            keychainReadFailed = true
         }
     }
 
@@ -99,11 +108,13 @@ final class OBSPreferencesStore {
             throw OBSPreferencesError.invalidPort
         }
 
+        // Compare against the real stored value, not an unloaded empty string.
+        loadPasswordIfNeeded()
         if newPassword != password {
-            try KeychainStore.saveOBSWebSocketPassword(newPassword)
+            try secretStore.savePassword(newPassword)
             password = newPassword
+            keychainReadFailed = false
         }
-        keychainReadFailed = false
         host = trimmedHost
         port = parsedPort
         autoConnect = newAutoConnect

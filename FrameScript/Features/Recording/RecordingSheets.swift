@@ -2,6 +2,20 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// OBS can write Matroska (`.mkv`), which is a dynamic UTType on most systems
+/// and does not conform to `.movie`. Keep the standard movie types and add the
+/// Matroska extension explicitly so those takes can be registered by hand.
+enum TakeFileSelection {
+    static var allowedContentTypes: [UTType] {
+        var types: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .audiovisualContent]
+        if let mkv = UTType(filenameExtension: "mkv"),
+           !types.contains(where: { $0.identifier == mkv.identifier }) {
+            types.append(mkv)
+        }
+        return types
+    }
+}
+
 // MARK: - OBS settings
 
 struct OBSSettingsSheet: View {
@@ -144,6 +158,7 @@ struct OBSSettingsSheet: View {
         guard !didLoad else { return }
         didLoad = true
         let preferences = appState.recording.preferences
+        preferences.loadPasswordIfNeeded()
         host = preferences.host
         portText = String(preferences.port)
         password = preferences.password
@@ -173,7 +188,7 @@ struct OBSSettingsSheet: View {
             if succeeded {
                 testState = .success
             } else {
-                let issue = appState.recording.connectionIssue ?? .connectionFailed("")
+                let issue = appState.recording.testConnectionIssue ?? .connectionFailed("")
                 testState = .failure(issue.message(language: appState.currentLanguage))
             }
         }
@@ -327,7 +342,7 @@ struct ManualTakeSheet: View {
 
     private func chooseFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.allowedContentTypes = TakeFileSelection.allowedContentTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true

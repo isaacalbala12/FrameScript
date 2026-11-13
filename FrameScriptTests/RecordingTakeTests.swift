@@ -1,5 +1,7 @@
 import Foundation
 import FrameScriptCore
+import Security
+import UniformTypeIdentifiers
 @testable import FrameScript
 import XCTest
 
@@ -143,8 +145,229 @@ final class RecordingTakeTests: XCTestCase {
         await fixture.controller.stopTake()
 
         XCTAssertEqual(fixture.scene.takes.count, 1)
-        XCTAssertTrue(fixture.scene.takes[0].note.hasPrefix(RecordingController.interruptedNoteMarker))
+        let note = fixture.scene.takes[0].note
+        XCTAssertTrue(note.hasPrefix(RecordingController.interruptedNoteMarker))
+        XCTAssertEqual(note.components(separatedBy: RecordingController.interruptedNoteMarker).count - 1, 1)
+        XCTAssertFalse(note.contains("No se pudo detener"))
         XCTAssertEqual(fixture.scene.takes[0].duration, 3, accuracy: 0.001)
+    }
+
+    func testConcurrentStartCommandsOnlyStartOBSOnce() async {
+        let fixture = makeFixture(sceneText: "Concurrente")
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.client.setStateCheckDelay(50_000_000)
+
+        let controller = fixture.controller
+        let sceneID = fixture.scene.id
+        let first = Task { @MainActor in
+            await controller.startTake(sceneID: sceneID)
+        }
+        let second = Task { @MainActor in
+            await controller.startTake(sceneID: sceneID)
+        }
+        await first.value
+        await second.value
+
+        let startCount = await fixture.client.startCount
+        XCTAssertEqual(startCount, 1)
+        XCTAssertTrue(fixture.controller.phase.isRecording)
+        await fixture.controller.stopTake()
+    }
+
+    func testStopRequestedWhileStartingIsHonoured() async {
+        let fixture = makeFixture(sceneText: "Parar durante el arranque")
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.client.setStartDelay(120_000_000)
+
+        let startTask = Task { await fixture.controller.startTake(sceneID: fixture.scene.id) }
+        await waitForStartInFlight(fixture.client)
+        XCTAssertEqual(fixture.controller.phase, .starting)
+
+        await fixture.controller.stopTake()
+        await startTask.value
+
+        let stopCount = await fixture.client.stopCount
+        let startCount = await fixture.client.startCount
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(fixture.controller.phase, .idle)
+        XCTAssertEqual(fixture.scene.takes.count, 1)
+    }
+
+    func testQuitDuringStartingStopsOBSAndFinalizesTheTakeBeforeSave() async throws {
+        let fixture = makeFixture(sceneText: "Salir arrancando")
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.client.setStartDelay(120_000_000)
+
+        let startTask = Task { await fixture.controller.startTake(sceneID: fixture.scene.id) }
+        await waitForStartInFlight(fixture.client)
+        await fixture.controller.prepareForTermination()
+        await startTask.value
+
+        let startCount = await fixture.client.startCount
+        let stopCount = await fixture.client.stopCount
+        XCTAssertEqual(startCount, 1)
+        XCTAssertEqual(stopCount, 1)
+        XCTAssertEqual(fixture.controller.phase, .idle)
+        XCTAssertEqual(fixture.scene.takes.count, 1)
+        XCTAssertFalse(fixture.scene.takes[0].note.hasPrefix(RecordingController.interruptedNoteMarker))
+
+        let project = FrameProject(title: "Quit", scenes: [fixture.scene])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecordingTakeTests-\(UUID().uuidString).fscr")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try FrameScriptFileStore.write(project: project, to: url)
+        let loaded = try FrameScriptFileStore.read(from: url)
+        XCTAssertEqual(loaded.scenes.first?.takes.count, 1)
+    }
+
+    func testTerminationHelperFinalizesTheTakeBeforeSavingTheProject() async throws {
+        let fixture = makeFixture(sceneText: "Cierre con guardado")
+        let project = FrameProject(title: "Termination", scenes: [fixture.scene])
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecordingTakeTests-\(UUID().uuidString).fscr")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let appState = AppState(
+            recording: fixture.controller,
+            closeConfirmation: { .save }
+        )
+        appState.projectStore.openProject(project, fileURL: url, wordsPerMinute: 120, markUnsaved: false)
+
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.controller.startTake(sceneID: fixture.scene.id)
+        fixture.controller.now = { Date().addingTimeInterval(5) }
+
+        let delegate = FrameScriptAppDelegate()
+        let shouldTerminate = await delegate.terminationShouldProceed(appState: appState)
+        XCTAssertTrue(shouldTerminate)
+
+        let loaded = try FrameScriptFileStore.read(from: url)
+        XCTAssertEqual(loaded.scenes.first?.takes.count, 1)
+        XCTAssertEqual(loaded.scenes.first?.takes.first?.readText, "Cierre con guardado")
+    }
+
+    func testReconnectAdoptsOBSRecordingInsteadOfDuplicatingTheTake() async throws {
+        let fixture = makeFixture(sceneText: "Reconexión")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        fixture.controller.now = { start }
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.controller.startTake(sceneID: fixture.scene.id)
+        fixture.controller.now = { start.addingTimeInterval(10) }
+        fixture.controller.handleConnectionState(.disconnected)
+        XCTAssertEqual(fixture.scene.takes.count, 1)
+        XCTAssertTrue(fixture.scene.takes[0].filePath.isEmpty)
+
+        await fixture.client.setRecordStatus(outputDuration: 30)
+        fixture.controller.now = { start.addingTimeInterval(40) }
+        let reconnected = await fixture.controller.connect()
+        XCTAssertTrue(reconnected)
+        let statusCount = await fixture.client.getRecordStatusCount
+        XCTAssertGreaterThan(statusCount, 0)
+        XCTAssertTrue(fixture.controller.phase.isRecording)
+
+        await fixture.controller.stopTake()
+        XCTAssertEqual(fixture.scene.takes.count, 1)
+        let take = try XCTUnwrap(fixture.scene.takes.first)
+        XCTAssertEqual(take.filePath, "/tmp/framescript-fake-take.mov")
+        XCTAssertEqual(take.duration, 30, accuracy: 0.001)
+        XCTAssertFalse(take.note.hasPrefix(RecordingController.interruptedNoteMarker))
+    }
+
+    func testTestConnectionUsesASeparateClientAndLeavesTheLiveSessionAlone() async {
+        let live = FakeOBSClient()
+        let probe = FakeOBSClient()
+        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let preferences = OBSPreferencesStore(defaults: defaults, secretStore: FakeOBSSecretStore())
+        let controller = RecordingController(
+            client: live,
+            clientFactory: { probe },
+            preferences: preferences,
+            defaults: defaults
+        )
+        controller.countdownEnabled = false
+        let scene = Scene(
+            order: 0,
+            sectionType: .hook,
+            title: "Hook",
+            scriptText: "Prueba"
+        )
+        let sceneID = scene.id
+        controller.attach(RecordingController.Gateway(
+            scene: { id in id == sceneID ? scene : nil },
+            markProjectChanged: {},
+            language: { .spanish }
+        ))
+
+        let connected = await controller.connect()
+        XCTAssertTrue(connected)
+        let succeeded = await controller.testConnection(host: "localhost", port: 4455, password: "")
+        XCTAssertTrue(succeeded)
+
+        let liveConnects = await live.connectCount
+        let probeConnects = await probe.connectCount
+        let liveDisconnects = await live.disconnectCount
+        XCTAssertEqual(liveConnects, 1)
+        XCTAssertEqual(probeConnects, 1)
+        XCTAssertEqual(liveDisconnects, 0)
+        XCTAssertTrue(controller.connectionState.isConnected)
+    }
+
+    func testExternalStopWithoutPathFallsBackToLastKnownPathAndStatusDuration() async throws {
+        let fixture = makeFixture(sceneText: "Parada externa")
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        fixture.controller.now = { start }
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+        await fixture.controller.startTake(sceneID: fixture.scene.id)
+        await fixture.controller.handleEvent(.recordStateChanged(OBSRecordStateChanged(
+            outputActive: true,
+            outputState: .started,
+            outputPath: "/tmp/known-from-event.mov"
+        )))
+        await fixture.client.setRecordStatus(outputDuration: 7)
+
+        await fixture.controller.handleEvent(.recordStateChanged(OBSRecordStateChanged(
+            outputActive: false,
+            outputState: .stopped,
+            outputPath: nil
+        )))
+
+        let take = try XCTUnwrap(fixture.scene.takes.first)
+        XCTAssertEqual(take.filePath, "/tmp/known-from-event.mov")
+        XCTAssertEqual(take.duration, 7, accuracy: 0.001)
+    }
+
+    func testMenuShortcutRecordsTheSelectedLanguageVariant() async throws {
+        let fixture = makeFixture(sceneText: "Texto original")
+        fixture.scene.languageVariants = [SceneLanguageVariant(
+            languageCode: "en",
+            text: "English menu text",
+            takes: [Take(number: 5, startedAt: Date(timeIntervalSince1970: 1_700_000_000), languageCode: "en")]
+        )]
+        let project = FrameProject(title: "Menu", scenes: [fixture.scene])
+        let appState = AppState(recording: fixture.controller)
+        appState.projectStore.openProject(project, fileURL: nil, wordsPerMinute: 120, markUnsaved: true)
+        appState.setEditorContextAfterFlush(sceneID: fixture.scene.id, mode: .script)
+        fixture.controller.selectedLanguageCode = "en"
+        let connected = await fixture.controller.connect()
+        XCTAssertTrue(connected)
+
+        appState.toggleRecordingTake()
+        await waitForRecording(fixture.controller)
+        XCTAssertTrue(fixture.controller.phase.isRecording)
+        await fixture.controller.stopTake()
+
+        let variantTake = try XCTUnwrap(fixture.scene.languageVariants.first?.takes.last)
+        XCTAssertEqual(variantTake.number, 6)
+        XCTAssertEqual(variantTake.languageCode, "en")
+        XCTAssertEqual(variantTake.readText, "English menu text")
     }
 
     func testManualTakeUsesNextNumberAndKeepsSelectedFile() {
@@ -230,6 +453,76 @@ final class RecordingTakeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
     }
 
+    func testOBSKeychainWriteUpdatesInsteadOfDeleting() throws {
+        var added = false
+        try OBSKeychainWrite.save(
+            update: { errSecSuccess },
+            add: { added = true; return errSecSuccess }
+        )
+        XCTAssertFalse(added)
+    }
+
+    func testOBSKeychainWriteAddsOnlyWhenItemIsMissing() throws {
+        var added = false
+        try OBSKeychainWrite.save(
+            update: { errSecItemNotFound },
+            add: { added = true; return errSecSuccess }
+        )
+        XCTAssertTrue(added)
+    }
+
+    func testOBSKeychainWriteLeavesOldItemWhenUpdateFails() {
+        var added = false
+        XCTAssertThrowsError(try OBSKeychainWrite.save(
+            update: { errSecAuthFailed },
+            add: { added = true; return errSecSuccess }
+        ))
+        XCTAssertFalse(added)
+    }
+
+    func testOBSKeychainReadIsLazyAndOnlyHappensOnce() {
+        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let secrets = FakeOBSSecretStore()
+        secrets.password = "secreto"
+        let preferences = OBSPreferencesStore(defaults: defaults, secretStore: secrets)
+
+        XCTAssertEqual(secrets.readCount, 0)
+        XCTAssertFalse(preferences.hasLoadedPassword)
+        preferences.loadPasswordIfNeeded()
+        preferences.loadPasswordIfNeeded()
+        XCTAssertEqual(secrets.readCount, 1)
+        XCTAssertEqual(preferences.password, "secreto")
+    }
+
+    func testFailedPasswordSaveKeepsThePreviousPassword() {
+        let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: suiteName)
+        let secrets = FakeOBSSecretStore()
+        secrets.password = "old"
+        let preferences = OBSPreferencesStore(defaults: defaults, secretStore: secrets)
+        preferences.loadPasswordIfNeeded()
+        secrets.saveError = FakeSecretError()
+
+        XCTAssertThrowsError(try preferences.apply(
+            host: "localhost",
+            portText: "4455",
+            autoConnect: false,
+            password: "new"
+        ))
+        XCTAssertEqual(preferences.password, "old")
+        XCTAssertEqual(secrets.password, "old")
+    }
+
+    func testManualTakeFilePickerAcceptsMatroska() throws {
+        let mkv = try XCTUnwrap(UTType(filenameExtension: "mkv"))
+        XCTAssertTrue(TakeFileSelection.allowedContentTypes.contains {
+            $0.identifier == mkv.identifier
+        })
+    }
+
     func testEveryRecordingStringExistsInEnglishSpanishAndRussian() {
         let english = L10n.recordingStrings[.english] ?? [:]
         let spanish = L10n.recordingStrings[.spanish] ?? [:]
@@ -269,11 +562,27 @@ final class RecordingTakeTests: XCTestCase {
         var count = 0
     }
 
+    private func waitForStartInFlight(_ client: FakeOBSClient) async {
+        for _ in 0..<200 {
+            if await client.isStartInFlight { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("startRecord was never entered")
+    }
+
+    private func waitForRecording(_ controller: RecordingController) async {
+        for _ in 0..<200 {
+            if controller.phase.isRecording { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("recording never started")
+    }
+
     private func makeFixture(sceneText: String) -> Fixture {
         let suiteName = "RecordingTakeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard
         defaults.removePersistentDomain(forName: suiteName)
-        let preferences = OBSPreferencesStore(defaults: defaults, loadPassword: false)
+        let preferences = OBSPreferencesStore(defaults: defaults, secretStore: FakeOBSSecretStore())
         let client = FakeOBSClient()
         let controller = RecordingController(
             client: client,
@@ -306,10 +615,17 @@ private actor FakeOBSClient: OBSRecordingClient {
     private(set) var state: OBSConnectionState = .disconnected
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var connectCount = 0
+    private(set) var disconnectCount = 0
+    private(set) var getRecordStatusCount = 0
     private(set) var programScenes: [String] = []
+    private(set) var isStartInFlight = false
     private var startFailure: OBSError?
     private var stopFailure: OBSError?
     private var connectFailure: OBSError?
+    private var stateCheckDelayNanos: UInt64?
+    private var startDelayNanos: UInt64?
+    private var reportedDuration: TimeInterval = 0
     var outputPath = "/tmp/framescript-fake-take.mov"
     var sceneList = OBSSceneList(
         currentProgramSceneName: "Camara",
@@ -330,10 +646,19 @@ private actor FakeOBSClient: OBSRecordingClient {
     func setStartFailure(_ error: OBSError?) { startFailure = error }
     func setStopFailure(_ error: OBSError?) { stopFailure = error }
     func setConnectFailure(_ error: OBSError?) { connectFailure = error }
+    func setStateCheckDelay(_ nanos: UInt64?) { stateCheckDelayNanos = nanos }
+    func setStartDelay(_ nanos: UInt64?) { startDelayNanos = nanos }
+    func setRecordStatus(outputDuration: TimeInterval) { reportedDuration = outputDuration }
 
-    func currentConnectionState() async -> OBSConnectionState { state }
+    func currentConnectionState() async -> OBSConnectionState {
+        if let stateCheckDelayNanos {
+            try? await Task.sleep(nanoseconds: stateCheckDelayNanos)
+        }
+        return state
+    }
 
     func connect(config: OBSConnectionConfig) async throws {
+        connectCount += 1
         if let connectFailure { throw connectFailure }
         state = .connected(OBSSessionInfo(
             obsStudioVersion: "30.0.0",
@@ -344,6 +669,7 @@ private actor FakeOBSClient: OBSRecordingClient {
     }
 
     func disconnect() async {
+        disconnectCount += 1
         state = .disconnected
     }
 
@@ -354,6 +680,11 @@ private actor FakeOBSClient: OBSRecordingClient {
     }
 
     func startRecord() async throws {
+        isStartInFlight = true
+        defer { isStartInFlight = false }
+        if let startDelayNanos {
+            try? await Task.sleep(nanoseconds: startDelayNanos)
+        }
         if let startFailure { throw startFailure }
         startCount += 1
     }
@@ -365,12 +696,31 @@ private actor FakeOBSClient: OBSRecordingClient {
     }
 
     func getRecordStatus() async throws -> OBSRecordStatus {
-        OBSRecordStatus(
+        getRecordStatusCount += 1
+        return OBSRecordStatus(
             outputActive: startCount > stopCount,
             outputPaused: false,
             outputTimecode: "",
-            outputDuration: 0,
+            outputDuration: Int(reportedDuration * 1_000),
             outputBytes: 0
         )
     }
 }
+
+private final class FakeOBSSecretStore: OBSSecretStoring, @unchecked Sendable {
+    var password: String?
+    var readCount = 0
+    var saveError: Error?
+
+    func readPassword() throws -> String? {
+        readCount += 1
+        return password
+    }
+
+    func savePassword(_ password: String) throws {
+        if let saveError { throw saveError }
+        self.password = password
+    }
+}
+
+private struct FakeSecretError: Error {}
