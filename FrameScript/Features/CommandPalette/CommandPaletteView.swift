@@ -30,6 +30,12 @@ struct CommandPaletteView: View {
                 appState.settings.editorPreferences.showAIReviewPanel = true
                 Task { await appState.analyzeSelectedScene() }
             },
+            PaletteResult(title: appState.localized("menu.generateHook"), detail: shortcut(.generateHook)) {
+                HookSheetPresenter.shared.presentAfterPaletteDismissal(.hook)
+            },
+            PaletteResult(title: appState.localized("menu.suggestRehooks"), detail: shortcut(.suggestRehooks)) {
+                HookSheetPresenter.shared.presentAfterPaletteDismissal(.rehook)
+            },
             PaletteResult(title: appState.localized("command.openSettings"), detail: shortcut(.openSettings), action: {
                 appState.openSettings(tab: .general)
                 openSettings()

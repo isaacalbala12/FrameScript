@@ -179,6 +179,8 @@ enum AITask: String, Codable, Hashable {
     case analyze
     case bRollGeneration
     case editingGeneration
+    case hook
+    case rehook
 }
 
 @MainActor
@@ -202,7 +204,37 @@ struct MockLLMProvider: LLMProviderProtocol {
             return LLMResponse(text: russian
                 ? #"{"description":"Сохраните прямые склейки и легкие приближения.","notes":"Оставьте в субтитрах только ключевые слова."}"#
                 : #"{"description":"Keep hard cuts and subtle punch-ins.","notes":"Use keyword-only captions."}"#)
+        case .hook:
+            return LLMResponse(text: russian
+                ? #"{"hooks":[{"angle":"контраст","text":"Новый патч обещает больше, чем даёт. Проблема в одном изменении, о котором никто не говорит.","onScreenText":"Что изменилось?"}]}"#
+                : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
+        case .rehook:
+            return Self.rehookResponse(for: request.userPrompt, russian: russian)
         }
+    }
+
+    /// Builds a valid bridge response from the first anchor in the prompt so
+    /// the mock never returns an empty anchor when multiple positions exist.
+    static func rehookResponse(for userPrompt: String, russian: Bool = false) -> LLMResponse {
+        let text = russian
+            ? "Но есть вторая деталь, которая меняет весь расклад."
+            : "Pero hay una segunda pieza que cambia todo el planteamiento."
+        let anchor = firstAnchor(in: userPrompt) ?? ""
+        let payload: [String: Any] = ["bridges": [["text": text, "anchor": anchor]]]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return LLMResponse(text: #"{"bridges":[]}"#)
+        }
+        return LLMResponse(text: json)
+    }
+
+    static func firstAnchor(in userPrompt: String) -> String? {
+        for line in userPrompt.components(separatedBy: .newlines) {
+            guard let range = line.range(of: "Anchor:") else { continue }
+            let value = line[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { return value }
+        }
+        return nil
     }
 }
 
@@ -252,13 +284,7 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
             ],
             temperature: request.temperature,
             maxTokens: request.maxTokens,
-            responseFormat: request.task == .analyze
-                ? AnalysisStructuredOutputCapability.resolve(
-                    provider: request.provider,
-                    model: request.model,
-                    baseURL: request.baseURL
-                ).responseFormat
-                : nil
+            responseFormat: Self.responseFormat(for: request)
         ))
 
         let (data, response) = try await send(urlRequest)
@@ -369,6 +395,25 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
             throw LLMProviderError.invalidBaseURL
         }
         return url
+    }
+
+    /// Analysis asks for a strict schema when the provider supports one.
+    /// Hooks and re-hooks only need a JSON object; they are parsed tolerantly,
+    /// so a provider that cannot enforce JSON gets plain prompt-only output.
+    private static func responseFormat(for request: LLMRequest) -> ChatResponseFormat? {
+        let capability = AnalysisStructuredOutputCapability.resolve(
+            provider: request.provider,
+            model: request.model,
+            baseURL: request.baseURL
+        )
+        switch request.task {
+        case .analyze:
+            return capability.responseFormat
+        case .hook, .rehook:
+            return capability == .promptOnly ? nil : .jsonObject
+        default:
+            return nil
+        }
     }
 
     static func googleModelURL(model: String) throws -> URL {
@@ -744,6 +789,45 @@ struct PromptBuilder {
             "Generate practical visual or shot ideas that strengthen the meaning of the script. \(languageInstruction)"
         case .editingGeneration:
             "Generate restrained YouTube editing notes. Avoid timeline complexity. \(languageInstruction)"
+        case .hook:
+            """
+            You write the first 15 seconds of a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, dry, tuteo for the viewer; never ustedes, "acá", "celular" or "computadora"; no corporate filler. If the script is in another language, keep this voice in that language.
+
+            Return exactly one JSON object:
+            {"hooks":[{"angle":"pregunta","text":"…","onScreenText":"…"}]}
+
+            Produce 3 to 5 hooks, each with a different angle. "angle" must be exactly one of pregunta, contraste, dato, promesa, polémica — canonical labels, never translated (the app localizes them).
+            Rules:
+            - Never exceed the word budget in the user message; aim for 80–100 % of it. That budget already uses the real speaking rate, so ignore generic wpm figures.
+            - Use only numbers, dates, prices and experiences that appear in the supplied material. If the script hedges, the hook hedges. Never invent facts, sources or first-hand claims, and never promise something the video does not deliver.
+            - Never start with a greeting, the channel name, "en el vídeo de hoy", "hoy te traigo", "en este vídeo", "vamos a ver", "no olvides suscribirte" or the equivalent in any language. No CTA.
+            - Open on the thesis, the conflict, a supplied number or the promise. First sentence 12 words or fewer; one idea per sentence.
+            - Banned: "en conclusión", "en resumen", "sumérgete", "descubre", "sin lugar a dudas", "hoy en día", "el mundo del simracing", "no te lo pierdas", "como todos sabemos", "es importante destacar"; apply the same ban in any language.
+            - "dato" and "polémica" only when the script already contains the number or the conflict; otherwise pick another angle. Never fabricate either.
+            - End with tension the video resolves: a kept promise, a withheld number, or a question the first scene answers. Vary the ending across alternatives.
+            - The hook replaces the opening paragraph: it must stand alone, must not refer to earlier text and must not end mid-thought.
+            - "text" is spoken narration only: plain text, no Markdown, no quotes, no brackets, no line breaks. "onScreenText" is 2 to 4 words in the script language, no final period, never a copy of "text", or "".
+            - Units: km/h, CV, Nm, kg, litros, €; decimal comma. At most one Spain colloquialism ("menuda liada", "ojo", "ni de broma").
+            Style reference, do not copy: "La idea parece sencilla hasta que miras el detalle que cambia la decisión."
+            Respond only in \(languageName).
+            """
+        case .rehook:
+            """
+            You write re-engagement bridges for a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, tuteo, short sentences, dry humour. Keep the script's language.
+
+            Return exactly one JSON object:
+            {"bridges":[{"text":"…","anchor":"…"}]}
+
+            The bridge is spoken IMMEDIATELY BEFORE the anchor sentence: it sets that sentence up, it does not comment on or summarise it. Produce 1 or 2 bridges per supplied anchor.
+            Rules:
+            - Never exceed the word budget in the user message; aim for 80–100 % of it. It already uses the real speaking rate, so ignore generic wpm figures.
+            - Never start with "además", "también", "por otro lado", "dicho esto" or their equivalent in another language.
+            - No structure announcements: no "en un minuto", "más adelante", "al final del vídeo".
+            - Do not repeat the anchor, do not summarise the previous block, and add no fact, number or experience that is not in the supplied material.
+            - Create one concrete promise or open question that the next few sentences answer. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza…" are welcome only when they fit.
+            - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
+            Respond only in \(languageName).
+            """
         }
     }
 
