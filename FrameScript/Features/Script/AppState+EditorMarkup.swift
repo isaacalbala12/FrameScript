@@ -28,10 +28,32 @@ extension AppState {
     func refreshDurationEstimates() {
         guard hasOpenProject else { return }
         for scene in project.scenes {
-            projectStore.updateSceneMetricsUsingMarkup(
-                sceneID: scene.id,
-                configuration: durationConfiguration(for: scene)
+            let configuration = durationConfiguration(for: scene)
+            let estimate = ScriptMarkup.estimate(
+                scene.scriptText,
+                wordsPerMinute: configuration.wordsPerMinute,
+                defaults: configuration.pauseDefaults
             )
+            scene.estimatedDuration = estimate.duration
+            SceneMetricsCache.shared.store(estimate, for: scene.id)
+        }
+    }
+
+    /// Debounced word-count and duration update for a text edit. Keeps typing
+    /// independent of script size: the single parse runs off the main actor
+    /// once the user stops.
+    func scheduleSceneMetricsUpdate(
+        sceneID: UUID,
+        delay: Duration = .milliseconds(350)
+    ) {
+        guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
+        SceneMetricsDebouncer.shared.schedule(
+            sceneID: sceneID,
+            text: scene.scriptText,
+            configuration: durationConfiguration(for: scene),
+            delay: delay
+        ) { [weak scene] estimate in
+            scene?.estimatedDuration = estimate.duration
         }
     }
 }

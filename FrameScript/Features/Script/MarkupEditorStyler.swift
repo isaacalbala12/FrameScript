@@ -9,32 +9,93 @@ struct MarkupEditorPalette: Equatable {
     var delimiterColor: NSColor
     var pauseColor: NSColor
     var pauseBackground: NSColor
+    /// Effective (opaque) pill color used to check text contrast.
+    var pauseSurface: NSColor
     var cueColor: NSColor
     var cueBackground: NSColor
+    var cueSurface: NSColor
     var cueFont: NSFont
     var emphasisFont: NSFont
     var strongFont: NSFont
     var rhythmColor: NSColor
+
+    /// Marker-text contrast target. Slightly above WCAG AA (4.5) so color
+    /// conversions and rounded pill compositing never dip below the limit.
+    static let minimumMarkerContrast: CGFloat = 4.6
+
     @MainActor
     init(
         fontSize: Double,
         textColor: NSColor,
         secondaryColor: NSColor,
         accentColor: NSColor,
-        rhythmColor: NSColor
+        rhythmColor: NSColor,
+        backgroundColor: NSColor
     ) {
         let base = NSFont.systemFont(ofSize: fontSize)
+        let surface = Self.opaque(backgroundColor)
+        let secondary = Self.opaque(secondaryColor)
+        let accent = Self.opaque(accentColor)
+        let pauseSurface = surface.blended(withFraction: 0.14, of: accent) ?? surface
+        let cueSurface = surface.blended(withFraction: 0.10, of: secondary) ?? surface
+        let pauseStart = accent.blended(withFraction: 0.15, of: secondary) ?? accent
+
         self.baseFont = base
         self.baseColor = textColor
-        self.delimiterColor = secondaryColor.withAlphaComponent(0.55)
-        self.pauseColor = accentColor.blended(withFraction: 0.15, of: secondaryColor) ?? accentColor
-        self.pauseBackground = accentColor.withAlphaComponent(0.14)
-        self.cueColor = secondaryColor
-        self.cueBackground = secondaryColor.withAlphaComponent(0.10)
+        self.delimiterColor = Self.ensuredContrast(secondary, against: surface)
+        self.pauseSurface = pauseSurface
+        self.pauseColor = Self.ensuredContrast(pauseStart, against: pauseSurface)
+        self.pauseBackground = accent.withAlphaComponent(0.14)
+        self.cueSurface = cueSurface
+        self.cueColor = Self.ensuredContrast(secondary, against: cueSurface)
+        self.cueBackground = secondary.withAlphaComponent(0.10)
         self.cueFont = NSFont.monospacedSystemFont(ofSize: max(9, fontSize * 0.80), weight: .medium)
         self.emphasisFont = NSFontManager.shared.convert(base, toHaveTrait: .italicFontMask)
         self.strongFont = NSFontManager.shared.convert(base, toHaveTrait: .boldFontMask)
         self.rhythmColor = rhythmColor
+    }
+
+    /// WCAG relative luminance in sRGB.
+    static func relativeLuminance(_ color: NSColor) -> CGFloat {
+        let rgb = opaque(color)
+        func channel(_ value: CGFloat) -> CGFloat {
+            value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(rgb.redComponent)
+            + 0.7152 * channel(rgb.greenComponent)
+            + 0.0722 * channel(rgb.blueComponent)
+    }
+
+    /// WCAG contrast ratio between two colors, from 1 to 21.
+    static func contrastRatio(_ first: NSColor, _ second: NSColor) -> CGFloat {
+        let firstLuminance = relativeLuminance(first)
+        let secondLuminance = relativeLuminance(second)
+        let lighter = max(firstLuminance, secondLuminance)
+        let darker = min(firstLuminance, secondLuminance)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    /// Darkens (on a light surface) or lightens (on a dark surface) `color`
+    /// until it reaches `minimum` contrast against `background`.
+    static func ensuredContrast(
+        _ color: NSColor,
+        against background: NSColor,
+        minimum: CGFloat = MarkupEditorPalette.minimumMarkerContrast
+    ) -> NSColor {
+        let start = opaque(color)
+        guard contrastRatio(start, background) < minimum else { return start }
+        let target: NSColor = relativeLuminance(background) > 0.5 ? .black : .white
+        for step in stride(from: 0.05, through: 1.0, by: 0.05) {
+            let candidate = start.blended(withFraction: step, of: target) ?? target
+            if contrastRatio(candidate, background) >= minimum {
+                return candidate
+            }
+        }
+        return target
+    }
+
+    static func opaque(_ color: NSColor) -> NSColor {
+        color.usingColorSpace(.sRGB) ?? color
     }
 }
 

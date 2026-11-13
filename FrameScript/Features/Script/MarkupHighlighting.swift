@@ -104,35 +104,51 @@ enum MarkupHighlightPlanner {
     }
 
     /// Largest slice the editor re-highlights synchronously after a keystroke.
-    /// Documents are normally split into paragraphs; this cap keeps a single
-    /// enormous paragraph from making typing slow. The editor schedules a full
-    /// pass once typing pauses so markers outside the window still refresh.
+    /// The editor schedules a full pass once typing pauses so markers outside
+    /// the window still refresh.
     static let maximumIncrementalLength = 8_000
 
-    /// Expands `range` to the whole paragraph plus the previous and next ones.
+    /// Whole blank-line-separated block around `range`, capped to
+    /// ``maximumIncrementalLength``.
     ///
-    /// Emphasis may span a single line break, so highlighting only the edited
-    /// paragraph could leave a neighbouring delimiter unpaired. One paragraph
-    /// of slack on each side keeps typing latency independent of document size
-    /// while still covering every markup token that can reach the edit. On a
-    /// huge single paragraph the result is capped to
-    /// ``maximumIncrementalLength`` around the edit.
+    /// Emphasis cannot cross a blank line (it may span any number of ordinary
+    /// line breaks), so every delimiter that can reach the edit lives inside
+    /// the same block. Expanding to block boundaries keeps typing latency
+    /// independent of document size; a block bigger than the cap falls back to
+    /// a window around the edit plus a deferred full pass.
     static func extendedParagraphRange(around range: NSRange, in text: NSString) -> NSRange {
         guard text.length > 0 else { return NSRange(location: 0, length: 0) }
         let clamped = clamp(range, toLength: text.length)
-        let paragraphLocation = min(clamped.location, max(0, text.length - 1))
-        let paragraph = text.paragraphRange(for: NSRange(location: paragraphLocation, length: 0))
+        let location = min(clamped.location, max(0, text.length - 1))
+        let endProbe = min(max(location, NSMaxRange(clamped) - 1), max(0, text.length - 1))
+        let firstParagraph = paragraphRange(at: location, in: text)
+        let lastParagraph = paragraphRange(at: endProbe, in: text)
+        var start = firstParagraph.location
+        var end = max(NSMaxRange(firstParagraph), NSMaxRange(lastParagraph))
 
-        var start = paragraph.location
-        var end = NSMaxRange(paragraph)
-        if start > 0 {
-            let previous = text.paragraphRange(for: NSRange(location: start - 1, length: 0))
+        // Walk to blank-line boundaries, but stop as soon as the block is
+        // already as large as the incremental cap so a giant paragraph costs
+        // bounded work per keystroke.
+        while start > 0, end - start < maximumIncrementalLength {
+            let previous = paragraphRange(at: start - 1, in: text)
+            guard !isBlankParagraph(previous, in: text) else { break }
             start = previous.location
         }
-        if end < text.length {
-            let next = text.paragraphRange(for: NSRange(location: end, length: 0))
+        while end < text.length, end - start < maximumIncrementalLength {
+            let next = paragraphRange(at: end, in: text)
+            guard !isBlankParagraph(next, in: text) else { break }
             end = NSMaxRange(next)
         }
+
+        // Include one blank-line paragraph on each side. Typing the blank line
+        // that splits a block must keep the old delimiters highlighted.
+        if start > 0 {
+            start = paragraphRange(at: start - 1, in: text).location
+        }
+        if end < text.length {
+            end = NSMaxRange(paragraphRange(at: end, in: text))
+        }
+
         let expanded = NSRange(location: start, length: end - start)
         guard expanded.length > maximumIncrementalLength else { return expanded }
 
@@ -146,10 +162,39 @@ enum MarkupHighlightPlanner {
         return NSRange(location: windowStart, length: windowEnd - windowStart)
     }
 
-    /// True when the edit is inside a paragraph larger than the incremental cap
+    /// True when the edit is inside a block larger than the incremental cap
     /// and the editor should follow up with a full pass once typing stops.
     static func needsDeferredFullRefresh(around range: NSRange, in text: NSString) -> Bool {
         extendedParagraphRange(around: range, in: text).length >= maximumIncrementalLength
+    }
+
+    /// Whether an edit (for example a multi-paragraph paste) is fully covered
+    /// by the incremental window around the caret.
+    ///
+    /// When it is not, the editor must re-highlight the whole document instead
+    /// of leaving the pasted markers unstyled.
+    static func incrementalWindowCoversEdit(
+        _ edit: NSRange,
+        around caret: NSRange,
+        in text: NSString
+    ) -> Bool {
+        let window = extendedParagraphRange(around: caret, in: text)
+        let safeEdit = clamp(edit, toLength: text.length)
+        return safeEdit.location >= window.location
+            && NSMaxRange(safeEdit) <= NSMaxRange(window)
+    }
+
+    private static func paragraphRange(at location: Int, in text: NSString) -> NSRange {
+        text.paragraphRange(for: NSRange(
+            location: min(max(0, location), max(0, text.length - 1)),
+            length: 0
+        ))
+    }
+
+    private static func isBlankParagraph(_ range: NSRange, in text: NSString) -> Bool {
+        text.substring(with: range)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
     }
 
     /// Clamps a range, never returning a location beyond `length`.

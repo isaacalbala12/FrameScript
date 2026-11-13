@@ -49,11 +49,15 @@ struct ScriptEditorView: View {
         .background(theme.editorSurface)
         .onAppear {
             applyInitialNotesVisibility()
+            appState.scheduleSceneMetricsUpdate(sceneID: scene.id, delay: .zero)
             appState.scheduleRhythmReview(for: scene, delay: .zero)
         }
         .onChange(of: scene.title) { _, _ in appState.touchProject() }
         .onChange(of: scene.notes) { _, _ in appState.touchProject() }
         .onChange(of: scene.scriptText) { _, _ in
+            // Drop stale UTF-16 warning ranges immediately, even for text
+            // changes that do not go through the normal editor commit.
+            RhythmReviewCenter.shared.invalidate(sceneID: scene.id)
             appState.scheduleRhythmReview(for: scene)
         }
         .onChange(of: scene.bRollItems.count) { _, _ in
@@ -204,7 +208,13 @@ struct ScriptEditorView: View {
         }
     }
 
-    private var wordCount: Int { ScriptMarkup.spokenWordCount(scene.scriptText) }
+    /// Reads the debounced metrics cache. The whitespace split is only a
+    /// first-frame fallback before the off-main estimate lands; it never runs
+    /// on the normal typing path.
+    private var wordCount: Int {
+        SceneMetricsCache.shared.entry(for: scene.id)?.wordCount
+            ?? scene.scriptText.split(whereSeparator: \.isWhitespace).count
+    }
 
     private var activeAutocompleteIssue: AutocompleteProviderIssue? {
         guard let issue = appState.autocompleteIssue,
@@ -486,7 +496,8 @@ struct LinkedScriptTextView: NSViewRepresentable {
                 textColor: textColor,
                 secondaryColor: secondaryColor,
                 accentColor: accentColor,
-                rhythmColor: rhythmColor
+                rhythmColor: rhythmColor,
+                backgroundColor: backgroundColor
             )
         ))
         view.textView.rhythmUnderlineColor = rhythmColor
@@ -534,6 +545,10 @@ struct LinkedScriptTextView: NSViewRepresentable {
         private var editTransaction: EditTransaction?
         private var lastSelectionRange: NSRange?
         private var escapeDismissalContext: EscapeDismissalContext?
+        /// Range captured from `shouldChangeTextIn`, which is reliable for
+        /// pastes, undo and typing while `NSTextStorage.editedRange` can be a
+        /// stale attribute range from the styler.
+        private var pendingEditRange: NSRange?
         private var observedAutocompleteProvider: AIProviderKind
         private var observedAutocompleteConfigurationVersion: Int
         private var observedAutocompleteConfigurationEligibility: AutocompleteConfigurationEligibility
@@ -624,6 +639,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
             cancelAutocomplete()
             markupRefreshTask?.cancel()
             markupRefreshTask = nil
+            pendingEditRange = nil
 
             modelRevision += 1
             textRevision += 1
@@ -660,8 +676,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
             )
             lastSelectionRange = textView.selectedRange()
             scheduleAutocomplete(for: textView, requestGeneration: autocompleteRequestGeneration)
-            view?.markupStyler.apply(around: textView.selectedRange(), in: textView)
-            scheduleDeferredMarkupRefreshIfNeeded(in: textView)
+            applyMarkupHighlightForEdit(in: textView)
             view?.markerTextRevision = textRevision
             view?.needsDisplay = true
         }
@@ -672,6 +687,19 @@ struct LinkedScriptTextView: NSViewRepresentable {
             _ = emitCurrentText(from: textView, origin: .user)
             cancelAutocomplete()
             captureRestorationState()
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            let insertedLength = (replacementString as NSString?)?.length ?? 0
+            pendingEditRange = NSRange(
+                location: affectedCharRange.location,
+                length: max(affectedCharRange.length, insertedLength)
+            )
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -869,7 +897,31 @@ struct LinkedScriptTextView: NSViewRepresentable {
             return isCurrent(snapshot, in: placeholderTextView)
         }
 
-        /// A paragraph larger than the incremental cap is highlighted in a
+        /// Highlights the edited block, or the whole document when an edit
+        /// (paste, multi-paragraph deletion) reaches outside the incremental
+        /// window around the caret.
+        private func applyMarkupHighlightForEdit(in textView: NSTextView) {
+            let text = textView.string as NSString
+            let caret = textView.selectedRange()
+            var edited = pendingEditRange ?? textView.textStorage?.editedRange ?? caret
+            pendingEditRange = nil
+            if edited.location == NSNotFound {
+                edited = caret
+            }
+            let covered = MarkupHighlightPlanner.incrementalWindowCoversEdit(
+                edited,
+                around: caret,
+                in: text
+            )
+            if covered {
+                view?.markupStyler.apply(around: caret, in: textView)
+                scheduleDeferredMarkupRefreshIfNeeded(in: textView)
+            } else {
+                view?.markupStyler.applyAll(in: textView)
+            }
+        }
+
+        /// A block larger than the incremental cap is highlighted in a
         /// window around the caret. Once typing pauses, run one full pass so
         /// markers outside that window (for example a distant emphasis closer)
         /// settle correctly.

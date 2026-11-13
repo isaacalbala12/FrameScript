@@ -19,6 +19,11 @@ struct RhythmReviewSection: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(theme.primaryText)
                 Spacer()
+                if center.isPending {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 12, height: 12)
+                }
                 if totalCount > 0 {
                     Text("\(totalCount)")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -37,7 +42,7 @@ struct RhythmReviewSection: View {
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             } else if sceneWarnings.isEmpty && projectWarnings.isEmpty {
-                Text(appState.localized("rhythm.empty"))
+                Text(appState.localized(center.isPending ? "rhythm.analyzing" : "rhythm.empty"))
                     .font(.system(size: 12))
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)

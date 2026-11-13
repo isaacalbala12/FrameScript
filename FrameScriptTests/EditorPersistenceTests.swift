@@ -569,7 +569,7 @@ final class EditorPersistenceTests: XCTestCase {
         XCTAssertEqual(box.value, "Exact new text")
     }
 
-    func testConsecutiveEditorEditsCommitTextAndMetricsBeforeAutosave() throws {
+    func testConsecutiveEditorEditsCommitTextAndMetricsBeforeAutosave() async throws {
         var writes = 0
         let (appState, scene, _) = makeAppState(fileURL: temporaryProjectURL()) { project, url in
             writes += 1
@@ -580,16 +580,22 @@ final class EditorPersistenceTests: XCTestCase {
         for text in ["one two", "one two three", "one two three four"] {
             view.textView.string = text
             coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view.textView))
+            // Text commits synchronously; word count and duration are debounced.
             XCTAssertEqual(scene.scriptText, text)
-            XCTAssertEqual(scene.estimatedDuration, DurationEstimator.estimate(text: text, wordsPerMinute: 150))
         }
 
-        XCTAssertEqual(scene.scriptText.split { $0.isWhitespace || $0.isNewline }.count, 4)
+        let expected = DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: 150)
+        try await waitForSceneMetricsEntry(of: scene)
+        try await waitForDebouncedDuration(of: scene, expected)
+        XCTAssertEqual(
+            SceneMetricsCache.shared.entry(for: scene.id)?.wordCount,
+            scene.scriptText.split(whereSeparator: \.isWhitespace).count
+        )
         XCTAssertEqual(writes, 0)
         XCTAssertEqual(appState.saveState, .edited)
     }
 
-    func testSceneAndTotalDurationObservationInvalidateFromEditorEdit() {
+    func testSceneAndTotalDurationObservationInvalidateFromEditorEdit() async throws {
         let first = Scene(order: 0, sectionType: .custom, title: "One", scriptText: "one")
         let second = Scene(order: 1, sectionType: .custom, title: "Two", scriptText: "one two three")
         let project = FrameProject(title: "Project", scenes: [first, second])
@@ -608,12 +614,12 @@ final class EditorPersistenceTests: XCTestCase {
 
         let firstDuration = DurationEstimator.estimate(text: first.scriptText, wordsPerMinute: 150)
         let secondDuration = DurationEstimator.estimate(text: second.scriptText, wordsPerMinute: 150)
-        XCTAssertEqual(first.estimatedDuration, firstDuration)
+        try await waitForDebouncedDuration(of: first, firstDuration)
         XCTAssertEqual(appState.totalDuration, firstDuration + secondDuration)
         XCTAssertTrue(invalidated)
     }
 
-    func testRepresentableDelegateEditUpdatesScriptAndDuration() throws {
+    func testRepresentableDelegateEditUpdatesScriptAndDuration() async throws {
         let (appState, scene, _) = makeAppState(fileURL: nil)
         let representable = makeRepresentable(
             text: Binding(get: { scene.scriptText }, set: { _ in }),
@@ -630,7 +636,10 @@ final class EditorPersistenceTests: XCTestCase {
         textView.didChangeText()
 
         XCTAssertEqual(scene.scriptText, textView.string)
-        XCTAssertEqual(scene.estimatedDuration, DurationEstimator.estimate(text: textView.string, wordsPerMinute: 150))
+        try await waitForDebouncedDuration(
+            of: scene,
+            DurationEstimator.estimate(text: textView.string, wordsPerMinute: 150)
+        )
     }
 
     func testNativeTextEditKeepsAutocompleteThroughItsSelectionChangeAndCaretMovementCancels() async throws {
@@ -1245,7 +1254,7 @@ final class EditorPersistenceTests: XCTestCase {
         try await waitUntil({ recorder.requestCount == 2 }, message: "restored eligible request")
     }
 
-    func testUntitledEditorEditUpdatesMetricsWithoutSaveAs() {
+    func testUntitledEditorEditUpdatesMetricsWithoutSaveAs() async throws {
         let (appState, scene, _) = makeAppState(fileURL: nil)
         let (coordinator, view) = makeCoordinator(appState: appState, scene: scene)
 
@@ -1253,7 +1262,10 @@ final class EditorPersistenceTests: XCTestCase {
         coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view.textView))
 
         XCTAssertEqual(scene.scriptText, "untitled projects update right now")
-        XCTAssertEqual(scene.estimatedDuration, DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: 150))
+        try await waitForDebouncedDuration(
+            of: scene,
+            DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: 150)
+        )
         XCTAssertNil(appState.projectStore.currentFileURL)
         XCTAssertEqual(appState.saveState, .edited)
     }
@@ -1598,13 +1610,16 @@ final class EditorPersistenceTests: XCTestCase {
         XCTAssertEqual(appState.saveState, .edited)
     }
 
-    func testCommittedUntitledEditUpdatesMetricsWithoutSaving() {
+    func testCommittedUntitledEditUpdatesMetricsWithoutSaving() async throws {
         let (appState, scene, _) = makeAppState(fileURL: nil)
         scene.scriptText = "one two three four five"
 
         appState.commitScriptTextChange(sceneID: scene.id)
 
-        XCTAssertEqual(scene.estimatedDuration, DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: 150))
+        try await waitForDebouncedDuration(
+            of: scene,
+            DurationEstimator.estimate(text: scene.scriptText, wordsPerMinute: 150)
+        )
         XCTAssertEqual(appState.saveState, .edited)
         XCTAssertNil(appState.projectStore.currentFileURL)
     }
@@ -2425,6 +2440,43 @@ final class EditorPersistenceTests: XCTestCase {
             if let match = firstSubview(of: type, in: subview) { return match }
         }
         return nil
+    }
+
+    /// Waits for the debounced metrics cache entry. Duration alone can be
+    /// updated earlier by the segment rebuild, so cache tests must wait for
+    /// the parse itself.
+    private func waitForSceneMetricsEntry(
+        of scene: FrameScript.Scene,
+        timeout: Duration = .seconds(3)
+    ) async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        while SceneMetricsCache.shared.entry(for: scene.id) == nil {
+            guard clock.now - start < timeout else {
+                XCTFail("Timed out waiting for debounced scene metrics")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Waits for the debounced scene metrics to land. The text path never
+    /// parses the whole script synchronously, so tests must let the debouncer
+    /// run instead of asserting immediately after a keystroke.
+    private func waitForDebouncedDuration(
+        of scene: FrameScript.Scene,
+        _ expected: TimeInterval,
+        timeout: Duration = .seconds(3)
+    ) async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        while abs(scene.estimatedDuration - expected) > 0.001 {
+            guard clock.now - start < timeout else {
+                XCTFail("Timed out waiting for debounced duration \(scene.estimatedDuration) == \(expected)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private func waitUntil(

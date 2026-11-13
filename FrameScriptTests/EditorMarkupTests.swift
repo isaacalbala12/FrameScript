@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import FrameScriptCore
 @testable import FrameScript
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -456,7 +457,8 @@ final class EditorMarkupTests: XCTestCase {
                 textColor: .labelColor,
                 secondaryColor: .secondaryLabelColor,
                 accentColor: .systemBlue,
-                rhythmColor: .systemOrange
+                rhythmColor: .systemOrange,
+                backgroundColor: .textBackgroundColor
             )
         ))
         var stylerTotal = 0.0
@@ -490,10 +492,464 @@ final class EditorMarkupTests: XCTestCase {
         XCTAssertLessThan(average, 8)
     }
 
+    // MARK: - Review fixes: paste, blocks, rhythm, contrast, metrics
+
+    func testLargePasteOutsideTheIncrementalWindowRequiresAFullPass() {
+        let paragraphs = (1...8)
+            .map { "Párrafo \($0) con *énfasis* / y [2s]." }
+            .joined(separator: "\n\n")
+        let prefix = "Inicio.\n\n"
+        let text = prefix + paragraphs
+        let ns = text as NSString
+        let pasted = NSRange(
+            location: (prefix as NSString).length,
+            length: (paragraphs as NSString).length
+        )
+        let caret = NSRange(location: ns.length, length: 0)
+        XCTAssertFalse(MarkupHighlightPlanner.incrementalWindowCoversEdit(pasted, around: caret, in: ns))
+
+        // A single typed character is covered and takes the incremental path.
+        XCTAssertTrue(MarkupHighlightPlanner.incrementalWindowCoversEdit(
+            NSRange(location: ns.length - 1, length: 1),
+            around: caret,
+            in: ns
+        ))
+
+        // The first pasted emphasis is outside the window, proving why the
+        // editor must fall back to a full pass.
+        let window = MarkupHighlightPlanner.extendedParagraphRange(around: caret, in: ns)
+        let windowRuns = MarkupHighlightPlanner.highlightRuns(text: text, pauseDefaults: .standard, in: window)
+        let firstEmphasis = ns.range(of: "énfasis")
+        XCTAssertNil(style(of: firstEmphasis.location + 1, in: windowRuns))
+        let fullRuns = MarkupHighlightPlanner.highlightRuns(text: text, pauseDefaults: .standard)
+        XCTAssertEqual(style(of: firstEmphasis.location + 1, in: fullRuns), .emphasis)
+    }
+
+    func testPastingManyParagraphsStylesEveryInsertedEmphasis() throws {
+        defer { EditorMarkupSessionCaches.reset() }
+        let pasted = (1...8)
+            .map { "Párrafo \($0) con *énfasis* / y [2s]." }
+            .joined(separator: "\n\n")
+        let scene = Scene(order: 0, sectionType: .custom, title: "Escena", scriptText: "Inicio.")
+        let project = FrameProject(title: "Demo", scenes: [scene])
+        let appState = makeAppState(project: project)
+        let box = MarkupTextBox("Inicio.")
+        let representable = makeMarkupRepresentable(
+            text: Binding(get: { box.value }, set: { box.value = $0 }),
+            onTextCommitted: { previousText, newText in
+                appState.commitScriptTextChange(sceneID: scene.id, previousText: previousText, text: newText)
+            }
+        )
+        let coordinator = LinkedScriptTextView.Coordinator(parent: representable)
+        let view = MarkerTextContainerView()
+        view.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
+        view.layoutSubtreeIfNeeded()
+        coordinator.attach(to: view)
+        view.textView.delegate = coordinator
+        view.textView.string = "Inicio."
+        view.markupStyler.configure(MarkupEditorStyler.Configuration(
+            isEnabled: true,
+            pauseDefaults: .standard,
+            palette: MarkupEditorPalette(
+                fontSize: 22,
+                textColor: srgb(0x1D, 0x1D, 0x1F),
+                secondaryColor: srgb(0x6F, 0x6F, 0x74),
+                accentColor: srgb(0xB6, 0xC6, 0xB0),
+                rhythmColor: srgb(0xB7, 0x79, 0x1F),
+                backgroundColor: srgb(0xFB, 0xFA, 0xF7)
+            )
+        ))
+        let caret = (view.textView.string as NSString).length
+        view.textView.setSelectedRange(NSRange(location: caret, length: 0))
+        view.textView.insertText(pasted, replacementRange: NSRange(location: caret, length: 0))
+
+        let ns = view.textView.string as NSString
+        let firstEmphasis = ns.range(of: "énfasis")
+        XCTAssertNotEqual(firstEmphasis.location, NSNotFound)
+        let font = view.textView.textStorage?.attribute(
+            .font,
+            at: firstEmphasis.location + 1,
+            effectiveRange: nil
+        ) as? NSFont
+        XCTAssertEqual(font?.fontDescriptor.symbolicTraits.contains(.italic), true)
+    }
+
+    func testMultiLineEmphasisUsesTheWholeBlankLineBlock() {
+        let text = "*uno\ndos\ntres\ncuatro* fin"
+        let ns = text as NSString
+        let cuatro = ns.range(of: "cuatro")
+        let window = MarkupHighlightPlanner.extendedParagraphRange(
+            around: NSRange(location: cuatro.location, length: 0),
+            in: ns
+        )
+        let runs = MarkupHighlightPlanner.highlightRuns(
+            text: text,
+            pauseDefaults: .standard,
+            in: window
+        )
+        for word in ["uno", "dos", "tres", "cuatro"] {
+            XCTAssertEqual(
+                style(of: ns.range(of: word).location + 1, in: runs),
+                .emphasis,
+                "expected multi-line emphasis to keep \(word) styled"
+            )
+        }
+    }
+
+    func testLightModeMarkupPaletteMeetsContrast() {
+        let surface = srgb(0xFB, 0xFA, 0xF7)
+        let palette = MarkupEditorPalette(
+            fontSize: 22,
+            textColor: srgb(0x1D, 0x1D, 0x1F),
+            secondaryColor: srgb(0x6F, 0x6F, 0x74),
+            accentColor: srgb(0xB6, 0xC6, 0xB0),
+            rhythmColor: srgb(0xB7, 0x79, 0x1F),
+            backgroundColor: surface
+        )
+        let delimiter = MarkupEditorPalette.contrastRatio(palette.delimiterColor, surface)
+        let pause = MarkupEditorPalette.contrastRatio(palette.pauseColor, palette.pauseSurface)
+        let cue = MarkupEditorPalette.contrastRatio(palette.cueColor, palette.cueSurface)
+        print(String(format: "Markup contrast light: delimiter %.2f, pause %.2f, cue %.2f", delimiter, pause, cue))
+        XCTAssertGreaterThanOrEqual(delimiter, 4.5)
+        XCTAssertGreaterThanOrEqual(pause, 4.5)
+        XCTAssertGreaterThanOrEqual(cue, 4.5)
+    }
+
+    func testDarkModeMarkupPaletteMeetsContrast() {
+        let surface = srgb(0x10, 0x12, 0x17)
+        let palette = MarkupEditorPalette(
+            fontSize: 22,
+            textColor: srgb(0xF4, 0xF4, 0xF5),
+            secondaryColor: srgb(0xA1, 0xA1, 0xAA),
+            accentColor: srgb(0xB6, 0xC6, 0xB0),
+            rhythmColor: srgb(0xF7, 0xC6, 0x6B),
+            backgroundColor: surface
+        )
+        let delimiter = MarkupEditorPalette.contrastRatio(palette.delimiterColor, surface)
+        let pause = MarkupEditorPalette.contrastRatio(palette.pauseColor, palette.pauseSurface)
+        let cue = MarkupEditorPalette.contrastRatio(palette.cueColor, palette.cueSurface)
+        XCTAssertGreaterThanOrEqual(delimiter, 4.5)
+        XCTAssertGreaterThanOrEqual(pause, 4.5)
+        XCTAssertGreaterThanOrEqual(cue, 4.5)
+    }
+
+    func testSidebarWarningCountIncludesProjectOutliers() {
+        let sceneID = UUID()
+        let analysis = RhythmAnalyzer.analyze(
+            scene: RhythmSceneInput(id: sceneID.uuidString, text: "Uno dos tres.", wordsPerMinute: 150)
+        )
+        let projectWarning = RhythmWarning(
+            sceneID: sceneID.uuidString,
+            kind: .sceneLengthOutlier,
+            range: UTF16Span(location: 0, length: 3),
+            messageKey: RhythmMessageKey.sceneLengthOutlier
+        )
+        XCTAssertEqual(
+            RhythmReviewCenter.warningCount(
+                sceneID: sceneID,
+                analyses: [sceneID: analysis],
+                projectWarnings: [projectWarning]
+            ),
+            analysis.warnings.count + 1
+        )
+    }
+
+    func testVideoTypeThresholdsChangeThePublishedWarnings() async throws {
+        let scene = Scene(
+            order: 0,
+            sectionType: .custom,
+            title: "Review",
+            scriptText: "uno dos tres cuatro cinco seis siete ocho nueve diez."
+        )
+        let project = FrameProject(title: "Demo", scenes: [scene], videoType: "Review")
+        let defaultCenter = RhythmReviewCenter()
+        defaultCenter.refreshNow(project: project, settings: .defaults)
+        try await waitUntil { !defaultCenter.isPending }
+        XCTAssertTrue(defaultCenter.warnings(for: scene.id).filter { $0.kind == .longSentence }.isEmpty)
+
+        var settings = AppSettings.defaults
+        settings.rhythmThresholdsByVideoType["Review"] = AppRhythmThresholds(
+            longSentenceWordLimit: 5,
+            uncoveredSecondsLimit: 30
+        )
+        let strictCenter = RhythmReviewCenter()
+        strictCenter.refreshNow(project: project, settings: settings)
+        try await waitUntil { !strictCenter.isPending }
+        XCTAssertFalse(strictCenter.warnings(for: scene.id).filter { $0.kind == .longSentence }.isEmpty)
+    }
+
+    func testRhythmAnalysisRunsOffMainAndPublishesLater() async throws {
+        let paragraph = "En la curva el coche *frena* fuerte / y luego acelera // con [2s] cuidado. [IMAGEN: telemetría]\n\n"
+        let text = String(repeating: paragraph, count: 2_000)
+        let scene = Scene(order: 0, sectionType: .custom, title: "Grande", scriptText: text)
+        let project = FrameProject(title: "Grande", scenes: [scene])
+        let center = RhythmReviewCenter()
+
+        let started = DispatchTime.now()
+        center.refreshNow(project: project, settings: .defaults)
+        let callMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        print(String(format: "Rhythm refreshNow returned in %.2f ms for 20k words", callMilliseconds))
+        XCTAssertLessThan(callMilliseconds, 25, "Snapshot building must not parse the script on the main actor")
+        XCTAssertTrue(center.isPending)
+
+        try await waitUntil(timeout: .seconds(10)) { !center.isPending }
+        XCTAssertGreaterThan(center.lastRefreshDuration, 0)
+        XCTAssertEqual(center.lastAnalyzedTextLength, (text as NSString).length)
+        XCTAssertGreaterThan(center.totalWarningCount, 0)
+        print(String(format: "Rhythm analysis ran off-main in %.2f ms", center.lastRefreshDuration))
+    }
+
+    func testInvalidatingASceneDropsStaleWarningsImmediately() async throws {
+        let scene = Scene(
+            order: 0,
+            sectionType: .custom,
+            title: "Larga",
+            scriptText: Array(repeating: "palabra", count: 40).joined(separator: " ") + "."
+        )
+        let project = FrameProject(title: "Demo", scenes: [scene])
+        let center = RhythmReviewCenter()
+        center.refreshNow(project: project, settings: .defaults)
+        try await waitUntil { !center.isPending }
+        XCTAssertFalse(center.warnings(for: scene.id).isEmpty)
+
+        center.invalidate(sceneID: scene.id)
+        XCTAssertTrue(center.warnings(for: scene.id).isEmpty)
+        XCTAssertTrue(center.projectWarnings(for: scene.id).isEmpty)
+        XCTAssertTrue(center.isPending)
+    }
+
+    func testAnchorMutationsInvalidateTheRhythmCache() {
+        defer { EditorMarkupSessionCaches.reset() }
+        let text = "El coche gira en la curva con precisión."
+        let scene = Scene(order: 0, sectionType: .custom, title: "Escena", scriptText: text)
+        let project = FrameProject(title: "Demo", scenes: [scene])
+        let store = ProjectStore(project: project)
+        let segment = TextSegment(sceneID: scene.id, order: 0, sourceText: text, segmentType: .scene)
+        let item = BRollItem(templateType: "", sourceType: .stockFootage, descriptionText: "curva")
+        scene.bRollItems = [item]
+
+        let beforeLink = RhythmReviewCenter.shared.revision
+        store.link(item, to: segment, in: scene)
+        XCTAssertNotNil(item.textAnchor)
+        XCTAssertGreaterThan(RhythmReviewCenter.shared.revision, beforeLink)
+
+        let beforeUnlink = RhythmReviewCenter.shared.revision
+        store.unlink(item)
+        XCTAssertNil(item.textAnchor)
+        XCTAssertGreaterThan(RhythmReviewCenter.shared.revision, beforeUnlink)
+    }
+
+    func testAppStateAnchorMutationsScheduleARhythmRefresh() async throws {
+        defer { EditorMarkupSessionCaches.reset() }
+        let text = Array(repeating: "palabra", count: 40).joined(separator: " ") + "."
+        let scene = Scene(order: 0, sectionType: .custom, title: "Escena", scriptText: text)
+        let project = FrameProject(title: "Demo", scenes: [scene])
+        let appState = makeAppState(project: project)
+        let segment = TextSegment(sceneID: scene.id, order: 0, sourceText: text, segmentType: .scene)
+        let item = BRollItem(templateType: "", sourceType: .stockFootage, descriptionText: "curva")
+        scene.bRollItems = [item]
+
+        appState.projectStore.link(item, to: segment, in: scene)
+        XCTAssertTrue(RhythmReviewCenter.shared.isPending)
+        try await waitUntil(timeout: .seconds(5)) { !RhythmReviewCenter.shared.isPending }
+        XCTAssertFalse(RhythmReviewCenter.shared.warnings(for: scene.id).isEmpty)
+    }
+
+    func testDeletingASceneClearsItsCachedMetricsAndRhythmWarnings() async throws {
+        defer { EditorMarkupSessionCaches.reset() }
+        let longText = Array(repeating: "palabra", count: 40).joined(separator: " ") + "."
+        let first = Scene(order: 0, sectionType: .custom, title: "Uno", scriptText: longText)
+        let second = Scene(order: 1, sectionType: .custom, title: "Dos", scriptText: "dos")
+        let project = FrameProject(title: "Demo", scenes: [first, second])
+        let store = ProjectStore(project: project)
+        SceneMetricsCache.shared.store(MarkupEstimate(spokenWordCount: 1, duration: 0.4), for: first.id)
+        RhythmReviewCenter.shared.refreshNow(project: project, settings: .defaults)
+        try await waitUntil(timeout: .seconds(5)) { !RhythmReviewCenter.shared.isPending }
+        XCTAssertFalse(RhythmReviewCenter.shared.warnings(for: first.id).isEmpty)
+
+        store.deleteScene(at: 0, wordsPerMinute: 150)
+
+        XCTAssertNil(SceneMetricsCache.shared.entry(for: first.id))
+        XCTAssertTrue(RhythmReviewCenter.shared.warnings(for: first.id).isEmpty)
+    }
+
+    func testOpeningAProjectClearsSceneMetricsAndRhythmFromThePreviousDocument() async throws {
+        defer { EditorMarkupSessionCaches.reset() }
+        let oldText = Array(repeating: "palabra", count: 40).joined(separator: " ") + "."
+        let oldScene = Scene(order: 0, sectionType: .custom, title: "Old", scriptText: oldText)
+        let oldProject = FrameProject(title: "Old", scenes: [oldScene])
+        let store = ProjectStore(project: oldProject)
+        SceneMetricsCache.shared.store(MarkupEstimate(spokenWordCount: 2, duration: 0.8), for: oldScene.id)
+        RhythmReviewCenter.shared.refreshNow(project: oldProject, settings: .defaults)
+        try await waitUntil(timeout: .seconds(5)) { !RhythmReviewCenter.shared.isPending }
+        XCTAssertGreaterThan(RhythmReviewCenter.shared.totalWarningCount, 0)
+
+        let newScene = Scene(order: 0, sectionType: .custom, title: "New", scriptText: "new text")
+        let newProject = FrameProject(title: "New", scenes: [newScene])
+        store.openProject(newProject, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
+
+        XCTAssertNil(SceneMetricsCache.shared.entry(for: oldScene.id))
+        XCTAssertEqual(RhythmReviewCenter.shared.totalWarningCount, 0)
+
+        SceneMetricsCache.shared.store(MarkupEstimate(spokenWordCount: 2, duration: 0.8), for: newScene.id)
+        store.closeProject()
+        XCTAssertNil(SceneMetricsCache.shared.entry(for: newScene.id))
+    }
+
+    func testFullKeystrokePathOnTwentyThousandWordsStaysFast() async throws {
+        defer { EditorMarkupSessionCaches.reset() }
+        let paragraph = "En la curva el coche *frena* fuerte / y luego acelera // con [2s] cuidado. [IMAGEN: telemetría]\n\n"
+        let text = String(repeating: paragraph, count: 2_000)
+        let scene = Scene(order: 0, sectionType: .custom, title: "Grande", scriptText: text)
+        let project = FrameProject(title: "Grande", scenes: [scene])
+        let appState = makeAppState(project: project)
+        let box = MarkupTextBox(text)
+        let representable = makeMarkupRepresentable(
+            text: Binding(get: { box.value }, set: { box.value = $0 }),
+            onTextCommitted: { previousText, newText in
+                appState.commitScriptTextChange(sceneID: scene.id, previousText: previousText, text: newText)
+            }
+        )
+        let coordinator = LinkedScriptTextView.Coordinator(parent: representable)
+        let view = MarkerTextContainerView()
+        view.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
+        view.layoutSubtreeIfNeeded()
+        coordinator.attach(to: view)
+        view.textView.delegate = coordinator
+        view.textView.string = text
+        view.markupStyler.configure(MarkupEditorStyler.Configuration(
+            isEnabled: true,
+            pauseDefaults: .standard,
+            palette: MarkupEditorPalette(
+                fontSize: 22,
+                textColor: srgb(0x1D, 0x1D, 0x1F),
+                secondaryColor: srgb(0x6F, 0x6F, 0x74),
+                accentColor: srgb(0xB6, 0xC6, 0xB0),
+                rhythmColor: srgb(0xB7, 0x79, 0x1F),
+                backgroundColor: srgb(0xFB, 0xFA, 0xF7)
+            )
+        ))
+        view.textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        XCTAssertNil(SceneMetricsCache.shared.entry(for: scene.id))
+
+        var total = 0.0
+        var maxApplied = 0
+        let iterations = 10
+        for _ in 0..<iterations {
+            let current = view.textView.string as NSString
+            let caret = current.length
+            let newText = current.replacingCharacters(
+                in: NSRange(location: caret, length: 0),
+                with: "a"
+            )
+            // Reproduce the delegate calls AppKit makes for a keystroke without
+            // the scroll-view layout that dominates a headless text view.
+            _ = coordinator.textView(
+                view.textView,
+                shouldChangeTextIn: NSRange(location: caret, length: 0),
+                replacementString: "a"
+            )
+            view.textView.string = newText
+            view.textView.setSelectedRange(NSRange(location: caret + 1, length: 0))
+            let started = DispatchTime.now()
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: view.textView))
+            total += Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+            maxApplied = max(maxApplied, view.markupStyler.lastAppliedCharacterCount)
+        }
+        let average = total / Double(iterations)
+        print(String(format: "Full editor keystroke path (styler + commit) on 20k words: %.2f ms", average))
+        // Old behaviour parsed the whole script twice (>100 ms per keystroke).
+        // The synchronous path is now text copies + the incremental styler +
+        // task scheduling; the full parse runs once, off-main, after the pause.
+        XCTAssertLessThan(
+            average,
+            30,
+            "Typing must not parse the whole script per keystroke; avg=\(average) maxApplied=\(maxApplied)"
+        )
+
+        // The debounced parse has not run yet: word count and duration are cached later.
+        XCTAssertNil(SceneMetricsCache.shared.entry(for: scene.id))
+        try await waitUntil(timeout: .seconds(5)) {
+            SceneMetricsCache.shared.entry(for: scene.id) != nil
+        }
+        let entry = try XCTUnwrap(SceneMetricsCache.shared.entry(for: scene.id))
+        XCTAssertEqual(entry.wordCount, ScriptMarkup.spokenWordCount(scene.scriptText))
+        XCTAssertEqual(scene.estimatedDuration, entry.duration, accuracy: 0.001)
+    }
+
     // MARK: - Helpers
+
 
     private func style(of location: Int, in runs: [MarkupHighlightRun]) -> MarkupHighlightStyle? {
         runs.first { NSLocationInRange(location, $0.range) }?.style
+    }
+
+    private func makeAppState(project: FrameProject) -> AppState {
+        AppState(
+            projectStore: ProjectStore(project: project),
+            settingsStore: SettingsStore(settings: .defaults)
+        )
+    }
+
+    private func makeMarkupRepresentable(
+        text: Binding<String>,
+        onTextCommitted: @escaping (String, String) -> Void
+    ) -> LinkedScriptTextView {
+        LinkedScriptTextView(
+            text: text,
+            sceneID: UUID(),
+            editorIdentity: UUID(),
+            sceneTitle: "Scene",
+            autocompleteProvider: .disabled,
+            autocompleteConfigurationVersion: 0,
+            autocompleteConfigurationEligibility: .blockedProviderDisabled,
+            autocompleteDelay: .zero,
+            autocompleteFallbackLanguage: .spanish,
+            autocompleteState: .constant(.idle),
+            loadRestorationState: { nil },
+            saveRestorationState: { _ in },
+            markers: [],
+            fontSize: 22,
+            spellcheck: false,
+            smartQuotes: false,
+            placeholder: "",
+            textColor: .labelColor,
+            placeholderColor: .secondaryLabelColor,
+            backgroundColor: .textBackgroundColor,
+            bRollColor: .systemBlue,
+            editingColor: .systemGreen,
+            addBRollLabel: "Add",
+            addEditingLabel: "Edit",
+            onTextCommitted: onTextCommitted,
+            autocomplete: { _ in .none },
+            onTeardown: {},
+            markerAction: { _, _ in },
+            addMarkerAction: { _, _ in }
+        )
+    }
+
+    private func srgb(_ red: UInt8, _ green: UInt8, _ blue: UInt8) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat(red) / 255,
+            green: CGFloat(green) / 255,
+            blue: CGFloat(blue) / 255,
+            alpha: 1
+        )
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(3),
+        _ condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        while !condition() {
+            guard clock.now - start < timeout else {
+                XCTFail("Timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private func assertSortedAndNonOverlapping(
@@ -527,4 +983,11 @@ private final class FakeActiveScriptEditor: ActiveScriptEditor {
     func commitMarkedTextAndFlush() -> Bool { false }
     func cancelAutocomplete(clearStatus: Bool) {}
     func selectRange(_ range: NSRange) { selectedRange = range }
+}
+
+
+@MainActor
+private final class MarkupTextBox {
+    var value: String
+    init(_ value: String) { self.value = value }
 }

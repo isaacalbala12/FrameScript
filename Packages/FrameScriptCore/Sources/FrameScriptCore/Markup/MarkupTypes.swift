@@ -83,6 +83,22 @@ public enum EmphasisLevel: Int, Codable, Sendable, Hashable, CaseIterable, Compa
     }
 }
 
+/// The spoken word count and estimated duration of a script, from one parse.
+///
+/// Use `ScriptMarkup.estimate(_:wordsPerMinute:defaults:)` to produce it when a
+/// view needs both numbers; this avoids parsing the whole script twice.
+public struct MarkupEstimate: Sendable, Equatable {
+    /// Spoken words only. Cues, pauses and delimiters never count.
+    public let spokenWordCount: Int
+    /// Spoken words at the requested rate plus all pause durations, in seconds.
+    public let duration: TimeInterval
+
+    public init(spokenWordCount: Int, duration: TimeInterval) {
+        self.spokenWordCount = spokenWordCount
+        self.duration = duration
+    }
+}
+
 /// One piece of a parsed script, with UTF-16 ranges into the original text.
 ///
 /// Tokens are ordered by their position in the source and never overlap. Every

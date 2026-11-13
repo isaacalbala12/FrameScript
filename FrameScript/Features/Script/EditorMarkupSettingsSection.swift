@@ -48,6 +48,9 @@ struct EditorMarkupSettingsSection: View {
         .onChange(of: appState.settings.editorPreferences.rhythmReviewEnabled) { _, _ in
             appState.scheduleRhythmReview(delay: .zero)
         }
+        .onChange(of: appState.settings.rhythmThresholdsByVideoType) { _, _ in
+            appState.scheduleRhythmReview(delay: .zero)
+        }
     }
 
     private var settings: AppSettings { appState.settings }
@@ -248,6 +251,7 @@ struct EditorMarkupSettingsSection: View {
             },
             set: { value in
                 appState.settings.rhythmThresholdsByVideoType[type] = value
+                appState.scheduleRhythmReview(delay: .zero)
             }
         )
     }

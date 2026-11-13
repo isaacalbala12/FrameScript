@@ -10,6 +10,13 @@
 - Added `FrameScriptCore`, a UI-free Swift package linked into the app, with the `.fscr` document value types and codec.
 - Added the v4 project schema for takes, learned speech rate, assets, per-language publishing packs, checklist tasks, sources and claims, comparison tables, language variants, short clips, version snapshots, T3 thread reuse, Markdown import leftovers, and published-video comparison.
 
+### Fixed
+
+- Script markup highlighting now re-runs over the whole document after a multi-paragraph paste and covers the whole blank-line block for emphasis that spans several lines, instead of leaving pasted or distant markers unstyled.
+- Word count and duration are cached from one debounced parse per settled edit, with the parse off the main actor, so typing a 20k-word scene no longer parses the whole script on every keystroke.
+- Rhythm review runs on an immutable snapshot off the main actor; warnings are dropped immediately when their scene changes, project-level outliers count in the sidebar badge, threshold edits refresh the review, and anchor links/unlinks refresh the visual-change analysis.
+- Marker colors in the light editor now keep at least WCAG AA 4.5:1 contrast.
+
 ### Changed
 
 - Duration estimates for scenes, the sidebar and the project now run through `ScriptMarkup`: spoken words only (cues excluded) plus pause durations, using the per-language rate, the project's learned WPM when present, and the configured pause defaults.
