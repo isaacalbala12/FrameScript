@@ -9,12 +9,22 @@ public struct Chapter: Sendable, Hashable {
     public let title: String
     /// One-based position, used for the fallback title.
     public let position: Int
+    /// Scene the chapter starts at, when the caller supplied one. F15 uses it
+    /// to map a generated chapter back to the scene and its override.
+    public let sceneID: UUID?
 
-    public init(startFrame: Int, startSeconds: Int, title: String, position: Int) {
+    public init(
+        startFrame: Int,
+        startSeconds: Int,
+        title: String,
+        position: Int,
+        sceneID: UUID? = nil
+    ) {
         self.startFrame = startFrame
         self.startSeconds = startSeconds
         self.title = title
         self.position = position
+        self.sceneID = sceneID
     }
 }
 
@@ -135,6 +145,7 @@ public enum YouTubeChapters {
             var seconds: Int
             var title: String
             var sceneIndex: Int
+            var sceneID: UUID
         }
 
         var candidates: [Candidate] = []
@@ -198,7 +209,13 @@ public enum YouTubeChapters {
             }
 
             candidates.append(
-                Candidate(frame: frame, seconds: seconds, title: title, sceneIndex: index)
+                Candidate(
+                    frame: frame,
+                    seconds: seconds,
+                    title: title,
+                    sceneIndex: index,
+                    sceneID: scene.id
+                )
             )
         }
 
@@ -272,7 +289,8 @@ public enum YouTubeChapters {
                 startFrame: candidate.frame,
                 startSeconds: candidate.seconds,
                 title: candidate.title,
-                position: position + 1
+                position: position + 1,
+                sceneID: candidate.sceneID
             )
         }
 

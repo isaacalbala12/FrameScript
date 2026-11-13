@@ -58,6 +58,9 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("recording.obs.settings"), detail: "") {
                 appState.recording.isSettingsPresented = true
             },
+            PaletteResult(title: appState.localized("publishing.menu.open"), detail: shortcut(.publishingPack)) {
+                appState.showPublishingPanel()
+            },
             PaletteResult(title: appState.localized("project.browser"), detail: "") {
                 appState.returnToProjectList()
             },

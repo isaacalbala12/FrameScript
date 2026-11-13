@@ -75,6 +75,12 @@ struct TopToolbar: View {
                 )
 
                 toolbarButton(
+                    systemName: "megaphone",
+                    help: appState.localized("publishing.toolbar.help"),
+                    action: appState.showPublishingPanel
+                )
+
+                toolbarButton(
                     systemName: "text.bubble",
                     help: appState.localized("toolbar.teleprompter"),
                     action: appState.presentTeleprompter

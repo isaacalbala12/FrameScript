@@ -34,7 +34,7 @@ extension L10n {
             "aiTask.rewrite": "Rewrite",
             "aiTask.bRoll": "B-roll suggestions",
             "aiTask.editing": "Editing suggestions",
-            "aiTask.titlesSEO": "Titles and SEO (future)",
+            "aiTask.titlesSEO": "Titles and SEO",
             "aiTask.translation": "Translation (future)",
             "aiTask.hooks": "Hooks",
 
@@ -126,7 +126,7 @@ extension L10n {
             "aiTask.rewrite": "Переписать",
             "aiTask.bRoll": "Идеи для B-roll",
             "aiTask.editing": "Заметки по монтажу",
-            "aiTask.titlesSEO": "Заголовки и SEO (позже)",
+            "aiTask.titlesSEO": "Заголовки и SEO",
             "aiTask.translation": "Перевод (позже)",
             "aiTask.hooks": "Крючки",
 
@@ -218,7 +218,7 @@ extension L10n {
             "aiTask.rewrite": "Reescribir",
             "aiTask.bRoll": "Ideas de B-roll",
             "aiTask.editing": "Notas de edición",
-            "aiTask.titlesSEO": "Títulos y SEO (futuro)",
+            "aiTask.titlesSEO": "Títulos y SEO",
             "aiTask.translation": "Traducción (futuro)",
             "aiTask.hooks": "Ganchos",
 

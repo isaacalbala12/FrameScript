@@ -184,7 +184,8 @@ final class AppState {
         exportFolderBookmarkResolver: @escaping ExportFolderBookmarkResolver = { data, isStale in
             try URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
         },
-        templates: [FrameTemplate] = SampleData.templates
+        templates: [FrameTemplate] = SampleData.templates,
+        customTemplatesLoader: () -> [FrameTemplate] = { AppState.loadCustomTemplates() }
     ) {
         self.projectStore = projectStore
         self.recentProjectStore = recentProjectStore
@@ -205,7 +206,7 @@ final class AppState {
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
-        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: Self.loadCustomTemplates())
+        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: customTemplatesLoader())
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
         self.projectStore.durationConfigurationProvider = { [weak self] scene in

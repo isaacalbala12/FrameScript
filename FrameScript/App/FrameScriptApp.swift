@@ -26,6 +26,7 @@ struct FrameScriptApp: App {
             .environment(appState)
             .environment(escaletaImport)
             .backupsSheet(appState)
+            .publishingSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
                 appDelegate.attach(appState)
@@ -228,6 +229,10 @@ struct FrameScriptApp: App {
             Button(appState.localized("menu.generateBRoll")) { appState.generateBRollForSelectedScene() }
                 .disabled(!appState.hasOpenProject)
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
+                .disabled(!appState.hasOpenProject)
+            Divider()
+            Button(appState.localized("publishing.menu.open")) { appState.showPublishingPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .publishingPack))
                 .disabled(!appState.hasOpenProject)
             Divider()
             Button(appState.localized("recording.menu.recordTake")) { appState.toggleRecordingTake() }

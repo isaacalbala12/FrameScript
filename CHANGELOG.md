@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the publishing pack (F15): a “Publicación” panel with metadata (promise, thesis, title variants, description, tags, hashtags, pinned comment, community post), generated chapters with real take or learned-pace durations, A/B thumbnail variants copied into the project’s sibling assets folder, text thumbnail concepts and a persisted publishing checklist. It exports the escaleta’s `# Paquete SEO` block plus a plain YouTube Studio block, keeps one pack per language, and can propose titles through the configured AI provider without overwriting the chosen title.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
