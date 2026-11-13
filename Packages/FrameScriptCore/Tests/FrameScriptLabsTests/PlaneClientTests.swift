@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
 
 private let planeWorkspaceSlug = "acme"
 private let planeProjectID = "project-uuid-1"

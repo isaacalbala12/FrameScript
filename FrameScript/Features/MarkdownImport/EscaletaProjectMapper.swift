@@ -35,10 +35,34 @@ struct EscaletaMappingOptions: Sendable {
     /// Nil means detect the project language from the document content.
     var primaryLanguage: String?
     var wordsPerMinute: Int
+    /// Learned rates of the project the import belongs to, if any. A brand-new
+    /// project has none; the field keeps the resolution rule in one place.
+    var learnedWordsPerMinuteByLanguage: [String: Double]
+    /// Preferences used to resolve the imported language's rate. When nil the
+    /// literal `wordsPerMinute` applies (tests and non-UI callers).
+    var settings: AppSettings?
 
-    init(primaryLanguage: String? = nil, wordsPerMinute: Int = 150) {
+    init(
+        primaryLanguage: String? = nil,
+        wordsPerMinute: Int = 150,
+        learnedWordsPerMinuteByLanguage: [String: Double] = [:],
+        settings: AppSettings? = nil
+    ) {
         self.primaryLanguage = primaryLanguage
         self.wordsPerMinute = max(1, wordsPerMinute)
+        self.learnedWordsPerMinuteByLanguage = learnedWordsPerMinuteByLanguage
+        self.settings = settings
+    }
+
+    /// The same precedence the editor uses: learned rate, per-language
+    /// setting, customized legacy global rate, built-in default.
+    func resolvedWordsPerMinute(for language: String) -> Double {
+        guard let settings else { return Double(max(1, wordsPerMinute)) }
+        return DurationEstimator.effectiveWordsPerMinute(
+            language: language,
+            learnedWordsPerMinute: learnedWordsPerMinuteByLanguage,
+            settings: settings
+        )
     }
 }
 
@@ -95,6 +119,8 @@ enum EscaletaProjectMapper {
         var stats = EscaletaMappingStats()
         var warnings = result.warnings
 
+        let language = options.primaryLanguage ?? EscaletaLanguageDetector.detect(document)
+        let wordsPerMinute = options.resolvedWordsPerMinute(for: language)
         let sceneStarts = document.scenes.map(\.startSeconds)
         var scenes: [Scene] = []
         var sceneMetadata: [EscaletaRoundTripMetadata.SceneMetadata] = []
@@ -108,7 +134,7 @@ enum EscaletaProjectMapper {
                 order: index,
                 nextStart: nextStart,
                 tableStartIndex: tableCursor,
-                options: options,
+                wordsPerMinute: wordsPerMinute,
                 warnings: &warnings,
                 stats: &stats
             )
@@ -120,7 +146,6 @@ enum EscaletaProjectMapper {
             }
         }
 
-        let language = options.primaryLanguage ?? EscaletaLanguageDetector.detect(document)
         let pack = makePublishingPack(
             document.publishing,
             sceneIDsByStart: sceneIDsByStart,
@@ -178,8 +203,8 @@ enum EscaletaProjectMapper {
                 order: scene.order,
                 title: scene.title,
                 startText: documentScene.timestampText,
-                targetSeconds: scene.targetDuration.map { Int($0.rounded()) },
-                estimatedSeconds: Int(scene.estimatedDuration.rounded()),
+                targetSeconds: scene.targetDuration.map(clampedSeconds),
+                estimatedSeconds: clampedSeconds(scene.estimatedDuration),
                 bRollCount: scene.bRollItems.count,
                 hasReHook: scene.escaletaHasReHook
             )
@@ -200,7 +225,7 @@ enum EscaletaProjectMapper {
         order: Int,
         nextStart: Int?,
         tableStartIndex: Int,
-        options: EscaletaMappingOptions,
+        wordsPerMinute: Double,
         warnings: inout [EscaletaWarning],
         stats: inout EscaletaMappingStats
     ) -> (scene: Scene, metadata: EscaletaRoundTripMetadata.SceneMetadata) {
@@ -268,6 +293,30 @@ enum EscaletaProjectMapper {
                         EscaletaRoundTripMetadata.BlockRef(kind: "editing", index: editingIndex)
                     )
                     editingIndex += 1
+                case .montage:
+                    // App-created editing notes travel as [MONTAJE: …] so the
+                    // escaleta export does not drop them.
+                    let anchor = script.anchor(forCueAt: blockIndex)
+                    let position = script.cueIsAtEnd(blockIndex: blockIndex) ? "después" : "antes"
+                    let payload = cue.payload?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let original = payload.isEmpty
+                        ? "[\(cue.label)]"
+                        : "[\(cue.label): \(payload)]"
+                    editingItems.append(
+                        EditingItem(
+                            textAnchor: anchor,
+                            linkedSegmentID: nil,
+                            templateType: "Escaleta",
+                            cutStyle: payload,
+                            transition: "",
+                            subtitleStyle: "",
+                            notes: "Cue original: \(original)\nPosición: \(position)"
+                        )
+                    )
+                    slots[textBlockIndex].append(
+                        EscaletaRoundTripMetadata.BlockRef(kind: "editing", index: editingIndex)
+                    )
+                    editingIndex += 1
                 default:
                     guard cue.kind.isBRoll else { continue }
                     let source = bRollSource(for: cue)
@@ -281,7 +330,9 @@ enum EscaletaProjectMapper {
                             EscaletaWarning(
                                 kind: .unknownCue,
                                 message: "No se pudo anclar el cue [\(cue.label)] a un párrafo de «\(scene.title)».",
-                                line: cue.line
+                                line: cue.line,
+                                arguments: [cue.label, scene.title],
+                                localizationKey: "escaleta.warning.unknownCueUnanchored"
                             )
                         )
                     }
@@ -310,7 +361,7 @@ enum EscaletaProjectMapper {
             }
         }
 
-        let estimated = DurationEstimator.estimate(text: script.text, wordsPerMinute: options.wordsPerMinute)
+        let estimated = DurationEstimator.estimate(text: script.text, wordsPerMinute: wordsPerMinute)
         let target: TimeInterval? = {
             guard let start = scene.startSeconds, let nextStart, nextStart > start else { return nil }
             return TimeInterval(nextStart - start)
@@ -372,7 +423,7 @@ enum EscaletaProjectMapper {
             return .graphic
         case .screenTable:
             return .table
-        case .recordingNote, .rehook, .unknown:
+        case .recordingNote, .rehook, .montage, .unknown:
             return .unspecified
         }
     }
@@ -545,6 +596,12 @@ enum EscaletaProjectMapper {
     }
 
     // MARK: - Video type
+
+    /// Values from a document are untrusted; `Int(Double.infinity)` traps.
+    static func clampedSeconds(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value, 0), 86_400))
+    }
 
     static func guessVideoType(_ document: EscaletaDocument) -> String {
         let haystack = ([document.title] + document.outline.map(\.text) + document.scenes.map(\.title))

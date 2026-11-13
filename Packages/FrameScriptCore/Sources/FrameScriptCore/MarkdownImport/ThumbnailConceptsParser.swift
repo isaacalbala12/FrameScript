@@ -99,7 +99,8 @@ struct ThumbnailConceptsParser {
                         EscaletaWarning(
                             kind: .unknownSection,
                             message: "Sección no reconocida conservada en el grupo de miniaturas: «\(child.heading)».",
-                            line: child.lineIndex + 1
+                            line: child.lineIndex + 1,
+                            arguments: [child.heading]
                         )
                     )
                 }
@@ -111,7 +112,8 @@ struct ThumbnailConceptsParser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "El grupo de miniaturas «\(node.heading)» está vacío.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -189,7 +191,8 @@ struct ThumbnailConceptsParser {
                 EscaletaWarning(
                     kind: .thumbnailTextLength,
                     message: "El texto de la miniatura «\(heading.text)» tiene más de 3 palabras.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [heading.text]
                 )
             )
         }
@@ -198,7 +201,8 @@ struct ThumbnailConceptsParser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "El concepto \(heading.label) no tiene texto de miniatura.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [heading.label]
                 )
             )
         }
@@ -254,7 +258,8 @@ struct ThumbnailConceptsParser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» está vacía.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
 
 enum PublishedCompareFixtures {
     static func text(_ name: String, extension ext: String) throws -> String {

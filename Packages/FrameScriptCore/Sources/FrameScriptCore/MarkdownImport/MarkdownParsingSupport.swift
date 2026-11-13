@@ -272,14 +272,44 @@ enum MarkdownParsingSupport {
         return value.count >= 2 && value.hasPrefix("|") && value.hasSuffix("|")
     }
 
+    /// Splits a table row on unescaped `|`. `\|` is a literal pipe inside a
+    /// cell and `\\` is a literal backslash; every other backslash is text.
     static func tableCells(_ line: String) -> [String] {
         var value = trimmed(line)
         guard value.hasPrefix("|"), value.hasSuffix("|"), value.count >= 2 else { return [] }
         value.removeFirst()
         value.removeLast()
-        return value
-            .split(separator: "|", omittingEmptySubsequences: false)
-            .map { trimmed(String($0)) }
+
+        var cells: [String] = []
+        var current = ""
+        var pendingBackslash = false
+        for scalar in value.unicodeScalars {
+            if pendingBackslash {
+                pendingBackslash = false
+                if scalar == "|" || scalar == "\\" {
+                    current.unicodeScalars.append(scalar)
+                } else {
+                    current.append("\\")
+                    current.unicodeScalars.append(scalar)
+                }
+                continue
+            }
+            if scalar == "\\" {
+                pendingBackslash = true
+                continue
+            }
+            if scalar == "|" {
+                cells.append(trimmed(current))
+                current = ""
+                continue
+            }
+            current.unicodeScalars.append(scalar)
+        }
+        if pendingBackslash {
+            current.append("\\")
+        }
+        cells.append(trimmed(current))
+        return cells
     }
 
     static func isSeparatorCell(_ cell: String) -> Bool {

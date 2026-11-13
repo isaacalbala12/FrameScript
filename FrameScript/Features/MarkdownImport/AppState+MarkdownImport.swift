@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import FrameScriptCore
 import Observation
+import OSLog
 import UniformTypeIdentifiers
 
 enum EscaletaImportMode: Equatable {
@@ -90,6 +91,11 @@ final class EscaletaImportCoordinator {
 
 @MainActor
 extension AppState {
+    private static let markdownImportLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "MarkdownImport"
+    )
+
     func prepareEscaletaImport(url: URL) -> EscaletaImportRequest? {
         do {
             let markdown = try securityScope.withAccess(to: url) {
@@ -100,7 +106,7 @@ extension AppState {
             let mapping: EscaletaProjectMapping? = if result.document.kind == .escaleta, !result.document.scenes.isEmpty {
                 EscaletaProjectMapper.map(
                     result,
-                    options: EscaletaMappingOptions(wordsPerMinute: settings.editorPreferences.wordsPerMinute)
+                    options: EscaletaMappingOptions(settings: settings)
                 )
             } else {
                 nil
@@ -113,15 +119,12 @@ extension AppState {
                 mode: mode
             )
         } catch {
-            errorCenter.present(
-                AppError(
-                    kind: .invalidProjectData,
-                    context: AppErrorContext(
-                        fileName: url.lastPathComponent,
-                        diagnosticCode: "markdown-import-read"
-                    )
-                )
+            Self.markdownImportLogger.error(
+                "Escaleta import read failed. File: \(url.lastPathComponent, privacy: .private)"
             )
+            if let error = AppError.project(error, fileURL: url, operation: .read) {
+                errorCenter.present(error)
+            }
             return nil
         }
     }

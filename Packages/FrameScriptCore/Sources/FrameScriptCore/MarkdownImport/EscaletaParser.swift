@@ -86,7 +86,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .outlineFallback,
                     message: "No había escenas con timestamp; se usó la escaleta como respaldo (\(document.scenes.count) escenas).",
-                    line: document.outlineHeading.flatMap(lineNumber(ofHeading:))
+                    line: document.outlineHeading.flatMap(lineNumber(ofHeading:)),
+                    arguments: ["\(document.scenes.count)"]
                 )
             )
         }
@@ -169,7 +170,7 @@ private struct Parser {
         default:
             if isSEOHeading(normalized) {
                 parseSEO(node)
-            } else if isTableSection(normalized) {
+            } else if isTableSection(node) {
                 parseTableSection(node)
             } else if isVerificationSection(normalized) {
                 parseVerificationSection(node)
@@ -210,7 +211,7 @@ private struct Parser {
         }
 
         let normalized = MarkdownParsingSupport.normalizedHeading(node.heading)
-        if isTableSection(normalized) {
+        if isTableSection(node) {
             parseTableSection(node)
         } else if isVerificationSection(normalized) {
             parseVerificationSection(node)
@@ -351,7 +352,7 @@ private struct Parser {
 
     mutating func parseAnnex(_ node: MarkdownNode) {
         let normalized = MarkdownParsingSupport.normalizedHeading(node.heading)
-        if isTableSection(normalized) {
+        if isTableSection(node) {
             parseTableSection(node)
         } else if isVerificationSection(normalized) {
             parseVerificationSection(node)
@@ -402,7 +403,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .descendingTimestamp,
                     message: "El timestamp \(heading.timestampText) (\(heading.title)) no es ascendente respecto al anterior.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [heading.timestampText, heading.title]
                 )
             )
         }
@@ -415,7 +417,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La escena \(heading.timestampText) no tiene cuerpo.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [heading.timestampText]
                 )
             )
         }
@@ -481,7 +484,8 @@ private struct Parser {
                         EscaletaWarning(
                             kind: .unknownCue,
                             message: "Cue desconocido conservado en notas: [\(cue.label)].",
-                            line: absoluteLine
+                            line: absoluteLine,
+                            arguments: [cue.label]
                         )
                     )
                 }
@@ -555,7 +559,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .inlineCue,
                     message: "Cue en línea conservado en el guion: [\(label)].",
-                    line: startLine
+                    line: startLine,
+                    arguments: [label]
                 )
             )
         }
@@ -577,7 +582,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» está vacía.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -619,7 +625,7 @@ private struct Parser {
 
             for child in node.children {
                 let normalized = MarkdownParsingSupport.normalizedHeading(child.heading)
-                if isTableSection(normalized) {
+                if isTableSection(child) {
                     parseTableSection(child)
                 } else if isVerificationSection(normalized) {
                     parseVerificationSection(child)
@@ -650,7 +656,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» no contiene campos reconocibles.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -738,7 +745,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "El campo SEO «\(field.rawValue)» está vacío.",
-                    line: lineStart
+                    line: lineStart,
+                    arguments: [field.rawValue]
                 )
             )
             return
@@ -903,7 +911,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» no contiene ninguna tabla válida.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -922,7 +931,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» está vacía.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -943,7 +953,8 @@ private struct Parser {
                 EscaletaWarning(
                     kind: .emptySection,
                     message: "La sección «\(node.heading)» no contiene fuentes.",
-                    line: node.lineIndex + 1
+                    line: node.lineIndex + 1,
+                    arguments: [node.heading]
                 )
             )
         }
@@ -1081,7 +1092,8 @@ private struct Parser {
             EscaletaWarning(
                 kind: .emptySection,
                 message: "La sección «\(node.heading)» está vacía.",
-                line: node.lineIndex + 1
+                line: node.lineIndex + 1,
+                arguments: [node.heading]
             )
         )
     }
@@ -1186,6 +1198,27 @@ private struct Parser {
         normalized.contains("tabla comparativa")
     }
 
+    /// A section whose first meaningful line is a table row is a table section
+    /// even when its heading is not the canonical "Tabla comparativa".
+    func isTableSection(_ node: MarkdownNode) -> Bool {
+        if isTableSection(MarkdownParsingSupport.normalizedHeading(node.heading)) {
+            return true
+        }
+        return sectionStartsWithTable(node)
+    }
+
+    func sectionStartsWithTable(_ node: MarkdownNode) -> Bool {
+        for index in node.contentRange {
+            if index < fenceMask.count, fenceMask[index] { continue }
+            let line = lines[index]
+            if MarkdownParsingSupport.isBlank(line) || MarkdownParsingSupport.isHorizontalRule(line) {
+                continue
+            }
+            return MarkdownParsingSupport.isTableRow(line)
+        }
+        return false
+    }
+
     func isVerificationSection(_ normalized: String) -> Bool {
         normalized == "verificar antes de grabar"
             || normalized == "pruebas recomendadas antes de grabar"
@@ -1199,7 +1232,7 @@ private struct Parser {
 
     func isAnnexHeading(_ node: MarkdownNode) -> Bool {
         let normalized = MarkdownParsingSupport.normalizedHeading(node.heading)
-        return isTableSection(normalized)
+        return isTableSection(node)
             || isVerificationSection(normalized)
             || isSourcesSection(normalized)
             || isSEOHeading(normalized)
@@ -1242,8 +1275,9 @@ private struct Parser {
         let message = kind == .emptySceneTitle
             ? "La escena de la línea \(node.lineIndex + 1) no tiene título."
             : "El encabezado «\(node.heading)» parece una escena pero no se pudo interpretar."
+        let arguments = kind == .emptySceneTitle ? ["\(node.lineIndex + 1)"] : [node.heading]
         warnings.append(
-            EscaletaWarning(kind: kind, message: message, line: node.lineIndex + 1)
+            EscaletaWarning(kind: kind, message: message, line: node.lineIndex + 1, arguments: arguments)
         )
     }
 
@@ -1262,7 +1296,8 @@ private struct Parser {
             EscaletaWarning(
                 kind: .unknownSection,
                 message: "Sección no reconocida conservada: «\(node.heading)».",
-                line: node.lineIndex + 1
+                line: node.lineIndex + 1,
+                arguments: [node.heading]
             )
         )
     }
