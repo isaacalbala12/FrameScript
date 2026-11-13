@@ -270,10 +270,26 @@ extension AppState {
               project.learnedWordsPerMinuteResetAtByLanguage == resetCutoffs else {
             return
         }
-        let valuesChanged = project.learnedWordsPerMinuteByLanguage
-            != report.learnedWordsPerMinuteByLanguage
+        // Rebuilding from takes must not discard a pace learned from
+        // teleprompter sessions (F9). Sessions are not stored in the document,
+        // so when a language has no take samples at all, keep the value that is
+        // already in use. As soon as takes exist, the take rebuild wins.
+        var learned = report.learnedWordsPerMinuteByLanguage
+        for (code, existing) in project.learnedWordsPerMinuteByLanguage {
+            let statistics = report.statistics(for: code)
+            let hasTakeSamples = (statistics?.acceptedSampleCount ?? 0)
+                + (statistics?.rejectedSampleCount ?? 0) > 0
+            if learned[code] == nil,
+               !hasTakeSamples,
+               existing.isFinite,
+               DurationLimits.plausibleWordsPerMinute.contains(existing) {
+                learned[code] = existing
+            }
+        }
+
+        let valuesChanged = project.learnedWordsPerMinuteByLanguage != learned
         if valuesChanged {
-            project.learnedWordsPerMinuteByLanguage = report.learnedWordsPerMinuteByLanguage
+            project.learnedWordsPerMinuteByLanguage = learned
         }
 
         let estimatesChanged = refreshEstimatedDurationsUsingLearnedWPM()

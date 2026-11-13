@@ -44,6 +44,22 @@ final class TeleprompterLearningTests: XCTestCase {
         XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 120, accuracy: 0.001)
     }
 
+    func testSessionLearnedPaceSurvivesTakeRebuildWhenThereAreNoTakes() throws {
+        let scene = Scene(order: 0, sectionType: .hook, title: "Hook", scriptText: "uno dos tres")
+        let project = FrameProject(title: "Learning", scenes: [scene], primaryLanguage: "es")
+        let appState = makeAppState(project: project)
+
+        XCTAssertTrue(appState.recordTeleprompterReadingSession(
+            TeleprompterReadingSession(spokenWords: 40, duration: 20, language: .spanish)
+        ))
+        XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 120, accuracy: 0.001)
+
+        // Project open and rating changes rebuild from takes. With no takes the
+        // report is empty; the session-learned value must not be wiped.
+        appState.recomputeLearnedWPM(markDirty: false)
+        XCTAssertEqual(project.learnedWordsPerMinuteByLanguage["es"] ?? 0, 120, accuracy: 0.001)
+    }
+
     func testResetCutoffStopsSessionsFromTeaching() {
         let scene = Scene(order: 0, sectionType: .hook, title: "Hook", scriptText: "uno dos tres")
         let project = FrameProject(title: "Learning", scenes: [scene], primaryLanguage: "es")
