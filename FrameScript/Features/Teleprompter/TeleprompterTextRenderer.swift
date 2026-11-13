@@ -7,7 +7,17 @@ import FrameScriptCore
 struct TeleprompterAttributedDocument {
     let attributedString: NSAttributedString
     let sectionHeaderLocations: [Int]
+    let sectionHeaderRanges: [NSRange]
+    let sectionBodyRanges: [NSRange]
     let visibleCharacterCounts: [Int]
+}
+
+/// A single laid-out text line, in content coordinates.
+struct TeleprompterFrameSample: Equatable, Sendable {
+    var headerFrames: [CGRect] = []
+    var bodyLineFrames: [CGRect] = []
+    var sectionStarts: [Double] = []
+    var sectionHeights: [Double] = []
 }
 
 /// Builds the complete teleprompter document once per text/style change.
@@ -21,12 +31,17 @@ enum TeleprompterAttributedStringBuilder {
         static let emphasis = NSColor(srgbRed: 1.0, green: 0.84, blue: 0.36, alpha: 1)
         static let strongEmphasis = NSColor(srgbRed: 1.0, green: 0.94, blue: 0.62, alpha: 1)
         static let cue = NSColor.white.withAlphaComponent(0.38)
-        static let pause = NSColor.white.withAlphaComponent(0.30)
+        static let pause = NSColor.white.withAlphaComponent(0.34)
         static let header = NSColor.white.withAlphaComponent(0.42)
+        static let placeholder = NSColor.white.withAlphaComponent(0.34)
     }
 
-    static func build(sections: [TeleprompterSection], fontSize: Double) -> TeleprompterAttributedDocument {
-        let builder = Builder(fontSize: CGFloat(fontSize))
+    static func build(
+        sections: [TeleprompterSection],
+        fontSize: Double,
+        emptyScenePlaceholder: String = ""
+    ) -> TeleprompterAttributedDocument {
+        let builder = Builder(fontSize: CGFloat(fontSize), emptyScenePlaceholder: emptyScenePlaceholder)
         for (index, section) in sections.enumerated() {
             builder.appendSectionHeader(index: index, title: section.title, isFirst: index == 0)
             for run in section.runs {
@@ -46,25 +61,58 @@ enum TeleprompterAttributedStringBuilder {
         return builder.document
     }
 
+    /// Scene titles often already carry their number ("01 HOOK"). The renderer
+    /// adds its own `01`, so strip a leading 1–2 digit ordinal to avoid
+    /// "01  01 HOOK" and the extra header width that came with it.
+    nonisolated static func displayTitle(_ title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = Array(trimmed.unicodeScalars)
+        var digits = 0
+        while digits < scalars.count, scalars[digits].properties.numericType != nil {
+            digits += 1
+        }
+        guard digits > 0, digits <= 2 else { return trimmed }
+        var cursor = digits
+        while cursor < scalars.count, CharacterSet.whitespaces.contains(scalars[cursor]) {
+            cursor += 1
+        }
+        if cursor < scalars.count, ".:)-–—·".unicodeScalars.contains(scalars[cursor]) {
+            cursor += 1
+            while cursor < scalars.count, CharacterSet.whitespaces.contains(scalars[cursor]) {
+                cursor += 1
+            }
+        }
+        guard cursor < scalars.count, cursor > digits else { return trimmed }
+        return String(String.UnicodeScalarView(scalars[cursor...]))
+    }
+
     /// Encapsulates the append-only state so newline handling and character
     /// counts stay consistent without repeatedly reading the whole string.
     private final class Builder {
         private let fontSize: CGFloat
+        private let emptyScenePlaceholder: String
         private let attributed = NSMutableAttributedString()
         private var sectionHeaderLocations: [Int] = []
+        private var sectionHeaderRanges: [NSRange] = []
+        private var sectionBodyRanges: [NSRange] = []
         private var visibleCharacterCounts: [Int] = []
         private var currentVisibleCount = 0
+        private var currentBodyStart = 0
+        private var currentHasBlockContent = false
         private var lastAppendedWasNewline = true
         private var pendingBlockBreak = false
 
-        init(fontSize: CGFloat) {
+        init(fontSize: CGFloat, emptyScenePlaceholder: String) {
             self.fontSize = fontSize
+            self.emptyScenePlaceholder = emptyScenePlaceholder
         }
 
         var document: TeleprompterAttributedDocument {
             TeleprompterAttributedDocument(
                 attributedString: attributed,
                 sectionHeaderLocations: sectionHeaderLocations,
+                sectionHeaderRanges: sectionHeaderRanges,
+                sectionBodyRanges: sectionBodyRanges,
                 visibleCharacterCounts: visibleCharacterCounts
             )
         }
@@ -77,7 +125,7 @@ enum TeleprompterAttributedStringBuilder {
                 ensureNewline()
             }
             let number = String(format: "%02d", index + 1)
-            let name = title.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            let name = TeleprompterAttributedStringBuilder.displayTitle(title).uppercased()
             let headerText = name.isEmpty ? number : "\(number)  \(name)"
 
             let style = NSMutableParagraphStyle()
@@ -92,13 +140,28 @@ enum TeleprompterAttributedStringBuilder {
                 .paragraphStyle: style
             ]
 
-            sectionHeaderLocations.append(attributed.length)
+            let headerStart = attributed.length
+            sectionHeaderLocations.append(headerStart)
             append(headerText, attributes: attributes)
             appendNewline(attributes: attributes)
+            sectionHeaderRanges.append(
+                NSRange(location: headerStart, length: attributed.length - headerStart)
+            )
+            currentBodyStart = attributed.length
+            currentHasBlockContent = false
             pendingBlockBreak = true
         }
 
         func finishSection() {
+            if currentVisibleCount == 0, !currentHasBlockContent, !emptyScenePlaceholder.isEmpty {
+                appendPlaceholder(emptyScenePlaceholder)
+            }
+            sectionBodyRanges.append(
+                NSRange(
+                    location: currentBodyStart,
+                    length: max(0, attributed.length - currentBodyStart)
+                )
+            )
             visibleCharacterCounts.append(currentVisibleCount)
             currentVisibleCount = 0
         }
@@ -109,7 +172,7 @@ enum TeleprompterAttributedStringBuilder {
             guard !rawText.isEmpty else { return }
             var text = rawText
             if pendingBlockBreak {
-                stripOneLeadingLineBreak(from: &text)
+                text = TeleprompterBlockText.normalizedAfterBlockBreak(text)
                 pendingBlockBreak = false
             }
             guard !text.isEmpty else { return }
@@ -121,6 +184,7 @@ enum TeleprompterAttributedStringBuilder {
 
         func appendCue(label: String) {
             ensureNewline()
+            currentHasBlockContent = true
             let style = NSMutableParagraphStyle()
             style.lineSpacing = 0
             style.paragraphSpacing = fontSize * 0.30
@@ -131,29 +195,56 @@ enum TeleprompterAttributedStringBuilder {
                 .kern: 1.1,
                 .paragraphStyle: style
             ]
-            append("▸ \(label.uppercased())", attributes: attributes)
+            let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            append("▸ \(trimmedLabel.uppercased())", attributes: attributes)
             appendNewline(attributes: attributes)
             pendingBlockBreak = true
         }
 
         func appendPause(seconds: TimeInterval) {
             ensureNewline()
+            currentHasBlockContent = true
             let style = NSMutableParagraphStyle()
             style.lineSpacing = 0
             style.paragraphSpacing = fontSize * 0.40
             style.lineBreakMode = .byWordWrapping
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: roundedFont(size: fontSize * 0.28, weight: .semibold),
+                .font: roundedFont(size: fontSize * 0.34, weight: .semibold),
                 .foregroundColor: Palette.pause,
                 .paragraphStyle: style
             ]
-            var label = "❚❚"
+            // `·` is covered by both system fonts. The old `❚❚` (U+275A) was
+            // absent and rendered as a tofu box on its own line.
+            var label = "·  ·  ·"
             if seconds >= 1 {
-                label += String(format: "  %.1fs", seconds)
+                label += String(format: "  %.1f s", seconds)
             }
             append(label, attributes: attributes)
             appendNewline(attributes: attributes)
             pendingBlockBreak = true
+        }
+
+        /// A dim, italic marker for scenes with nothing to read. It occupies a
+        /// line so the scene has real scrollable height, but it never counts as
+        /// spoken characters (voice following and timing ignore it).
+        func appendPlaceholder(_ text: String) {
+            var value = text
+            if pendingBlockBreak {
+                stripOneLeadingLineBreak(from: &value)
+                pendingBlockBreak = false
+            }
+            guard !value.isEmpty else { return }
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = 0
+            style.paragraphSpacing = fontSize * 0.30
+            style.lineBreakMode = .byWordWrapping
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: italicFont(roundedFont(size: fontSize * 0.46, weight: .regular)),
+                .foregroundColor: Palette.placeholder,
+                .paragraphStyle: style
+            ]
+            append(value, attributes: attributes)
+            appendNewline(attributes: attributes)
         }
 
         // MARK: Helpers
@@ -248,14 +339,67 @@ private final class NonInteractiveScrollView: NSScrollView {
     }
 }
 
+/// Belt and braces for the read-only prompter. `isEditable = false` alone still
+/// leaves an AX text area that accepts programmatic edits (and some keyboard
+/// paths), which is how typed letters used to reach the script and trigger the
+/// single-letter mirror shortcut. This view never becomes first responder and
+/// silently drops every text insertion.
+private final class ReadOnlyTeleprompterTextView: NSTextView {
+    override var acceptsFirstResponder: Bool { false }
+    override var isEditable: Bool {
+        get { false }
+        set { }
+    }
+    override var isSelectable: Bool {
+        get { false }
+        set { }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureReadOnlyStorage()
+    }
+
+    /// `NSTextView.init(frame:)` routes through this designated initializer, so
+    /// a subclass that declares its own initializer must implement it; without
+    /// it AppKit hits Swift's "unimplemented initializer" trap.
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        configureReadOnlyStorage()
+    }
+
+    private func configureReadOnlyStorage() {
+        // Set the superclass storage explicitly: the computed overrides above
+        // only hide the flag from callers, while AppKit still consults its own
+        // ivar in a few editing paths.
+        super.isEditable = false
+        super.isSelectable = false
+        super.isRichText = true
+    }
+
+    required init?(coder: NSCoder) {
+        return nil
+    }
+
+    override func becomeFirstResponder() -> Bool { false }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseDragged(with event: NSEvent) {}
+    override func keyDown(with event: NSEvent) {}
+    override func insertText(_ insertString: Any, replacementRange: NSRange) {}
+    override func doCommand(by selector: Selector) {}
+}
+
 @MainActor
 final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
     private let scrollView = NonInteractiveScrollView(frame: .zero)
-    private let textView = NSTextView(frame: .zero)
+    private let textView = ReadOnlyTeleprompterTextView(frame: .zero)
     private var sectionHeaderLocations: [Int] = []
+    private var sectionHeaderRanges: [NSRange] = []
+    private var sectionBodyRanges: [NSRange] = []
     private var visibleCharacterCounts: [Int] = []
     private var sectionStarts: [Double] = []
     private var sectionHeights: [Double] = []
+    private var frameSample = TeleprompterFrameSample()
     private var textBottom: CGFloat = 0
     private var contentHeight: CGFloat = 0
     private var columnWidth: CGFloat = 900
@@ -263,6 +407,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
     private var lastSections: [TeleprompterSection] = []
     private var lastFontSize: Double = 0
     private var lastColumnWidth: Double = 0
+    private var lastEmptyScenePlaceholder = ""
     private var lastViewportSize: CGSize = .zero
     private var lastReadingLineFraction: Double = 0
     private var lastMirrorVertical = false
@@ -286,11 +431,17 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         scrollView.horizontalScrollElasticity = .none
         scrollView.contentView.postsBoundsChangedNotifications = false
         scrollView.contentView.drawsBackground = false
+        scrollView.setAccessibilityElement(false)
 
         textView.isEditable = false
         textView.isSelectable = false
         textView.drawsBackground = false
         textView.isRichText = true
+        textView.isFieldEditor = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = false
         textView.autoresizingMask = [.width]
@@ -313,6 +464,12 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         textView.textColor = .white
         textView.insertionPointColor = .white
         textView.layoutManager?.allowsNonContiguousLayout = true
+        // The script is exposed once, as one read-only static text value.
+        textView.setAccessibilityElement(false)
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityEnabled(true)
 
         scrollView.documentView = textView
         addSubview(scrollView)
@@ -328,6 +485,24 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         setScrollOffset(scrollOffset)
     }
 
+    /// Test hook: the glyph frames the layout assertions use. Content
+    /// coordinates match the renderer's flipped space and therefore the
+    /// visual top-to-bottom order.
+    func currentFrameSample() -> TeleprompterFrameSample {
+        frameSample
+    }
+
+    /// Test hook: the text view must never accept focus or edits.
+    var textViewAccessibilityState: (acceptsFirstResponder: Bool, isEditable: Bool, isSelectable: Bool) {
+        (
+            textView.acceptsFirstResponder,
+            textView.isEditable,
+            textView.isSelectable
+        )
+    }
+
+    var documentText: String { textView.string }
+
     func render(
         sections: [TeleprompterSection],
         fontSize: Double,
@@ -335,6 +510,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         viewportSize: CGSize,
         readingLineFraction: Double,
         mirrorVertical: Bool,
+        emptyScenePlaceholder: String = "",
         onMetrics: @escaping (TeleprompterTextMetrics) -> Void
     ) {
         self.onMetrics = onMetrics
@@ -343,6 +519,7 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         let documentChanged = sections != lastSections
             || abs(fontSize - lastFontSize) > 0.001
             || abs(columnWidth - lastColumnWidth) > 0.5
+            || emptyScenePlaceholder != lastEmptyScenePlaceholder
         let layoutChanged = viewportSize != lastViewportSize
             || abs(readingLineFraction - lastReadingLineFraction) > 0.0001
             || mirrorVertical != lastMirrorVertical
@@ -351,10 +528,12 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
             lastSections = sections
             lastFontSize = fontSize
             lastColumnWidth = columnWidth
+            lastEmptyScenePlaceholder = emptyScenePlaceholder
             rebuildDocument(
                 sections: sections,
                 fontSize: fontSize,
-                columnWidth: columnWidth
+                columnWidth: columnWidth,
+                emptyScenePlaceholder: emptyScenePlaceholder
             )
         }
         if documentChanged || layoutChanged {
@@ -381,13 +560,21 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
     private func rebuildDocument(
         sections: [TeleprompterSection],
         fontSize: Double,
-        columnWidth: Double
+        columnWidth: Double,
+        emptyScenePlaceholder: String
     ) {
-        let document = TeleprompterAttributedStringBuilder.build(sections: sections, fontSize: fontSize)
+        let document = TeleprompterAttributedStringBuilder.build(
+            sections: sections,
+            fontSize: fontSize,
+            emptyScenePlaceholder: emptyScenePlaceholder
+        )
         sectionHeaderLocations = document.sectionHeaderLocations
+        sectionHeaderRanges = document.sectionHeaderRanges
+        sectionBodyRanges = document.sectionBodyRanges
         visibleCharacterCounts = document.visibleCharacterCounts
         self.columnWidth = CGFloat(columnWidth)
         textView.textStorage?.setAttributedString(document.attributedString)
+        setAccessibilityValue(document.attributedString.string)
     }
 
     private func updateLayout(
@@ -396,9 +583,22 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
         mirrorVertical: Bool
     ) {
         let horizontalInset = max(0, (viewportSize.width - columnWidth) / 2)
+        let guideY = Double(viewportSize.height) * readingLineFraction
+        // Content-coordinate position of the visual guide. Mirrored content is
+        // flipped around the viewport centre, so the guide maps to 1 - fraction.
+        let readingContentY = mirrorVertical
+            ? Double(viewportSize.height) - guideY
+            : guideY
+        // The first line must start at the guide, not at a fixed 64 pt inset:
+        // otherwise the reader sees the hook at the top while the counter (and
+        // the elapsed time) already reports a later scene under the guide.
+        let topInset = max(
+            TeleprompterAttributedStringBuilder.contentTopInset,
+            CGFloat(readingContentY)
+        )
         textView.textContainerInset = NSSize(
             width: horizontalInset,
-            height: TeleprompterAttributedStringBuilder.contentTopInset
+            height: topInset
         )
         textView.textContainer?.containerSize = NSSize(
             width: columnWidth,
@@ -415,19 +615,22 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
               let textContainer = textView.textContainer else {
             sectionStarts = []
             sectionHeights = []
-            textBottom = TeleprompterAttributedStringBuilder.contentTopInset
+            frameSample = TeleprompterFrameSample()
+            textBottom = topInset
             return
         }
 
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        textBottom = TeleprompterAttributedStringBuilder.contentTopInset + used.height
+        textBottom = topInset + used.height
 
         var starts: [Double] = []
+        var headerFrames: [CGRect] = []
         starts.reserveCapacity(sectionHeaderLocations.count)
-        for location in sectionHeaderLocations {
+        headerFrames.reserveCapacity(sectionHeaderLocations.count)
+        for (index, location) in sectionHeaderLocations.enumerated() {
             guard location >= 0, location < (textView.textStorage?.length ?? 0) else {
-                starts.append(Double(TeleprompterAttributedStringBuilder.contentTopInset))
+                starts.append(Double(topInset))
                 continue
             }
             let characterRange = NSRange(location: location, length: 1)
@@ -439,9 +642,19 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
                 forGlyphRange: glyphRange,
                 in: textContainer
             )
-            starts.append(
-                Double(TeleprompterAttributedStringBuilder.contentTopInset + rect.minY)
-            )
+            starts.append(Double(topInset + rect.minY))
+
+            if sectionHeaderRanges.indices.contains(index) {
+                let headerGlyphRange = layoutManager.glyphRange(
+                    forCharacterRange: sectionHeaderRanges[index],
+                    actualCharacterRange: nil
+                )
+                let headerRect = layoutManager.boundingRect(
+                    forGlyphRange: headerGlyphRange,
+                    in: textContainer
+                )
+                headerFrames.append(headerRect.offsetBy(dx: 0, dy: topInset))
+            }
         }
 
         sectionStarts = starts
@@ -449,11 +662,17 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
             starts: starts,
             textBottom: Double(textBottom)
         )
+        frameSample = TeleprompterFrameSample(
+            headerFrames: headerFrames,
+            bodyLineFrames: bodyLineFrames(
+                layoutManager: layoutManager,
+                textContainer: textContainer,
+                topInset: topInset
+            ),
+            sectionStarts: sectionStarts,
+            sectionHeights: sectionHeights
+        )
 
-        let guideY = Double(viewportSize.height) * readingLineFraction
-        let readingContentY = mirrorVertical
-            ? Double(viewportSize.height) - guideY
-            : guideY
         let bottomInset = max(96, Double(viewportSize.height) - readingContentY + 40)
         let newHeight = max(Double(viewportSize.height), Double(textBottom) + bottomInset)
         contentHeight = CGFloat(newHeight)
@@ -474,6 +693,37 @@ final class TeleprompterTextRenderer: NSView, TeleprompterTextRendering {
             generation: renderGeneration
         )
         onMetrics?(metrics)
+    }
+
+    private func bodyLineFrames(
+        layoutManager: NSLayoutManager,
+        textContainer: NSTextContainer,
+        topInset: CGFloat
+    ) -> [CGRect] {
+        guard !sectionBodyRanges.isEmpty, layoutManager.numberOfGlyphs > 0 else { return [] }
+        var frames: [CGRect] = []
+        var glyphIndex = 0
+        while glyphIndex < layoutManager.numberOfGlyphs {
+            var lineGlyphRange = NSRange(location: glyphIndex, length: 0)
+            let lineRect = layoutManager.lineFragmentRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: &lineGlyphRange
+            )
+            let characterRange = layoutManager.characterRange(
+                forGlyphRange: lineGlyphRange,
+                actualGlyphRange: nil
+            )
+            let isBody = sectionBodyRanges.contains { bodyRange in
+                NSIntersectionRange(bodyRange, characterRange).length > 0
+            }
+            if isBody {
+                frames.append(lineRect.offsetBy(dx: 0, dy: topInset))
+            }
+            let nextGlyph = NSMaxRange(lineGlyphRange)
+            if nextGlyph <= glyphIndex { break }
+            glyphIndex = nextGlyph
+        }
+        return frames
     }
 
     static func heights(starts: [Double], textBottom: Double) -> [Double] {

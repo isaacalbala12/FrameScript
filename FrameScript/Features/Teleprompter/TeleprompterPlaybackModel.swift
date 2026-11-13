@@ -43,7 +43,14 @@ enum TeleprompterDisplays {
 @MainActor
 @Observable
 final class TeleprompterModel {
-    let language: AppLanguage
+    /// Resolved per access so an open window follows Settings changes without
+    /// being torn down and recreated.
+    private var languageProvider: @MainActor () -> AppLanguage
+    var language: AppLanguage { languageProvider() }
+
+    /// Bumped on `frameScriptInterfaceLanguageDidChange`. `localized(_:)` reads
+    /// it, which makes every SwiftUI body that shows a string re-evaluate.
+    private(set) var localizationRevision = 0
     /// Recognition language for voice following, derived from the project's
     /// primary language. `nil` when the project language has no F9 locale.
     var speechLanguage: SpeechLanguage?
@@ -94,6 +101,7 @@ final class TeleprompterModel {
     var onClose: (() -> Void)?
     var onToggleFullScreen: (() -> Void)?
     var onMoveToDisplay: ((UInt32) -> Void)?
+    var onLanguageChanged: (() -> Void)?
 
     private let settingsStore: TeleprompterSettingsStore
     private let sceneProvider: TeleprompterSceneProvider?
@@ -123,7 +131,8 @@ final class TeleprompterModel {
         resumeAnchor: TeleprompterReadingAnchor? = nil,
         speechLanguage: SpeechLanguage? = .spanish,
         speechRecognizer: (any SpeechRecognizing)? = nil,
-        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
+        languageProvider: (@MainActor () -> AppLanguage)? = nil
     ) {
         let resolvedStart: Int
         if let resumeAnchor,
@@ -136,7 +145,7 @@ final class TeleprompterModel {
         }
 
         self.sections = sections
-        self.language = language
+        self.languageProvider = languageProvider ?? { language }
         self.speechLanguage = speechLanguage
         self.settingsStore = settingsStore
         self.settings = settingsStore.load()
@@ -191,16 +200,36 @@ final class TeleprompterModel {
     }
 
     var totalEstimatedDuration: TimeInterval {
-        TeleprompterTiming.estimatedDuration(for: sections, wordsPerMinute: settings.wordsPerMinute)
+        sectionDurations.reduce(0, +)
+    }
+
+    /// Per-scene reading time. Empty scenes deliberately contribute zero: they
+    /// still occupy a little scroll distance (header + placeholder) so the
+    /// reader sees them, but they must not inflate the remaining-time estimate.
+    var sectionDurations: [TimeInterval] {
+        TeleprompterTiming.estimatedDurations(
+            for: sections,
+            wordsPerMinute: settings.wordsPerMinute
+        )
     }
 
     var elapsedEstimate: TimeInterval {
-        guard maxOffset > 0 else { return 0 }
-        return totalEstimatedDuration * min(1, max(0, displayOffset / maxOffset))
+        TeleprompterTiming.elapsedEstimate(
+            offset: displayOffset,
+            readingContentY: readingContentY,
+            starts: sectionStarts,
+            heights: sectionHeights,
+            hasVisibleText: sections.map(\.hasVisibleText),
+            durations: sectionDurations
+        )
     }
 
     var remainingEstimate: TimeInterval {
         max(0, totalEstimatedDuration - elapsedEstimate)
+    }
+
+    var emptyScenePlaceholder: String {
+        localized("teleprompter.emptyScene")
     }
 
     var currentSectionTitle: String {
@@ -225,7 +254,21 @@ final class TeleprompterModel {
     }
 
     func localized(_ key: String) -> String {
-        L10n.tr(key, language: language)
+        _ = localizationRevision
+        return L10n.tr(key, language: language)
+    }
+
+    /// Called when the interface language changes (and by the live provider
+    /// wiring). Bumping the revision invalidates every string shown by the open
+    /// window; the renderer also rebuilds because its placeholder text changed.
+    func refreshLocalization() {
+        localizationRevision += 1
+        onLanguageChanged?()
+    }
+
+    func updateLanguageProvider(_ provider: @escaping @MainActor () -> AppLanguage) {
+        languageProvider = provider
+        refreshLocalization()
     }
 
     // MARK: Renderer plumbing
@@ -234,6 +277,10 @@ final class TeleprompterModel {
         textRenderer = renderer
         renderer.setScrollOffset(offset)
     }
+
+    /// Read-only test/debug access to the live renderer so snapshot tests can
+    /// inspect the real glyph frames and accessibility state.
+    var attachedTextRenderer: TeleprompterTextRendering? { textRenderer }
 
     func detachRenderer(_ renderer: TeleprompterTextRendering) {
         guard let current = textRenderer, current === renderer else { return }
@@ -251,7 +298,22 @@ final class TeleprompterModel {
             engine.setTargetOffset(voiceTargetOffset)
         }
 
-        guard isAwaitingLayout else { return }
+        guard isAwaitingLayout else {
+            if let pendingJumpIndex {
+                self.pendingJumpIndex = nil
+                jump(to: pendingJumpIndex)
+            } else if let pendingReadingAnchor {
+                restore(anchor: pendingReadingAnchor)
+                self.pendingReadingAnchor = nil
+            }
+            // A relayout can happen while the window is visible (font, column,
+            // mirror, reading-line changes). The new geometry must win even
+            // when no pending jump is queued, otherwise the header keeps the
+            // scene from the previous layout until the next tick.
+            refreshCurrentSection()
+            updateDisplayOffset(force: true)
+            return
+        }
         isAwaitingLayout = false
 
         if !hasAppliedInitialSection {
@@ -271,6 +333,7 @@ final class TeleprompterModel {
             restore(anchor: pendingReadingAnchor)
         }
         pendingReadingAnchor = nil
+        refreshCurrentSection()
         updateDisplayOffset(force: true)
     }
 
@@ -377,7 +440,6 @@ final class TeleprompterModel {
             readingContentY: readingContentY,
             mirrorVertical: settings.mirrorVertical
         )
-        currentSectionIndex = index
         applyOffset(target)
     }
 
@@ -427,7 +489,6 @@ final class TeleprompterModel {
             start: start,
             height: height
         )
-        currentSectionIndex = index
         applyOffset(contentY - readingContentY)
     }
 
@@ -611,14 +672,7 @@ final class TeleprompterModel {
         }
 
         guard !sectionStarts.isEmpty else { return }
-        let index = TeleprompterLayout.currentSectionIndex(
-            offset: offset,
-            readingContentY: readingContentY,
-            starts: sectionStarts
-        )
-        if index != currentSectionIndex {
-            currentSectionIndex = index
-        }
+        refreshCurrentSection()
 
         if now - lastDisplayUpdate >= 0.1 {
             lastDisplayUpdate = now
@@ -626,10 +680,32 @@ final class TeleprompterModel {
         }
     }
 
+    /// Recomputes the scene under the guide from the geometry. Every path that
+    /// mutates the offset must call this so the header and the reading line can
+    /// never disagree for more than one frame.
+    private func refreshCurrentSection() {
+        guard !sectionStarts.isEmpty, !sections.isEmpty else { return }
+        let index = TeleprompterLayout.currentSectionIndex(
+            offset: offset,
+            readingContentY: readingContentY,
+            starts: sectionStarts,
+            heights: sectionHeights,
+            hasVisibleText: sections.map(\.hasVisibleText)
+        )
+        if index != currentSectionIndex {
+            currentSectionIndex = index
+        }
+    }
+
     private func applyOffset(_ value: Double) {
         engine.maxOffset = maxOffset
         engine.seek(to: value)
         offset = engine.offset
+        // The seek clamps to the document bounds, so the requested scene and the
+        // scene under the guide can differ (short scripts, the last scene, or a
+        // stale jump while the window is still laying out). Always trust the
+        // geometry, never the request.
+        refreshCurrentSection()
         displayOffset = offset
         lastDisplayUpdate = CACurrentMediaTime()
         textRenderer?.setScrollOffset(offset)
@@ -679,6 +755,9 @@ final class TeleprompterModel {
             }
         }
 
+        if !isAwaitingLayout {
+            refreshCurrentSection()
+        }
         scheduleSettingsSave()
     }
 

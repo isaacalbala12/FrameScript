@@ -1,8 +1,19 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted by `SettingsStore` when `generalPreferences.language` changes so
+    /// already-open windows can refresh their strings without being recreated.
+    static let frameScriptInterfaceLanguageDidChange =
+        Notification.Name("FrameScript.InterfaceLanguageDidChange")
+}
+
 enum L10n {
-    static func tr(_ key: String, language: AppLanguage) -> String {
-        let resolvedLanguage = resolve(language)
+    static func tr(
+        _ key: String,
+        language: AppLanguage,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> String {
+        let resolvedLanguage = resolve(language, preferredLanguages: preferredLanguages)
         return mergedStrings[resolvedLanguage]?[key] ?? mergedStrings[.english]?[key] ?? key
     }
 
@@ -21,11 +32,17 @@ enum L10n {
     /// Resolves `.system` against the user's preferred macOS languages.
     /// Scans the list in order and picks the first supported language, so
     /// `[ca-ES, es-ES]` resolves to Spanish and `[en-US, es-ES]` to English.
+    /// If Foundation reports no preference at all (some test hosts and freshly
+    /// migrated containers), the bundle's declared localizations are used
+    /// instead of silently falling back to English.
     static func resolve(_ language: AppLanguage, preferredLanguages: [String] = Locale.preferredLanguages) -> AppLanguage {
         if language != .system {
             return language
         }
-        for preferred in preferredLanguages {
+        let candidates = preferredLanguages.isEmpty
+            ? Bundle.main.preferredLocalizations
+            : preferredLanguages
+        for preferred in candidates {
             let code = preferred.lowercased()
             if code.hasPrefix("es") { return .spanish }
             if code.hasPrefix("en") { return .english }

@@ -12,6 +12,20 @@ struct TeleprompterSection: Identifiable, Equatable, Sendable {
     let runs: [MarkupRun]
 
     var id: UUID { sceneID }
+
+    /// `false` for scenes that only contain pauses or cues. The teleprompter
+    /// still renders their header (plus an empty-scene placeholder), but they
+    /// contribute no reading time and must never win the reading-position race.
+    var hasVisibleText: Bool {
+        runs.contains { run in
+            switch run {
+            case .text(let value), .emphasis(let value, _):
+                return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .pause, .cue:
+                return false
+            }
+        }
+    }
 }
 
 /// Produces ordered teleprompter sections. The app feeds it a snapshot of the
@@ -32,6 +46,35 @@ struct TeleprompterSceneText: Equatable, Sendable {
     let text: String
 }
 
+/// Normalizes the text that follows a cue/pause block break. The renderer and
+/// the voice follower must apply exactly the same rule or their character
+/// offsets drift.
+enum TeleprompterBlockText {
+    /// Drops one separator line break and any indentation at the start of every
+    /// line, so a parser run like `" / Es la fricción"` does not render a
+    /// leading space and `"\n\nAfter"` keeps its intentional blank line.
+    static func normalizedAfterBlockBreak(_ text: String) -> String {
+        var value = text
+        if value.hasPrefix("\r\n") {
+            value.removeFirst(2)
+        } else if value.hasPrefix("\n") || value.hasPrefix("\r") {
+            value.removeFirst()
+        }
+        guard !value.isEmpty else { return value }
+
+        var lines: [Substring] = []
+        lines.reserveCapacity(8)
+        for line in value.split(separator: "\n", omittingEmptySubsequences: false) {
+            var trimmed = line
+            while let first = trimmed.first, first == " " || first == "\t" {
+                trimmed = trimmed.dropFirst()
+            }
+            lines.append(trimmed)
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
 enum TeleprompterContentBuilder {
     static func sections(from scenes: [TeleprompterSceneText]) -> [TeleprompterSection] {
         scenes.map { scene in
@@ -41,6 +84,29 @@ enum TeleprompterContentBuilder {
                 runs: ScriptMarkup.runs(scene.text)
             )
         }
+    }
+
+    /// Opening the prompter on an empty scene used to show its header under the
+    /// reading line while the counter claimed the last scene. Start at the
+    /// selected scene when it has text; otherwise fall forward to the first
+    /// scene with something to read, and only then keep the selection.
+    static func startingIndex(in sections: [TeleprompterSection], selectedIndex: Int) -> Int {
+        guard !sections.isEmpty else { return 0 }
+        let selected = min(max(0, selectedIndex), sections.count - 1)
+        if sections[selected].hasVisibleText {
+            return selected
+        }
+        if let firstReadable = sections.firstIndex(where: \.hasVisibleText) {
+            return firstReadable
+        }
+        return selected
+    }
+
+    static func startingIndex(
+        in scenes: [TeleprompterSceneText],
+        selectedIndex: Int
+    ) -> Int {
+        startingIndex(in: sections(from: scenes), selectedIndex: selectedIndex)
     }
 }
 
@@ -103,6 +169,45 @@ enum TeleprompterTiming {
     static func estimatedDuration(for sections: [TeleprompterSection], wordsPerMinute: Double) -> TimeInterval {
         sections.reduce(0) { $0 + estimatedDuration(for: $1.runs, wordsPerMinute: wordsPerMinute) }
     }
+
+    static func estimatedDurations(
+        for sections: [TeleprompterSection],
+        wordsPerMinute: Double
+    ) -> [TimeInterval] {
+        sections.map { estimatedDuration(for: $0.runs, wordsPerMinute: wordsPerMinute) }
+    }
+
+    /// Elapsed time for the words already under the reading line. Using the
+    /// scroll-offset/max-offset ratio made a short script report zero elapsed
+    /// time and a full remaining time while the guide was already inside the
+    /// hook, and it made empty scenes jump the estimate to the end.
+    static func elapsedEstimate(
+        offset: Double,
+        readingContentY: Double,
+        starts: [Double],
+        heights: [Double],
+        hasVisibleText: [Bool],
+        durations: [TimeInterval]
+    ) -> TimeInterval {
+        guard !starts.isEmpty, !durations.isEmpty else { return 0 }
+        let index = TeleprompterLayout.currentSectionIndex(
+            offset: offset,
+            readingContentY: readingContentY,
+            starts: starts,
+            heights: heights,
+            hasVisibleText: hasVisibleText
+        )
+        let clampedIndex = min(max(0, index), durations.count - 1)
+        let completed = durations.prefix(clampedIndex).reduce(0, +)
+        let height = heights.indices.contains(clampedIndex) ? heights[clampedIndex] : 0
+        let progress = TeleprompterLayout.sceneProgress(
+            offset: offset,
+            readingContentY: readingContentY,
+            start: starts[clampedIndex],
+            height: height
+        )
+        return completed + durations[clampedIndex] * progress
+    }
 }
 
 // MARK: - Speed math
@@ -143,9 +248,37 @@ enum TeleprompterLayout {
     }
 
     /// Section whose content is under the reading line.
-    static func currentSectionIndex(offset: Double, readingContentY: Double, starts: [Double]) -> Int {
+    ///
+    /// `heights` and `hasVisibleText` are optional so the older two-argument
+    /// call sites (and their tests) keep working. With heights the mapping is
+    /// range-aware: a guide parked below the end of a mostly empty script
+    /// resolves to the last scene that actually contains text instead of the
+    /// final header, and a guide that scrolls past the end never reports the
+    /// last empty scene as current.
+    static func currentSectionIndex(
+        offset: Double,
+        readingContentY: Double,
+        starts: [Double],
+        heights: [Double] = [],
+        hasVisibleText: [Bool] = []
+    ) -> Int {
         guard !starts.isEmpty else { return 0 }
         let readingPoint = offset + readingContentY
+        if readingPoint < starts[0] {
+            return 0
+        }
+
+        let completeGeometry = heights.count == starts.count
+        if completeGeometry, let lastStart = starts.last, let lastHeight = heights.last {
+            let contentEnd = lastStart + max(0, lastHeight)
+            if readingPoint >= contentEnd {
+                if hasVisibleText.count == starts.count {
+                    return hasVisibleText.lastIndex(where: { $0 }) ?? 0
+                }
+                return starts.indices.last ?? 0
+            }
+        }
+
         var result = 0
         for (index, start) in starts.enumerated() where start <= readingPoint {
             result = index

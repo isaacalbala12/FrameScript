@@ -65,8 +65,9 @@ final class TeleprompterTests: FrameScriptTestCase {
         let document = TeleprompterAttributedStringBuilder.build(sections: sections, fontSize: 64)
         let string = document.attributedString.string
 
-        XCTAssertTrue(string.contains("❚❚"))
-        XCTAssertTrue(string.contains("2.0s"))
+        XCTAssertTrue(string.contains("·  ·  ·"), "Unexpected pause marker: \(string)")
+        XCTAssertTrue(string.contains("2.0 s"))
+        XCTAssertFalse(string.contains("❚"))
         XCTAssertEqual(document.visibleCharacterCounts, [6])
         XCTAssertEqual(document.sectionHeaderLocations.count, 1)
     }

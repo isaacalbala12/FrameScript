@@ -23,6 +23,11 @@ extension L10n {
             "teleprompter.fullScreen": "Full Screen",
             "teleprompter.close": "Close",
             "teleprompter.noText": "This scene has no text.",
+            "teleprompter.emptyScene": "(empty scene)",
+            "teleprompter.mirrorHorizontalBadge": "Horizontal mirror",
+            "teleprompter.mirrorVerticalBadge": "Vertical mirror",
+            "teleprompter.active": "On",
+            "teleprompter.inactive": "Off",
             "teleprompter.ready": "Press Space to start",
             "teleprompter.hint": "Space play/pause  ·  ↑↓ speed  ·  ←→ scene  ·  Home start  ·  [ ] text size  ·  ; ' width  ·  H/M mirror  ·  V follow voice  ·  Esc close",
             "teleprompter.wpmValue": "%d WPM",
@@ -48,6 +53,11 @@ extension L10n {
             "teleprompter.fullScreen": "Полный экран",
             "teleprompter.close": "Закрыть",
             "teleprompter.noText": "В этой сцене нет текста.",
+            "teleprompter.emptyScene": "(пустая сцена)",
+            "teleprompter.mirrorHorizontalBadge": "Горизонтальное отражение",
+            "teleprompter.mirrorVerticalBadge": "Вертикальное отражение",
+            "teleprompter.active": "Вкл.",
+            "teleprompter.inactive": "Выкл.",
             "teleprompter.ready": "Нажмите пробел, чтобы начать",
             "teleprompter.hint": "Пробел — пуск/пауза  ·  ↑↓ — скорость  ·  ←→ — сцены  ·  Home — начало  ·  [ ] — размер  ·  ; ' — ширина  ·  H/M — отражение  ·  V — следование за голосом  ·  Esc — закрыть",
             "teleprompter.wpmValue": "%d сл/мин",
@@ -55,9 +65,9 @@ extension L10n {
         ]
     ]
 
-    /// Spanish values, ready for the `.spanish` case once it lands in
-    /// `AppLanguage`. Not registered in `featureTables` yet because the enum has
-    /// no Spanish case in this wave.
+    /// Spanish values, registered through `Localization+Features.swift` so the
+    /// `.system` language resolves to them when the Mac's preferred language is
+    /// Spanish.
     static let teleprompterSpanish: [String: String] = [
         "menu.teleprompter": "Teleprompter",
         "toolbar.teleprompter": "Abrir el teleprompter",
@@ -78,6 +88,11 @@ extension L10n {
         "teleprompter.fullScreen": "Pantalla completa",
         "teleprompter.close": "Cerrar",
         "teleprompter.noText": "Esta escena no tiene texto.",
+        "teleprompter.emptyScene": "(escena vacía)",
+        "teleprompter.mirrorHorizontalBadge": "Espejo horizontal",
+        "teleprompter.mirrorVerticalBadge": "Espejo vertical",
+        "teleprompter.active": "Activado",
+        "teleprompter.inactive": "Desactivado",
         "teleprompter.ready": "Pulsa espacio para empezar",
         "teleprompter.hint": "Espacio reproducir/pausar  ·  ↑↓ velocidad  ·  ←→ escena  ·  Inicio principio  ·  [ ] tamaño  ·  ; ' ancho  ·  H/M espejo  ·  V seguir mi voz  ·  Esc cerrar",
         "teleprompter.wpmValue": "%d ppm",

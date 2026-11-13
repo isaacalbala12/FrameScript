@@ -10,7 +10,12 @@ extension AppState {
         let scenes = teleprompterScenes()
         guard !scenes.isEmpty else { return }
 
-        let startIndex = project.scenes.sortedByOrder.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
+        let selectedIndex = project.scenes.sortedByOrder.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
+        let sections = TeleprompterContentBuilder.sections(from: scenes)
+        let startIndex = TeleprompterContentBuilder.startingIndex(
+            in: sections,
+            selectedIndex: selectedIndex
+        )
         let provider: TeleprompterSceneProvider = { [weak self] in
             guard let self, self.hasOpenProject else { return [] }
             return self.teleprompterScenes()
@@ -25,14 +30,13 @@ extension AppState {
         }
 
         TeleprompterPresenter.shared.show(
-            source: StaticTeleprompterSource(
-                sections: TeleprompterContentBuilder.sections(from: scenes)
-            ),
+            source: StaticTeleprompterSource(sections: sections),
             provider: provider,
             startingSectionIndex: startIndex,
             language: currentLanguage,
             speechLanguage: speechLanguage,
-            fallbackWordsPerMinuteProvider: wpmProvider
+            fallbackWordsPerMinuteProvider: wpmProvider,
+            languageProvider: { [weak self] in self?.currentLanguage ?? .english }
         )
     }
 
@@ -68,7 +72,8 @@ extension AppState {
                 ),
                 provider: { sampleScenes },
                 startingSectionIndex: 0,
-                language: currentLanguage
+                language: currentLanguage,
+                languageProvider: { [weak self] in self?.currentLanguage ?? .english }
             )
             if autoplay {
                 Task { @MainActor in
