@@ -20,8 +20,8 @@ The [ZIP fallback](https://github.com/Drash-ko/frame-script/releases/latest/down
 
 ## Features
 
-- Scene-based Script, Visuals, and Editing workspaces with English and Russian interface strings.
-- A disposable five-scene built-in product showcase in English and Russian, including production plans, editing direction, and prepared local review notes.
+- Scene-based Script, Visuals, and Editing workspaces with English, Spanish, and Russian interface strings.
+- A disposable five-scene built-in product showcase in English, Spanish, and Russian, including production plans, editing direction, and prepared local review notes.
 - Configurable keyboard shortcuts with recording, conflict reassignment, explicit unassignment, reserved-shortcut protection, and immediate updates to menus and visible keycaps. Letter shortcuts execute by physical key position, independently of the active keyboard layout.
 - Anchor-first Visuals and Editing relationships. Ordinary unambiguous script edits keep selections and production markers aligned; links are cleared when a substantial rewrite cannot be repaired safely.
 - Live word counts and scene, sidebar, and project duration estimates; saved projects coalesce rapid changes into one autosave.
