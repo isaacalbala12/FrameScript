@@ -104,6 +104,24 @@ final class PublishingSnapshotTests: XCTestCase {
         }
     }
 
+    // MARK: - Toolbar
+
+    func testTopToolbarSnapshots() throws {
+        for window in Self.windowSizes {
+            for scheme in [ColorScheme.light, .dark] {
+                try render(
+                    VStack(spacing: 0) {
+                        TopToolbar()
+                        Spacer(minLength: 0)
+                    },
+                    name: "publishing-toolbar-\(sizeName(window))-\(schemeName(scheme))",
+                    windowSize: CGSize(width: window.width, height: 120),
+                    scheme: scheme
+                )
+            }
+        }
+    }
+
     // MARK: - Validation state
 
     func testMetadataWithValidationIssuesSnapshots() throws {

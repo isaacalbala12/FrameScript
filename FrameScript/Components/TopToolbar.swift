@@ -6,7 +6,18 @@ struct TopToolbar: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        HStack(spacing: 14) {
+        GeometryReader { proxy in
+            content(compact: proxy.size.width < 1_080)
+        }
+        .frame(height: 58)
+        .background(theme.background)
+        .task {
+            await appState.recording.connectAutomaticallyIfNeeded()
+        }
+    }
+
+    private func content(compact: Bool) -> some View {
+        HStack(spacing: compact ? 10 : 14) {
             Menu {
                 Button(appState.localized("project.rename")) { appState.renameProject() }
                 projectMenuButton(appState.localized("project.save"), shortcut: .save) { appState.saveProject() }
@@ -32,7 +43,7 @@ struct TopToolbar: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
-            .frame(width: 210, alignment: .leading)
+            .frame(width: compact ? 170 : 210, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -44,6 +55,8 @@ struct TopToolbar: View {
             Spacer(minLength: 8)
 
             ProjectDurationControl()
+                .fixedSize()
+                .layoutPriority(1)
 
             Button {
                 appState.recording.isPanelVisible.toggle()
@@ -52,9 +65,11 @@ struct TopToolbar: View {
                     Circle()
                         .fill(recordingStatusColor)
                         .frame(width: 6, height: 6)
-                    Text(recordingStatusText)
-                        .font(.system(size: 10, weight: .medium))
-                        .lineLimit(1)
+                    if !compact {
+                        Text(recordingStatusText)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                    }
                 }
                 .frame(height: 30)
                 .padding(.horizontal, 5)
@@ -67,7 +82,7 @@ struct TopToolbar: View {
             .foregroundStyle(theme.secondaryText)
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
-            HStack(spacing: 5) {
+            HStack(spacing: compact ? 3 : 5) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
                     help: appState.localized("project.export"),
@@ -111,19 +126,21 @@ struct TopToolbar: View {
                     HStack(spacing: 5) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 13, weight: .medium))
-                        Text(appState.shortcutDisplay(for: .commandPalette))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(theme.tertiaryText)
-                            .padding(.horizontal, 4)
-                            .frame(height: 17)
-                            .background {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(theme.hover)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                            .stroke(theme.divider, lineWidth: 1)
-                                    }
-                            }
+                        if !compact {
+                            Text(appState.shortcutDisplay(for: .commandPalette))
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(theme.tertiaryText)
+                                .padding(.horizontal, 4)
+                                .frame(height: 17)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(theme.hover)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                .stroke(theme.divider, lineWidth: 1)
+                                        }
+                                }
+                        }
                     }
                     .frame(height: 30)
                 }
@@ -141,10 +158,6 @@ struct TopToolbar: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
-        .background(theme.background)
-        .task {
-            await appState.recording.connectAutomaticallyIfNeeded()
-        }
     }
 
     private var recordingStatusColor: Color {
