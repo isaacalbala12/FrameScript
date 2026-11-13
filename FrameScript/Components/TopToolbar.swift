@@ -80,6 +80,12 @@ struct TopToolbar: View {
                     action: appState.presentTeleprompter
                 )
 
+                toolbarButton(
+                    systemName: "photo.stack",
+                    help: appState.localized("menu.assets"),
+                    action: { appState.isAssetsPresented = true }
+                )
+
                 toolbarDivider
 
                 Button {

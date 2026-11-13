@@ -23,6 +23,9 @@ struct CommandPaletteView: View {
             PaletteResult(title: appState.localized("menu.teleprompter"), detail: shortcut(.teleprompter)) {
                 appState.presentTeleprompter()
             },
+            PaletteResult(title: appState.localized("menu.assets"), detail: shortcut(.assets)) {
+                appState.isAssetsPresented = true
+            },
             PaletteResult(title: appState.localized("scene.add"), detail: shortcut(.addScene), action: appState.addScene),
             PaletteResult(title: appState.localized("scene.duplicate"), detail: shortcut(.duplicateScene), action: appState.duplicateSelectedScene),
             PaletteResult(title: appState.localized("scene.delete"), detail: shortcut(.deleteScene), action: appState.deleteSelectedScene),

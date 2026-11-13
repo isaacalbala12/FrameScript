@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added the project asset library (F14): files from the camera, OBS, screen captures, the web, music, graphics and thumbnails are referenced in place (with security-scoped bookmarks) and never copied, except generated thumbnails, which the shared `AssetStore.copyThumbnail` helper writes to `<Project> assets/` next to the `.fscr`. The sheet offers drag-and-drop and file-picker import, automatic kind detection, free tags, kind/tag/scene filters, search, grid and list layouts, Quick Look, AVFoundation video duration and image dimensions, missing-file detection with Locate relinking, scene/visual/take links, and automatic OBS entries when a take finishes.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
