@@ -5,76 +5,92 @@ struct AIReviewPanel: View {
     @Environment(\.frameTheme) private var theme
 
     var body: some View {
+        // Legacy standalone wrapper kept for previews and snapshot coverage.
+        // The app shell now hosts `AIReviewContent` inside the inspector.
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(appState.localized("ai.review"))
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                Button {
-                    appState.settings.editorPreferences.showAIReviewPanel = false
-                } label: {
-                    Image(systemName: "sidebar.right")
-                        .font(.system(size: 13))
-                }
-                .buttonStyle(.cursorPlain)
-                .foregroundStyle(theme.secondaryText)
-                .help(appState.localized("ai.review.closeHelp"))
-                .accessibilityLabel(appState.localized("ai.review.closeHelp"))
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 48)
+            header
 
             Divider()
                 .overlay(theme.divider)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if comments.isEmpty {
-                        SoftCallout(
-                            title: appState.localized("ai.quietTitle"),
-                            message: appState.localized("ai.quietMessage")
-                        )
-                    } else {
-                        ForEach(comments.prefix(3)) { comment in
-                            AICommentView(comment: comment)
-                        }
-                    }
-
-                    RhythmReviewSection()
-
-                    if appState.aiState.isAnalyzing {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text(appState.localized("ai.analyzing"))
-                        }
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.secondaryText)
-                    }
-
-                    Button(appState.localized("ai.analyzeCurrentScene")) {
-                        analyzeCurrentScene()
-                    }
-                    .disabled(appState.aiState.isAnalyzing)
-                    // A bordered button reads as a control, not as a heading, and
-                    // shows the disabled state while a review is running.
-                    .buttonStyle(.bordered)
-                    .font(.system(size: 13, weight: .medium))
-                    .help(appState.localized("ai.analyzeCurrentSceneHelp"))
-                    .padding(.top, 4)
-
-                    if appState.aiState.didFailMostRecentAnalysis {
-                        Button(appState.localized("ai.retry")) {
-                            analyzeCurrentScene()
-                        }
-                        .buttonStyle(.cursorPlain)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(theme.secondaryText)
-                    }
-                }
-                .padding(16)
-            }
+            AIReviewContent()
         }
         .background(theme.background)
+    }
+
+    private var header: some View {
+        HStack {
+            Text(appState.localized("ai.review"))
+                .font(.system(size: 14, weight: .semibold))
+            Spacer()
+            Button {
+                appState.settings.editorPreferences.showAIReviewPanel = false
+            } label: {
+                Image(systemName: "sidebar.right")
+                    .font(.system(size: 13))
+            }
+            .buttonStyle(.cursorPlain)
+            .foregroundStyle(theme.secondaryText)
+            .help(appState.localized("ux.inspector.close"))
+            .accessibilityLabel(appState.localized("ux.inspector.close"))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 48)
+    }
+}
+
+/// The legacy AI review content, reused as the inspector's AI tab.
+struct AIReviewContent: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.frameTheme) private var theme
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if comments.isEmpty {
+                    SoftCallout(
+                        title: appState.localized("ai.quietTitle"),
+                        message: appState.localized("ai.quietMessage")
+                    )
+                } else {
+                    ForEach(comments.prefix(3)) { comment in
+                        AICommentView(comment: comment)
+                    }
+                }
+
+                RhythmReviewSection()
+
+                if appState.aiState.isAnalyzing {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(appState.localized("ai.analyzing"))
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.secondaryText)
+                }
+
+                Button(appState.localized("ai.analyzeCurrentScene")) {
+                    analyzeCurrentScene()
+                }
+                .disabled(appState.aiState.isAnalyzing)
+                // A bordered button reads as a control, not as a heading, and
+                // shows the disabled state while a review is running.
+                .buttonStyle(.bordered)
+                .font(.system(size: 13, weight: .medium))
+                .help(appState.localized("ai.analyzeCurrentSceneHelp"))
+                .padding(.top, 4)
+
+                if appState.aiState.didFailMostRecentAnalysis {
+                    Button(appState.localized("ai.retry")) {
+                        analyzeCurrentScene()
+                    }
+                    .buttonStyle(.cursorPlain)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.secondaryText)
+                }
+            }
+            .padding(16)
+        }
     }
 
     private var comments: [AIComment] {

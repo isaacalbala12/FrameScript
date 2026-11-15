@@ -343,7 +343,7 @@ enum ShortcutRegistry {
         .init(command: .editingMode, localizationKey: "mode.editing", category: .workspace, factoryDefault: .init("3", modifiers: [.command]), order: 2),
         .init(command: .commandPalette, localizationKey: "toolbar.commandPalette", category: .workspace, factoryDefault: .init("k", modifiers: [.command]), order: 3),
         .init(command: .toggleContentsPanel, localizationKey: "command.toggleSidebar", category: .workspace, factoryDefault: .init("\\", modifiers: [.command]), order: 4),
-        .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 5),
+        .init(command: .toggleAIReview, localizationKey: "ux.inspector.toggle", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 5),
         .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 6),
         .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 7),
         .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 8),

@@ -265,8 +265,8 @@ private struct AppearanceSettings: View {
                 }
             }
 
-            SettingsRow(appState.localized("settings.aiPanel")) {
-                Toggle(appState.localized("settings.aiPanel"), isOn: $settings.editorPreferences.showAIReviewPanel)
+            SettingsRow(appState.localized("ux.inspector.toggle"), help: appState.localized("ux.inspector.settingsHelp")) {
+                Toggle(appState.localized("ux.inspector.toggle"), isOn: $settings.editorPreferences.showAIReviewPanel)
                     .labelsHidden()
             }
 

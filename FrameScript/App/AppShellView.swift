@@ -123,10 +123,15 @@ struct AppShellView: View {
     @State private var sidebarDragStartWidth: Double?
     @State private var editorSessionID = UUID()
     @State private var windowWidth: CGFloat = 0
+    @State private var inspectorState: UXInspectorState
 
-    /// The AI review column takes 292 pt; below this window width the script
+    init(inspectorState: UXInspectorState? = nil) {
+        _inspectorState = State(initialValue: inspectorState ?? UXInspectorState())
+    }
+
+    /// The inspector column takes 292 pt; below this window width the script
     /// column would be too narrow to read, so the panel hides itself instead
-    /// (uiux 20).
+    /// (uiux 20). The rule is unchanged from the previous AI review panel.
     static let aiPanelMinimumWindowWidth: CGFloat = 1080
 
     static func showsAIReviewPanel(enabled: Bool, windowWidth: CGFloat) -> Bool {
@@ -168,11 +173,12 @@ struct AppShellView: View {
                         Divider()
                             .overlay(theme.divider)
 
-                        AIReviewPanel()
+                        UXInspectorPanel(state: inspectorState)
                             .frame(width: 292)
                     }
                 }
                 .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity)
+                .environment(inspectorState)
             }
 
         }

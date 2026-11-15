@@ -74,6 +74,9 @@ struct CommandAvailability: Equatable {
     var canAnalyzeScene: Bool { hasOpenProject && hasSelectedScene }
     var canAnalyzeFullScript: Bool { hasOpenProject && hasScenes }
     var canGenerateForScene: Bool { hasOpenProject && hasSelectedScene }
+    /// Inline markup insertion acts on the caret of the selected script, so it
+    /// needs the same preconditions as the other scene tools.
+    var canInsertMarkup: Bool { hasOpenProject && hasSelectedScene }
     var canOpenTeleprompter: Bool { hasOpenProject && hasScenes }
     var canToggleRecordingPanel: Bool { hasOpenProject }
 

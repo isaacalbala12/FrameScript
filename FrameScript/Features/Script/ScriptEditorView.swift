@@ -16,7 +16,10 @@ struct ScriptEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            sceneHeader
+            VStack(alignment: .leading, spacing: 10) {
+                sceneHeader
+                UXEditorActionBar(sceneID: scene.id)
+            }
 
             scriptTextView
                 .frame(minHeight: appState.isFocusModeEnabled ? 430 : 390, maxHeight: .infinity)
@@ -205,6 +208,7 @@ struct ScriptEditorView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.tertiaryText)
                 }
+                UXSceneMetaChips(scene: scene)
             }
             .font(.system(size: 13))
             .foregroundStyle(theme.secondaryText)
@@ -1083,6 +1087,7 @@ protocol ActiveScriptEditor: AnyObject {
     @discardableResult func commitMarkedTextAndFlush() -> Bool
     func cancelAutocomplete(clearStatus: Bool)
     func selectRange(_ range: NSRange)
+    @discardableResult func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool
     var sceneID: UUID { get }
     var editorIdentity: UUID { get }
     var owningWindow: NSWindow? { get }
@@ -1092,6 +1097,9 @@ protocol ActiveScriptEditor: AnyObject {
 extension ActiveScriptEditor {
     /// Editors that do not support programmatic selection can ignore it.
     func selectRange(_ range: NSRange) {}
+
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool { false }
 }
 
 extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
@@ -1111,6 +1119,19 @@ extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
         textView.scrollRangeToVisible(clamped)
         textView.window?.makeFirstResponder(textView)
         captureRestorationState()
+    }
+
+    /// Inserts a markup token through `NSTextView`'s normal typing path. The
+    /// text view keeps first-responder status; `insertText` notifies this
+    /// delegate, so the styler, autosave and anchors follow the usual path.
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool {
+        guard let textView = view?.textView else { return false }
+        cancelAutocomplete(clearStatus: true)
+        textView.ghostText = ""
+        guard UXMarkupInsertionEngine.insert(insertion, into: textView) != nil else { return false }
+        captureRestorationState(force: true)
+        return true
     }
 }
 
@@ -1177,6 +1198,16 @@ final class ActiveScriptEditorSession {
         }
         editor.selectRange(range)
         return true
+    }
+
+    /// Inserts a markup token in the editor showing `sceneID`.
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion, inScene sceneID: UUID) -> Bool {
+        editors.removeAll { $0.value == nil }
+        guard let editor = editors.compactMap(\.value).first(where: { $0.sceneID == sceneID }) else {
+            return false
+        }
+        return editor.insertMarkup(insertion)
     }
 }
 

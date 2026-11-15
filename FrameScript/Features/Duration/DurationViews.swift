@@ -102,6 +102,18 @@ struct SceneDurationControl: View {
 }
 
 struct SceneDurationPopover: View {
+    let scene: Scene
+
+    var body: some View {
+        SceneDurationDetails(scene: scene)
+            .padding(14)
+            .frame(width: 340)
+    }
+}
+
+/// Shared scene duration and target content. The toolbar popover and the
+/// inspector's Scene tab render the exact same rows and target editor.
+struct SceneDurationDetails: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let scene: Scene
@@ -165,8 +177,6 @@ struct SceneDurationPopover: View {
             Divider()
             targetEditor
         }
-        .padding(14)
-        .frame(width: 340)
         .onAppear(perform: syncTargetText)
     }
 
