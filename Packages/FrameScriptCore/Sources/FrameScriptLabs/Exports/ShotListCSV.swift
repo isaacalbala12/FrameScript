@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 
 /// RFC 4180 shot list. One row per shot, CRLF line endings, UTF-8.
 ///

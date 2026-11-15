@@ -1,4 +1,5 @@
 import Testing
+import FrameScriptCore
 @testable import FrameScriptLabs
 
 @Suite("Editing notes Markdown")

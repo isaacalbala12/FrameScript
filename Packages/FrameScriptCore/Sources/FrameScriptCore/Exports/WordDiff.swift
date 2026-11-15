@@ -1,5 +1,4 @@
 import Foundation
-import FrameScriptCore
 
 /// The kind of a word-level diff operation.
 public enum DiffKind: String, Sendable, Codable, CaseIterable {

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import FrameScriptCore
 @testable import FrameScriptLabs
 
 @Suite("Cross-review regressions – published compare")

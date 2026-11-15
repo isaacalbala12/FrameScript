@@ -1,4 +1,5 @@
 import Testing
+import FrameScriptCore
 @testable import FrameScriptLabs
 
 @Suite("Resolve marker EDL")

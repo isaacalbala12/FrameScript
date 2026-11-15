@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 
 /// Markdown editing notes grouped by scene, with absolute timecodes.
 public enum EditingNotesMarkdown {

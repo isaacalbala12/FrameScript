@@ -54,7 +54,7 @@ struct WP1SchemaPinTests {
         "SegmentType": [],
         "ShortClip": ["adaptedText", "anchor", "anchorSceneID", "description", "format", "hashtags", "hook", "id", "languageCode", "onScreenText", "sceneSourceHashes", "sourceHash", "sourceSceneIDs", "status", "targetSeconds", "title"],
         "ShortClipFormat": [],
-        "ShortClipSceneSourceHash": ["hash", "sceneID"],
+        "ShortClipSceneSourceHash": ["hash", "sceneID", "sourceText"],
         "ShortClipStatus": [],
         "Source": ["id", "note", "title", "url"],
         "Take": ["bookmarkData", "duration", "filePath", "id", "languageCode", "note", "number", "rating", "readText", "sceneTextHash", "startedAt"],
