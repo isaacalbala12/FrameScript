@@ -6,16 +6,20 @@ import XCTest
 
 @MainActor
 final class ClipsTests: XCTestCase {
-    private var suites: [String] = []
+    /// Isolated suites live in the process temporary directory, so no test
+    /// writes `~/Library/Preferences`.
+    private var testDefaults: [TestDefaults] = []
+
+    override func setUp() {
+        super.setUp()
+        TestBundleCleanup.register()
+    }
 
     override func tearDown() {
-        for suite in suites {
-            UserDefaults().removePersistentDomain(forName: suite)
-            let preferences = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: preferences)
+        for defaults in testDefaults {
+            defaults.cleanup()
         }
-        suites.removeAll()
+        testDefaults.removeAll()
         ClipLayoutRegistry.shared.reset()
         super.tearDown()
     }
@@ -23,7 +27,7 @@ final class ClipsTests: XCTestCase {
     // MARK: - Creation and editing
 
     func testCreateClipFromSelectedSceneUsesWholeScene() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[0]
         appState.editorState.selectedSceneID = scene.id
 
@@ -40,7 +44,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testCreateClipFromAnchorUsesOnlyTheFragment() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[1]
         let range = (scene.scriptText as NSString).range(of: "segunda vuelta")
         let anchor = TextAnchorRepair.anchor(in: scene.scriptText, range: range)
@@ -55,7 +59,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testUpdateClipSanitizesTargetAndKeepsAnchorScene() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[0]
         var clip = appState.createClip(sceneIDs: [scene.id])!
         clip.targetSeconds = 1
@@ -74,7 +78,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testDuplicateAndDeleteClip() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[0]
         let clip = appState.createClip(sceneIDs: [scene.id])!
 
@@ -92,7 +96,7 @@ final class ClipsTests: XCTestCase {
 
     // MARK: - Staleness
 
-    func testStalenessAndMarkReviewed() {        let (appState, _) = makeAppState()
+    func testStalenessAndMarkReviewed() {        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[1]
         let clip = appState.createClip(sceneIDs: [scene.id])!
 
@@ -111,7 +115,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testRemovingSourceSceneDoesNotMarkClipStale() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scenes = appState.project.scenes.sortedByOrder
         var clip = appState.createClip(sceneIDs: [scenes[0].id, scenes[1].id])!
 
@@ -125,7 +129,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testAddingSourceSceneSamplesItsCurrentText() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scenes = appState.project.scenes.sortedByOrder
         var clip = appState.createClip(sceneIDs: [scenes[0].id])!
 
@@ -141,7 +145,7 @@ final class ClipsTests: XCTestCase {
     // MARK: - Estimates
 
     func testEstimateUsesLearnedSpeakingRate() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         appState.project.learnedWordsPerMinuteByLanguage["es"] = 120
         let scene = appState.project.scenes.sortedByOrder[0]
         var clip = appState.createClip(sceneIDs: [scene.id])!
@@ -157,7 +161,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testSummaryCountsClips() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scenes = appState.project.scenes.sortedByOrder
         let first = appState.createClip(sceneIDs: [scenes[0].id])!
         var second = appState.createClip(sceneIDs: [scenes[1].id])!
@@ -176,7 +180,7 @@ final class ClipsTests: XCTestCase {
     // MARK: - Export
 
     func testExportTextAndMarkers() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let scene = appState.project.scenes.sortedByOrder[1]
         var clip = appState.createClip(sceneIDs: [scene.id])!
         clip.hook = "Gancho de prueba"
@@ -237,7 +241,7 @@ final class ClipsTests: XCTestCase {
 
     func testClipsPanelSnapshotsAtBothSizesAndAppearances() {
         for (name, size, scheme, selectsStale) in snapshotConfigurations() {
-            let (appState, _) = makeSnapshotAppState(scheme: scheme, selectsStale: selectsStale)
+            let appState = makeSnapshotAppState(scheme: scheme, selectsStale: selectsStale)
             let token = "panel-\(name)"
             ClipLayoutRegistry.shared.reset()
             let theme = FrameTheme(colorScheme: scheme, accent: .sage)
@@ -276,7 +280,7 @@ final class ClipsTests: XCTestCase {
 
     func testClipsPanelEmptyStateSnapshots() {
         for scheme in [ColorScheme.light, .dark] {
-            let (appState, _) = makeAppState()
+            let appState = makeAppState()
             let theme = FrameTheme(colorScheme: scheme, accent: .sage)
             let size = CGSize(width: 980, height: 712)
             let token = "empty-\(scheme == .dark ? "dark" : "light")"
@@ -306,7 +310,7 @@ final class ClipsTests: XCTestCase {
     }
 
     func testModeSwitcherFitsFourModesAtTheWindowMinimum() {
-        let (appState, _) = makeAppState()
+        let appState = makeAppState()
         let theme = FrameTheme(colorScheme: .light, accent: .sage)
         let root = ModeSwitcher(selection: .constant(.clips))
             .environment(appState)
@@ -328,7 +332,7 @@ final class ClipsTests: XCTestCase {
 
     func testClipExportSheetSnapshots() {
         for scheme in [ColorScheme.light, .dark] {
-            let (appState, _) = makeSnapshotAppState(scheme: scheme, selectsStale: false)
+            let appState = makeSnapshotAppState(scheme: scheme, selectsStale: false)
             let clip = appState.project.clips.first!
             let theme = FrameTheme(colorScheme: scheme, accent: .sage)
             let root = ZStack(alignment: .top) {
@@ -462,10 +466,10 @@ final class ClipsTests: XCTestCase {
 
     // MARK: - Test data
 
-    private func makeAppState() -> (AppState, String) {
-        let suite = "com.framescript.tests.clips.\(UUID().uuidString)"
-        suites.append(suite)
-        let defaults = UserDefaults(suiteName: suite)!
+    private func makeAppState() -> AppState {
+        let isolated = TestDefaults.make()
+        testDefaults.append(isolated)
+        let defaults = isolated.defaults
         let project = makeProject()
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
@@ -484,16 +488,16 @@ final class ClipsTests: XCTestCase {
             ),
             aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
         )
-        return (appState, suite)
+        return appState
     }
 
     private func makeSnapshotAppState(
         scheme: ColorScheme,
         selectsStale: Bool
-    ) -> (AppState, String) {
-        let suite = "com.framescript.tests.clips.\(UUID().uuidString)"
-        suites.append(suite)
-        let defaults = UserDefaults(suiteName: suite)!
+    ) -> AppState {
+        let isolated = TestDefaults.make()
+        testDefaults.append(isolated)
+        let defaults = isolated.defaults
         let project = makeProject()
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
@@ -552,7 +556,7 @@ final class ClipsTests: XCTestCase {
         scenes[2].scriptText = scenes[2].scriptText + " Y eso se nota en cada curva."
 
         appState.windowState.selectedClipID = selectsStale ? staleClip.id : readyClip.id
-        return (appState, suite)
+        return appState
     }
 
     private func makeProject() -> FrameProject {
