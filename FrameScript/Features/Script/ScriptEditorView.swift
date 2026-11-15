@@ -172,7 +172,7 @@ struct ScriptEditorView: View {
                 }
                 if appState.settings.editorPreferences.showSceneDuration && appState.settings.editorPreferences.showWordCount { Text("·") }
                 if appState.settings.editorPreferences.showWordCount {
-                    Text("\(wordCount) \(L10n.plural("script.words", count: wordCount, language: appState.currentLanguage))")
+                    Text(L10n.plural("script.words", count: wordCount, language: appState.currentLanguage))
                 }
                 if let issue = activeAutocompleteIssue {
                     if appState.settings.editorPreferences.showSceneDuration || appState.settings.editorPreferences.showWordCount { Text("·") }
