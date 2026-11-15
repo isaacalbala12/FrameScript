@@ -114,14 +114,149 @@ enum RhythmReview {
         project: FrameProject,
         settings: AppSettings
     ) -> RhythmCalibration {
-        let videoType = project.videoType.trimmingCharacters(in: .whitespacesAndNewlines)
-        let typeOverride = settings.rhythmThresholdsByVideoType[videoType]
+        let typeOverride = videoTypeThresholds(for: project.videoType, settings: settings)
         var calibration = (typeOverride ?? AppRhythmThresholds())
             .applied(to: .standard)
         if let projectOverride = project.rhythmThresholdsOverride {
             calibration = projectOverride.applied(to: calibration)
         }
         return calibration
+    }
+
+    /// Thresholds stored for `rawVideoType`, matching through
+    /// ``VideoTypeID/canonicalID(for:)`` so tables saved under the old Spanish
+    /// display names ("Análisis") and the importer's English ids ("review")
+    /// both keep working without a migration.
+    static func videoTypeThresholds(
+        for rawVideoType: String,
+        settings: AppSettings
+    ) -> AppRhythmThresholds? {
+        guard let key = storageKey(
+            for: rawVideoType,
+            in: settings.rhythmThresholdsByVideoType
+        ) else { return nil }
+        return settings.rhythmThresholdsByVideoType[key]
+    }
+
+    /// Writes the table under the key that already represents this video type,
+    /// so an existing legacy key is updated instead of shadowed by a new one.
+    static func setVideoTypeThresholds(
+        _ thresholds: AppRhythmThresholds,
+        for rawVideoType: String,
+        in settings: inout AppSettings
+    ) {
+        let canonical = VideoTypeID.canonicalID(for: rawVideoType)
+        guard !canonical.isEmpty else { return }
+        let key = storageKey(
+            for: rawVideoType,
+            in: settings.rhythmThresholdsByVideoType
+        ) ?? canonical
+        settings.rhythmThresholdsByVideoType[key] = thresholds
+    }
+
+    /// Removes every key that means `rawVideoType`, legacy spellings included.
+    static func removeVideoTypeThresholds(
+        for rawVideoType: String,
+        in settings: inout AppSettings
+    ) {
+        let canonical = VideoTypeID.canonicalID(for: rawVideoType)
+        guard !canonical.isEmpty else { return }
+        for key in settings.rhythmThresholdsByVideoType.keys.sorted()
+        where VideoTypeID.canonicalID(for: key) == canonical {
+            settings.rhythmThresholdsByVideoType.removeValue(forKey: key)
+        }
+    }
+
+    /// The rows of the rhythm threshold table, in display order.
+    ///
+    /// Built-in ids stay visible so the table is useful before any project
+    /// defines a type; custom types and the open project's type are appended.
+    static func videoTypeIDs(
+        projectVideoType: String,
+        settings: AppSettings,
+        language: AppLanguage
+    ) -> [String] {
+        var ids = Set(VideoTypeID.builtIn)
+        for key in settings.rhythmThresholdsByVideoType.keys {
+            let id = VideoTypeID.canonicalID(for: key)
+            if !id.isEmpty { ids.insert(id) }
+        }
+        let projectID = VideoTypeID.canonicalID(for: projectVideoType)
+        if !projectID.isEmpty { ids.insert(projectID) }
+        return ids.sorted { lhs, rhs in
+            let left = VideoTypeID.displayName(lhs, language: language)
+            let right = VideoTypeID.displayName(rhs, language: language)
+            let order = left.localizedCaseInsensitiveCompare(right)
+            return order == .orderedSame ? lhs < rhs : order == .orderedAscending
+        }
+    }
+
+    /// The key that holds the table for `rawVideoType`: the canonical id when
+    /// it exists, otherwise the first legacy spelling that normalises to it.
+    private static func storageKey(
+        for rawVideoType: String,
+        in table: [String: AppRhythmThresholds]
+    ) -> String? {
+        let canonical = VideoTypeID.canonicalID(for: rawVideoType)
+        guard !canonical.isEmpty else { return nil }
+        if table[canonical] != nil { return canonical }
+        return table.keys.sorted().first {
+            VideoTypeID.canonicalID(for: $0) == canonical
+        }
+    }
+}
+
+/// Stable identifiers for the built-in video types.
+///
+/// The rhythm threshold table is persisted by id, so the labels can be
+/// translated and reworded without orphaning anyone's thresholds. Settings
+/// saved by older builds use the Spanish display names, and the escaleta
+/// importer already writes English ids; ``canonicalID(for:)`` maps every
+/// historical spelling to one id.
+enum VideoTypeID {
+    static let analysis = "analysis"
+    static let gameplay = "gameplay"
+    static let review = "review"
+    static let comparison = "comparison"
+    static let news = "news"
+    static let chronicle = "chronicle"
+    static let tutorial = "tutorial"
+    static let update = "update"
+    static let vantare = "vantare"
+
+    /// Built-in types shown in Settings, always in this order before sorting.
+    static let builtIn: [String] = [
+        analysis, gameplay, review, comparison, news, chronicle, tutorial, update, vantare
+    ]
+
+    /// Normalises a stored or project-supplied video type to its stable id.
+    /// Unknown types keep their trimmed text so custom types still work.
+    static func canonicalID(for rawVideoType: String) -> String {
+        let trimmed = rawVideoType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let folded = trimmed
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        switch folded {
+        case "analysis", "analisis": return analysis
+        case "gameplay": return gameplay
+        case "review": return review
+        case "comparison", "comparativa": return comparison
+        case "news", "noticia": return news
+        case "chronicle", "cronica": return chronicle
+        case "tutorial": return tutorial
+        case "update", "actualizacion": return update
+        case "vantare": return vantare
+        default: return trimmed
+        }
+    }
+
+    /// Localized label for a built-in id; custom types show their own text.
+    static func displayName(_ id: String, language: AppLanguage) -> String {
+        guard builtIn.contains(id) else { return id }
+        let key = "videoType.\(id)"
+        let value = L10n.tr(key, language: language)
+        return value == key ? id : value
     }
 }
 

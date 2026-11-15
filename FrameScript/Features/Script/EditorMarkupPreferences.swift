@@ -3,13 +3,12 @@ import FrameScriptCore
 
 extension AppLanguage {
     /// Two-letter code used by settings, the document schema and learned WPM.
+    ///
+    /// `.system` goes through the app's single resolver (`L10n.resolve`), so a
+    /// French Mac with Spanish second in the list still gets `es`, exactly like
+    /// the interface and the new-project language.
     var code: String {
-        switch self {
-        case .spanish: "es"
-        case .english: "en"
-        case .russian: "ru"
-        case .system: Locale.current.language.languageCode?.identifier ?? "es"
-        }
+        contentLanguageCode
     }
 }
 

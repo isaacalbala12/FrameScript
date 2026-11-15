@@ -966,16 +966,19 @@ struct SimracingCopy: Sendable {
         }
     }
 
-    static func resolvedLanguage(_ language: AppLanguage) -> AppLanguage {
-        guard language == .system else { return language }
-        let preferred = Locale.preferredLanguages.first?.lowercased() ?? ""
-        if preferred.hasPrefix("es") { return .spanish }
-        if preferred.hasPrefix("ru") { return .russian }
-        return .english
+    /// Single source of truth for content language: the same resolver the
+    /// interface uses, so the demo, new projects and template scene titles can
+    /// never disagree with the UI.
+    static func resolvedLanguage(
+        _ language: AppLanguage,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> AppLanguage {
+        L10n.resolve(language, preferredLanguages: preferredLanguages)
     }
 
     /// Guidance, capture suggestions and editing notes have no Russian translation
-    /// yet. Russian projects use the complete English guidance instead of a mix.
+    /// yet. Russian projects use the complete English guidance instead of a mix,
+    /// and the Russian template description says so (WP7).
     static func guidanceLanguage(_ language: AppLanguage) -> AppLanguage {
         let resolved = resolvedLanguage(language)
         return resolved == .russian ? .english : resolved
