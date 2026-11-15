@@ -26,14 +26,10 @@ final class AssetsTests: XCTestCase {
     }
 
     private func makeAppState() -> AppState {
-        let suiteName = "FrameScriptAssetsTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-            let plist = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-            try? FileManager.default.removeItem(at: plist)
-        }
+        // Absolute path in the temporary directory: no real preferences file.
+        let isolated = TestDefaults.make()
+        addTeardownBlock { isolated.cleanup() }
+        let defaults = isolated.defaults
         let scene = Scene(order: 0, sectionType: .hook, title: "Escena", scriptText: "Texto de prueba")
         let project = FrameProject(title: "Proyecto", scenes: [scene])
         let recording = RecordingController(

@@ -165,14 +165,10 @@ final class AssetsSnapshotTests: XCTestCase {
     // MARK: Synthetic Spanish data
 
     private func makeAppState() -> AppState {
-        let suiteName = "FrameScriptAssetsSnapshotTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-            let plist = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-            try? FileManager.default.removeItem(at: plist)
-        }
+        // Absolute path in the temporary directory: no real preferences file.
+        let isolated = TestDefaults.make()
+        addTeardownBlock { isolated.cleanup() }
+        let defaults = isolated.defaults
 
         let sceneA = Scene(
             order: 0,
