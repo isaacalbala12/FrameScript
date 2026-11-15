@@ -175,3 +175,70 @@ extension WP9SaveSafetyTests {
         XCTAssertFalse(app.projectStore.hasUnsavedFileChanges)
     }
 }
+
+// MARK: - Second verification repros
+
+extension WP9SaveSafetyTests {
+    /// Edit during an in-flight write, then the app loses focus. Base wrote
+    /// everything synchronously on resign; the newest edit must reach disk
+    /// (or at least an autosave must remain scheduled).
+    func testV2ResignAfterEditDuringWriteSavesNewestText() async throws {
+        let (app, url) = try open(bigProject())
+        let scene = try XCTUnwrap(app.project.scenes.first)
+        let t1 = scene.scriptText + " uno."
+        app.commitScriptTextChange(sceneID: scene.id, text: t1)
+        app.performAutosave()
+        XCTAssertTrue(app.projectStore.hasPendingBackgroundWrite)
+        let t2 = t1 + " dos."
+        app.commitScriptTextChange(sceneID: scene.id, text: t2)
+        app.flushForApplicationResignation()
+        for _ in 0..<100 { await Task.yield(); try await Task.sleep(for: .milliseconds(10)) }
+        let saved = try FrameScriptFileStore.read(from: url)
+        print("V2 resign: disk==t2", saved.scenes.first(where: { $0.id == scene.id })?.scriptText == t2, "disk==t1", saved.scenes.first(where: { $0.id == scene.id })?.scriptText == t1, "dirty", app.projectStore.hasUnsavedFileChanges, "pending", app.projectStore.hasPendingBackgroundWrite)
+        XCTAssertEqual(saved.scenes.first(where: { $0.id == scene.id })?.scriptText, t2, "newest edit not written on resign")
+    }
+
+    /// Same, closing the project: base did not prompt.
+    func testV2CloseAfterEditDuringWriteDoesNotPrompt() throws {
+        let (app, _) = try open(bigProject())
+        let scene = try XCTUnwrap(app.project.scenes.first)
+        let t1 = scene.scriptText + " uno."
+        app.commitScriptTextChange(sceneID: scene.id, text: t1)
+        app.performAutosave()
+        app.commitScriptTextChange(sceneID: scene.id, text: t1 + " dos.")
+        XCTAssertTrue(app.closeProject())
+        XCTAssertEqual(closePrompts, 0, "close prompted although autosave is on")
+    }
+
+    /// A background write that fails and is drained by resign must still be
+    /// reported to the user.
+    func testV2DrainedFailedWriteIsReported() async throws {
+        let (app, url) = try open(bigProject())
+        let folder = url.deletingLastPathComponent()
+        let scene = try XCTUnwrap(app.project.scenes.first)
+        app.commitScriptTextChange(sceneID: scene.id, text: scene.scriptText + " fallo.")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        app.performAutosave()
+        XCTAssertTrue(app.projectStore.hasPendingBackgroundWrite)
+        app.flushForApplicationResignation()
+        for _ in 0..<100 { await Task.yield(); try await Task.sleep(for: .milliseconds(10)) }
+        print("V2 failed drain: presented", app.errorCenter.presentedError as Any, "dirty", app.projectStore.hasUnsavedFileChanges)
+        XCTAssertTrue(app.projectStore.hasUnsavedFileChanges)
+        XCTAssertNotNil(app.errorCenter.presentedError, "failed autosave silently swallowed")
+    }
+
+    /// Control: the same failure without a drain is reported.
+    func testV2UndrainedFailedWriteIsReported() async throws {
+        let (app, url) = try open(bigProject())
+        let folder = url.deletingLastPathComponent()
+        let scene = try XCTUnwrap(app.project.scenes.first)
+        app.commitScriptTextChange(sceneID: scene.id, text: scene.scriptText + " fallo.")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        app.performAutosave()
+        _ = try await waitUntil("write", timeout: .seconds(15)) { !app.projectStore.hasPendingBackgroundWrite }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertNotNil(app.errorCenter.presentedError)
+    }
+}

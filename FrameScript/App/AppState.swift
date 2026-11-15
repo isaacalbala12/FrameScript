@@ -578,19 +578,49 @@ final class AppState {
 
     /// Waits for a background autosave and adopts its bytes as the new
     /// external-change baseline, so the pre-write check does not mistake our own
-    /// write for an external edit.
-    func syncPendingBackgroundSave() {
-        guard projectStore.waitForBackgroundWrite() else { return }
-        if let url = projectStore.currentFileURL, let data = projectStore.lastSavedFileData {
-            recordProjectFileSnapshot(data: data, at: url)
+    /// write for an external edit. A failed drained write is reported exactly
+    /// like a non-drained one unless the caller is about to retry synchronously.
+    @discardableResult
+    func syncPendingBackgroundSave(
+        presentsFailure: Bool = true
+    ) -> ProjectStore.BackgroundWriteDrain {
+        let outcome = projectStore.waitForBackgroundWrite()
+        switch outcome {
+        case .applied(.success):
+            if let url = projectStore.currentFileURL, let data = projectStore.lastSavedFileData {
+                recordProjectFileSnapshot(data: data, at: url)
+            }
+            errorCenter.clearAutosaveFailureSuppression()
+        case .applied(.failure(let error)):
+            if presentsFailure {
+                Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+                errorCenter.presentAutosave(
+                    AppError.project(error, fileURL: projectStore.currentFileURL, operation: .autosave)
+                )
+            }
+        case .none, .stale:
+            break
         }
+        return outcome
+    }
+
+    /// Lifecycle version of the old synchronous flush: settle the write already
+    /// in flight, then write any edit that landed after its snapshot. App
+    /// resign, window close, close, open-another, duplicate and delete must end
+    /// with disk == memory when autosave is on, exactly like the synchronous
+    /// base did.
+    private func settlePendingSaveForLifecycle() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        syncPendingBackgroundSave()
+        performAutosave(synchronous: true)
     }
 
     @discardableResult
     func saveProject() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
-        syncPendingBackgroundSave()
+        syncPendingBackgroundSave(presentsFailure: false)
         guard let url = projectStore.currentFileURL else { return saveProjectAs() }
         switch prepareProjectFileForWrite() {
         case .proceed:
@@ -619,7 +649,7 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
-        syncPendingBackgroundSave()
+        syncPendingBackgroundSave(presentsFailure: false)
         let url: URL
         if let saveAsDestinationProvider {
             guard let chosenURL = saveAsDestinationProvider() else { return false }
@@ -708,10 +738,10 @@ final class AppState {
 
     func duplicateProject() {
         guard hasOpenProject else { return }
-        // Commit editor text and settle the write the flush starts before the
-        // copy replaces the document id/url.
-        flushActiveEditorBoundary()
-        syncPendingBackgroundSave()
+        // Commit editor text and settle the write before the copy replaces the
+        // document id/url.
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
         let copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
         editorState.resetScriptEditorStates()
         resetProjectFileTracking()
@@ -728,10 +758,10 @@ final class AppState {
     func closeProject() -> Bool {
         guard hasOpenProject else { return true }
         guard !refuseProjectChangeWhileRecording() else { return false }
-        flushActiveEditorBoundary()
-        // Autosave is asynchronous: settle it before asking Save/Don't Save so
-        // the prompt reflects the true dirty state and no write outlives close.
-        syncPendingBackgroundSave()
+        flushActiveEditorBoundary(saveImmediately: false)
+        // Autosave is asynchronous: settle it and write any newer edit before
+        // asking Save/Don't Save, so the prompt reflects the true dirty state.
+        settlePendingSaveForLifecycle()
         guard confirmCloseProjectIfNeeded() else { return false }
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
         if let url = projectStore.currentFileURL {
@@ -781,8 +811,8 @@ final class AppState {
     func deleteProject() {
         guard hasOpenProject else { return }
         guard !refuseProjectChangeWhileRecording() else { return }
-        flushActiveEditorBoundary()
-        syncPendingBackgroundSave()
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
         if projectStore.needsCloseConfirmation {
             // Delete discards the open project, so unsaved edits need the same
             // Save / Don't Save / Cancel decision as closing it, even when the
@@ -835,8 +865,8 @@ final class AppState {
 
     private func prepareForProjectReplacement() -> Bool {
         guard !refuseProjectChangeWhileRecording() else { return false }
-        flushActiveEditorBoundary()
-        syncPendingBackgroundSave()
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
         guard !hasOpenProject || confirmCloseProjectIfNeeded() else { return false }
         return true
     }
@@ -1688,7 +1718,7 @@ final class AppState {
         )
     }
 
-    func performAutosave() {
+    func performAutosave(synchronous: Bool = false) {
         guard !isTerminatingApplication, !isConfirmingTermination,
               settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
@@ -1706,7 +1736,7 @@ final class AppState {
         case .handled, .declined, .failed:
             return
         }
-        if projectStore.canSaveInBackground {
+        if projectStore.canSaveInBackground, !synchronous {
             startBackgroundAutosave(at: url)
             return
         }
@@ -1801,10 +1831,10 @@ final class AppState {
     /// separate from the notification plumbing so it is directly testable.
     func flushForApplicationResignation() {
         guard !isTerminatingApplication, !isConfirmingTermination else { return }
-        flushActiveEditorBoundary(allEditors: true)
-        // Base wrote synchronously here; settle the asynchronous write so the
-        // app is not left with bytes still in flight when it loses focus.
-        syncPendingBackgroundSave()
+        flushActiveEditorBoundary(saveImmediately: false, allEditors: true)
+        // Base wrote synchronously here. Settle the in-flight write and then
+        // write any newer edit so losing focus never strands unsaved text.
+        settlePendingSaveForLifecycle()
     }
 
     /// Runs the same Save / Don't Save / Cancel decision as closing a project.
@@ -1853,8 +1883,8 @@ final class AppState {
 
     func flushForWindowClose() {
         guard !isTerminatingApplication, !isConfirmingTermination else { return }
-        flushActiveEditorBoundary(allEditors: true)
-        syncPendingBackgroundSave()
+        flushActiveEditorBoundary(saveImmediately: false, allEditors: true)
+        settlePendingSaveForLifecycle()
     }
 
     private func presentAutomaticRecentRemovalNotice(count: Int) {
@@ -2447,13 +2477,23 @@ final class ProjectStore {
         return true
     }
 
+    /// Result of waiting for an in-flight background write.
+    enum BackgroundWriteDrain {
+        /// There was nothing to wait for.
+        case none
+        /// The write finished and described the current document. Its revision
+        /// logic has already been applied.
+        case applied(Result<Data, Error>)
+        /// The write belonged to a replaced/reloaded document and was ignored.
+        case stale
+    }
+
     /// Blocks until the last background write finished, applies its revision
-    /// logic and returns whether it described the current document. Used by the
-    /// synchronous save paths and by close/open/quit/revert, which must not
-    /// race a write.
+    /// logic and reports what happened. Used by the synchronous save paths and
+    /// by close/open/quit/revert, which must not race a write.
     @discardableResult
-    func waitForBackgroundWrite() -> Bool {
-        guard let save = pendingBackgroundSave else { return false }
+    func waitForBackgroundWrite() -> BackgroundWriteDrain {
+        guard let save = pendingBackgroundSave else { return .none }
         pendingBackgroundSave = nil
         let box = BackgroundWriteBox()
         let semaphore = DispatchSemaphore(value: 0)
@@ -2462,11 +2502,11 @@ final class ProjectStore {
             semaphore.signal()
         }
         semaphore.wait()
-        guard let result = box.read() else { return false }
+        guard let result = box.read() else { return .none }
         guard project.id == save.projectID,
               currentFileURL == save.url,
               documentGeneration == save.documentGeneration else {
-            return false
+            return .stale
         }
         switch result {
         case .success(let data):
@@ -2481,7 +2521,7 @@ final class ProjectStore {
             lastSavedFileData = nil
             markDirtyWithoutTimestamp()
         }
-        return true
+        return .applied(result)
     }
 
     func duplicateProject(copySuffix: String) -> FrameProject {
