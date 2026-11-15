@@ -43,8 +43,9 @@ enum DurationEstimator {
 
     /// Lowest and highest learned rate accepted from `FrameProject`. Values
     /// outside this range are treated as missing so a corrupt measurement never
-    /// produces an absurd estimate.
-    static let learnedWordsPerMinuteRange: ClosedRange<Double> = 30...400
+    /// produces an absurd estimate. Matches the teleprompter's reading-speed
+    /// limits.
+    static let learnedWordsPerMinuteRange: ClosedRange<Double> = 60...400
 
     // MARK: - Estimating
 

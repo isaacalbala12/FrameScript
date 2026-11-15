@@ -23,10 +23,10 @@ extension AppState {
         let speechLanguage = SpeechLanguage(projectLanguageCode: project.primaryLanguage)
         let wpmProvider: (@MainActor () -> Double?)? = { [weak self] in
             guard let self else { return nil }
-            let code = self.project.primaryLanguage
-            let shortCode = String(code.prefix(2))
+            let language = self.project.primaryLanguage
+            let code = DurationEstimator.normalizedLanguageCode(language)
             return self.project.learnedWordsPerMinuteByLanguage[code]
-                ?? self.project.learnedWordsPerMinuteByLanguage[shortCode]
+                ?? self.project.learnedWordsPerMinuteByLanguage[language]
         }
 
         TeleprompterPresenter.shared.show(
@@ -36,7 +36,8 @@ extension AppState {
             language: currentLanguage,
             speechLanguage: speechLanguage,
             fallbackWordsPerMinuteProvider: wpmProvider,
-            languageProvider: { [weak self] in self?.currentLanguage ?? .english }
+            languageProvider: { [weak self] in self?.currentLanguage ?? .english },
+            pauseDefaults: settings.editorPreferences.markupPauseDefaults
         )
     }
 
@@ -68,12 +69,16 @@ extension AppState {
             let autoplay = arguments.contains("--framescript-ui-test-teleprompter-autoplay")
             TeleprompterPresenter.shared.show(
                 source: StaticTeleprompterSource(
-                    sections: TeleprompterContentBuilder.sections(from: sampleScenes)
+                    sections: TeleprompterContentBuilder.sections(
+                        from: sampleScenes,
+                        pauseDefaults: settings.editorPreferences.markupPauseDefaults
+                    )
                 ),
                 provider: { sampleScenes },
                 startingSectionIndex: 0,
                 language: currentLanguage,
-                languageProvider: { [weak self] in self?.currentLanguage ?? .english }
+                languageProvider: { [weak self] in self?.currentLanguage ?? .english },
+                pauseDefaults: settings.editorPreferences.markupPauseDefaults
             )
             if autoplay {
                 Task { @MainActor in

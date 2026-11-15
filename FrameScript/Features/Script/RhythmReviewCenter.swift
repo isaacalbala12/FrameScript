@@ -4,10 +4,15 @@ import Observation
 
 /// Immutable input for one scene analysis. Building it on the main actor and
 /// analyzing it elsewhere keeps the document model off the background thread.
+/// Only value copies live here; the analyzer input is assembled inside the
+/// detached task.
 struct RhythmSceneSnapshot: Sendable {
     let sceneID: UUID
-    let input: RhythmSceneInput
+    let text: String
+    let visualChangeOffsets: [Int]
+    let isHook: Bool
     let pauseDefaults: PauseDefaults
+    let wordsPerMinute: Double
     let utf16Length: Int
 }
 
@@ -37,14 +42,21 @@ enum RhythmAnalysisRunner {
         analyses.reserveCapacity(snapshots.count)
 
         for snapshot in snapshots {
+            let input = RhythmSceneInput(
+                id: snapshot.sceneID.uuidString,
+                text: snapshot.text,
+                wordsPerMinute: snapshot.wordsPerMinute,
+                visualChangeOffsets: snapshot.visualChangeOffsets,
+                role: snapshot.isHook ? .hook : .normal
+            )
             let pauses = RhythmReview.pauses(
-                in: snapshot.input.text,
+                in: input.text,
                 defaults: snapshot.pauseDefaults
             ).map {
                 RhythmPauseSpan(location: $0.range.location, length: $0.range.length, seconds: $0.seconds)
             }
             let analysis = RhythmAnalyzer.analyze(
-                scene: snapshot.input,
+                scene: input,
                 thresholds: .init(
                     maxSentenceWords: calibration.maxSentenceWords,
                     maxSentenceSeconds: calibration.maxSentenceSeconds,
@@ -230,8 +242,11 @@ final class RhythmReviewCenter {
         return project.scenes.sortedByOrder.map { scene in
             RhythmSceneSnapshot(
                 sceneID: scene.id,
-                input: RhythmReview.input(for: scene, wordsPerMinute: configuration.wordsPerMinute),
+                text: scene.scriptText,
+                visualChangeOffsets: RhythmReview.visualChangeOffsets(for: scene),
+                isHook: scene.sectionType == .hook,
                 pauseDefaults: configuration.pauseDefaults,
+                wordsPerMinute: configuration.wordsPerMinute,
                 utf16Length: (scene.scriptText as NSString).length
             )
         }

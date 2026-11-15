@@ -63,7 +63,11 @@ final class TeleprompterModel {
     var voiceTransitionTask: Task<Void, Never>?
     var voiceStartCancelled = false
     var onReadingSessionFinished: ((TeleprompterReadingSession) -> Void)?
-    let fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)?
+    private(set) var fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)?
+    /// Pause durations the current sections were parsed with. A live provider
+    /// refresh must reuse them, otherwise the configured 2 s / 3 s pauses
+    /// silently fall back to 0.5 s / 1 s.
+    private(set) var pauseDefaults: PauseDefaults
 
     var sections: [TeleprompterSection]
     var settings: TeleprompterSettings {
@@ -104,7 +108,7 @@ final class TeleprompterModel {
     var onLanguageChanged: (() -> Void)?
 
     private let settingsStore: TeleprompterSettingsStore
-    private let sceneProvider: TeleprompterSceneProvider?
+    private var sceneProvider: TeleprompterSceneProvider?
     private weak var textRenderer: TeleprompterTextRendering?
     private var sourceSnapshot: [TeleprompterSceneText] = []
     var engine = TeleprompterScrollEngine()
@@ -113,6 +117,8 @@ final class TeleprompterModel {
     private var countdownTask: Task<Void, Never>?
     var hideControlsTask: Task<Void, Never>?
     private var settingsSaveTask: Task<Void, Never>?
+    private var hasPendingSettingsSave = false
+    private var terminationObserver: NSObjectProtocol?
     private var hasStartedOnce = false
     private var hasAppliedInitialSection = false
     private let pendingInitialSectionIndex: Int
@@ -132,7 +138,8 @@ final class TeleprompterModel {
         speechLanguage: SpeechLanguage? = .spanish,
         speechRecognizer: (any SpeechRecognizing)? = nil,
         fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
-        languageProvider: (@MainActor () -> AppLanguage)? = nil
+        languageProvider: (@MainActor () -> AppLanguage)? = nil,
+        pauseDefaults: PauseDefaults = .standard
     ) {
         let resolvedStart: Int
         if let resumeAnchor,
@@ -153,6 +160,7 @@ final class TeleprompterModel {
         self.pendingInitialSectionIndex = resolvedStart
         self.sceneProvider = sceneProvider
         self.fallbackWordsPerMinuteProvider = fallbackWordsPerMinuteProvider
+        self.pauseDefaults = pauseDefaults
         self.voiceFollow = TeleprompterVoiceFollow(recognizer: speechRecognizer ?? LiveSpeechRecognizer())
         self.voiceFollow.onFailure = { [weak self] failure in
             self?.handleVoiceFollowFailure(failure)
@@ -162,6 +170,15 @@ final class TeleprompterModel {
         }
         startTicking()
         startRefreshing()
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushPendingSettingsSave()
+            }
+        }
     }
 
     // MARK: Geometry
@@ -269,6 +286,59 @@ final class TeleprompterModel {
     func updateLanguageProvider(_ provider: @escaping @MainActor () -> AppLanguage) {
         languageProvider = provider
         refreshLocalization()
+    }
+
+    /// Replaces the language captured when the window was opened. Used when the
+    /// presenter reuses an open window for another project and there is no live
+    /// provider to follow.
+    func updateLanguage(_ language: AppLanguage) {
+        languageProvider = { language }
+        refreshLocalization()
+    }
+
+    /// Replaces the whole document (another project, another take language) in
+    /// an already-open window. The model, its renderer and its settings stay
+    /// alive; only the sections, provider, pause defaults and reading position
+    /// change.
+    func updateContent(
+        sections: [TeleprompterSection],
+        provider: TeleprompterSceneProvider?,
+        startingSectionIndex: Int,
+        pauseDefaults: PauseDefaults,
+        fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)?
+    ) {
+        guard !sections.isEmpty else { return }
+
+        let voicePosition: VoiceFollowPosition? = if voiceFollow.isEnabled {
+            voiceFollow.currentLocation.map {
+                VoiceFollowPosition(
+                    sceneID: $0.sceneID,
+                    characterOffset: $0.characterOffset,
+                    localTokenIndex: $0.localTokenIndex,
+                    normalizedWord: voiceFollow.document?.script.token(at: $0.tokenIndex)?.normalized
+                )
+            } ?? currentVoicePosition()
+        } else {
+            nil
+        }
+
+        self.sections = sections
+        self.pauseDefaults = pauseDefaults
+        self.fallbackWordsPerMinuteProvider = fallbackWordsPerMinuteProvider
+        self.sceneProvider = provider
+        self.sourceSnapshot = provider?() ?? []
+        if voiceFollow.isEnabled, let speechLanguage {
+            voiceFollow.updateSections(sections, language: speechLanguage, preserving: voicePosition)
+        }
+        pendingReadingAnchor = nil
+        pendingJumpIndex = TeleprompterContentBuilder.startingIndex(
+            in: sections,
+            selectedIndex: startingSectionIndex
+        )
+        isAwaitingLayout = true
+        layoutRevision += 1
+        // A model created without a provider has no refresh task yet.
+        startRefreshing()
     }
 
     // MARK: Renderer plumbing
@@ -572,7 +642,7 @@ final class TeleprompterModel {
         countdownTask = nil
         hideControlsTask = nil
         settingsSaveTask = nil
-        settingsStore.save(settings)
+        saveSettingsNow()
     }
 
     // MARK: Live source
@@ -583,7 +653,10 @@ final class TeleprompterModel {
         guard !scenes.isEmpty, scenes != sourceSnapshot else { return }
         sourceSnapshot = scenes
 
-        let newSections = TeleprompterContentBuilder.sections(from: scenes)
+        let newSections = TeleprompterContentBuilder.sections(
+            from: scenes,
+            pauseDefaults: pauseDefaults
+        )
         guard newSections != sections else { return }
 
         let anchor = isAwaitingLayout
@@ -796,11 +869,33 @@ final class TeleprompterModel {
     // MARK: Save debounce
 
     private func scheduleSettingsSave() {
+        hasPendingSettingsSave = true
         settingsSaveTask?.cancel()
         settingsSaveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled, let self else { return }
-            self.settingsStore.save(self.settings)
+            self.saveSettingsNow()
+        }
+    }
+
+    /// Writes a debounced settings change immediately. Called on window close
+    /// (`stop`) and on `NSApplication.willTerminateNotification`, so a value
+    /// changed in the last 350 ms is never lost when the app quits.
+    func flushPendingSettingsSave() {
+        guard hasPendingSettingsSave else { return }
+        settingsSaveTask?.cancel()
+        settingsSaveTask = nil
+        saveSettingsNow()
+    }
+
+    private func saveSettingsNow() {
+        hasPendingSettingsSave = false
+        settingsStore.save(settings)
+    }
+
+    isolated deinit {
+        if let terminationObserver {
+            NotificationCenter.default.removeObserver(terminationObserver)
         }
     }
 }

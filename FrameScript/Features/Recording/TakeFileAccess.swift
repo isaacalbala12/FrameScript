@@ -73,9 +73,33 @@ final class QuickLookPresenter: NSObject, QLPreviewPanelDataSource, QLPreviewPan
     private let lock = NSLock()
     private var url: URL?
     private var activeAccessURL: URL?
+    private var panelCloseObserver: NSObjectProtocol?
+
+    /// Test hook: the file the panel is currently previewing.
+    var activePreviewPath: String? {
+        lock.withLock { url?.path }
+    }
 
     @MainActor
     func present(_ url: URL, accessURL: URL?) {
+        retainPreview(url, accessURL: accessURL)
+        guard let panel = QLPreviewPanel.shared() else {
+            NSWorkspace.shared.open(url)
+            releaseActiveAccess()
+            return
+        }
+        // QuickLook keeps the panel alive after the user closes it. The
+        // security scope must end with the panel, not with the next preview.
+        installPanelCloseObserver(for: panel)
+        panel.dataSource = self
+        panel.delegate = self
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// Remembers the previewed file and takes over its security scope. Split
+    /// from `present` so tests can exercise the release path without ordering
+    /// the QuickLook panel front.
+    func retainPreview(_ url: URL, accessURL: URL?) {
         lock.withLock {
             if let activeAccessURL {
                 activeAccessURL.stopAccessingSecurityScopedResource()
@@ -83,17 +107,35 @@ final class QuickLookPresenter: NSObject, QLPreviewPanelDataSource, QLPreviewPan
             self.url = url
             self.activeAccessURL = accessURL
         }
-        guard let panel = QLPreviewPanel.shared() else {
-            NSWorkspace.shared.open(url)
-            lock.withLock {
-                activeAccessURL?.stopAccessingSecurityScopedResource()
-                self.activeAccessURL = nil
-            }
-            return
+    }
+
+    private func installPanelCloseObserver(for panel: QLPreviewPanel) {
+        if let panelCloseObserver {
+            NotificationCenter.default.removeObserver(panelCloseObserver)
         }
-        panel.dataSource = self
-        panel.delegate = self
-        panel.makeKeyAndOrderFront(nil)
+        panelCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: panel,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handlePanelWillClose()
+            }
+        }
+    }
+
+    /// Ends the security-scoped access held for the preview. Called when the
+    /// panel closes; also the seam the regression test drives.
+    func handlePanelWillClose() {
+        releaseActiveAccess()
+    }
+
+    private func releaseActiveAccess() {
+        lock.withLock {
+            activeAccessURL?.stopAccessingSecurityScopedResource()
+            activeAccessURL = nil
+            url = nil
+        }
     }
 
     nonisolated func numberOfPreviewItems(in panel: QLPreviewPanel) -> Int {

@@ -414,13 +414,10 @@ extension SpeechLanguage {
     /// Maps the project's primary language code (`es`, `es-ES`, `en`, ...) to
     /// one of the two recognition locales F9 supports.
     init?(projectLanguageCode: String) {
-        let code = projectLanguageCode.lowercased()
-        if code.hasPrefix("en") {
-            self = .english
-        } else if code.hasPrefix("es") {
-            self = .spanish
-        } else {
-            return nil
+        switch DurationEstimator.normalizedLanguageCode(projectLanguageCode) {
+        case "en": self = .english
+        case "es": self = .spanish
+        default: return nil
         }
     }
 }

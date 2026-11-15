@@ -8,7 +8,10 @@ import FrameScriptCore
 enum DurationLimits {
     static let minimumTarget: TimeInterval = 0.1
     static let maximumDuration: TimeInterval = 86_400
-    static let plausibleWordsPerMinute: ClosedRange<Double> = 30...400
+    /// Same bounds as `DurationEstimator.learnedWordsPerMinuteRange`: a learned
+    /// pace outside them is a measurement error, not a real reading speed.
+    static let plausibleWordsPerMinute: ClosedRange<Double> =
+        DurationEstimator.learnedWordsPerMinuteRange
 
     static func sanitizedTarget(_ value: TimeInterval?) -> TimeInterval? {
         guard let value, isPlausibleDuration(value) else { return nil }
@@ -52,17 +55,14 @@ extension AppLanguage {
 // MARK: - Language codes
 
 /// Normalises the BCP-47-ish language codes used by takes and the project.
+///
+/// One implementation only: `DurationEstimator.normalizedLanguageCode` is the
+/// app-wide normaliser, so take buckets, WPM lookup and the teleprompter can
+/// never disagree about what `es-MX` means.
 enum DurationLanguage {
     /// `es-ES`, `ES` and `es_ES` all become `es`. Empty input stays empty.
     static func normalized(_ code: String) -> String {
-        let cleaned = code
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .replacingOccurrences(of: "_", with: "-")
-        return cleaned
-            .split(separator: "-", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map(String.init) ?? ""
+        DurationEstimator.normalizedLanguageCode(code)
     }
 
     /// Code understood by `WPMLearner`/`SpeechLanguage`, if any.
@@ -238,6 +238,22 @@ enum DurationTakeSelector {
 
 // MARK: - Learning
 
+/// Immutable copy of one take, made on the main actor so the markup parse and
+/// the EMA work can run off it. Nothing here references `Scene` or `Take`, so
+/// the whole learning pass is `Sendable` and safe in a detached task.
+struct DurationLearningTakeInput: Equatable, Sendable {
+    let languageCode: String
+    let rating: TakeRating
+    let duration: TimeInterval
+    let readText: String
+    let sceneTextHash: String
+    /// Text the take was recorded against (scene script or variant text).
+    let sourceText: String
+    let sourceTextHash: String
+    let startedAt: Date
+    let takeNumber: Int
+}
+
 /// One good take reduced to the sample `WPMLearner` needs. `duration` is the
 /// speaking time: wall-clock take duration minus the inline pauses, so pause
 /// heavy takes do not bias the learned words-per-minute value.
@@ -270,13 +286,27 @@ enum DurationLearning {
     /// (markup-aware). A take without read text is only usable while its scene
     /// text hash still matches, so editing the script cannot retroactively
     /// rewrite history.
+    ///
+    /// This overload reads the live document model, so it stays on the main
+    /// actor. Prefer ``inputs(from:primaryLanguage:)`` plus
+    /// ``samples(from:)`` when the work should run off-main.
     @MainActor
     static func samples(
         from scenes: [Scene],
         primaryLanguage: String
     ) -> [DurationLearningSample] {
+        samples(from: inputs(from: scenes, primaryLanguage: primaryLanguage))
+    }
+
+    /// Copies the take data the learner needs. Cheap value types only, so the
+    /// expensive markup parse can happen in a detached task.
+    @MainActor
+    static func inputs(
+        from scenes: [Scene],
+        primaryLanguage: String
+    ) -> [DurationLearningTakeInput] {
         let primary = DurationLanguage.normalized(primaryLanguage)
-        var samples: [DurationLearningSample] = []
+        var inputs: [DurationLearningTakeInput] = []
 
         for scene in scenes {
             let sceneHash = FrameScriptDocument.TextHash.hash(scene.scriptText)
@@ -284,65 +314,76 @@ enum DurationLearning {
                 let language = take.languageCode
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty ? primary : take.languageCode
-                if let sample = makeSample(
-                    take: take,
+                inputs.append(DurationLearningTakeInput(
                     languageCode: language,
+                    rating: take.rating,
+                    duration: take.duration,
+                    readText: take.readText,
+                    sceneTextHash: take.sceneTextHash,
                     sourceText: scene.scriptText,
-                    sourceTextHash: sceneHash
-                ) {
-                    samples.append(sample)
-                }
+                    sourceTextHash: sceneHash,
+                    startedAt: take.startedAt,
+                    takeNumber: take.number
+                ))
             }
 
             for variant in scene.languageVariants {
                 let variantHash = FrameScriptDocument.TextHash.hash(variant.text)
                 for take in variant.takes {
-                    if let sample = makeSample(
-                        take: take,
+                    inputs.append(DurationLearningTakeInput(
                         languageCode: variant.languageCode,
+                        rating: take.rating,
+                        duration: take.duration,
+                        readText: take.readText,
+                        sceneTextHash: take.sceneTextHash,
                         sourceText: variant.text,
-                        sourceTextHash: variantHash
-                    ) {
-                        samples.append(sample)
-                    }
+                        sourceTextHash: variantHash,
+                        startedAt: take.startedAt,
+                        takeNumber: take.number
+                    ))
                 }
             }
         }
 
-        return samples
+        return inputs
+    }
+
+    /// Builds the learner samples from value copies. Pure and nonisolated, so a
+    /// detached task can parse every take without touching the document.
+    static func samples(from inputs: [DurationLearningTakeInput]) -> [DurationLearningSample] {
+        inputs.compactMap(makeSample(from:))
     }
 
     private static func makeSample(
-        take: Take,
-        languageCode: String,
-        sourceText: String,
-        sourceTextHash: String
+        from input: DurationLearningTakeInput
     ) -> DurationLearningSample? {
-        guard take.rating == .good,
-              DurationLimits.isPlausibleDuration(take.duration) else {
+        guard input.rating == .good,
+              DurationLimits.isPlausibleDuration(input.duration) else {
             return nil
         }
-        let readText = take.readText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let readText = input.readText.trimmingCharacters(in: .whitespacesAndNewlines)
         let spokenText: String
         if !readText.isEmpty {
-            spokenText = take.readText
+            spokenText = input.readText
         } else {
-            guard take.sceneTextHash.isEmpty || take.sceneTextHash == sourceTextHash else {
+            guard input.sceneTextHash.isEmpty || input.sceneTextHash == input.sourceTextHash else {
                 return nil
             }
-            spokenText = sourceText
+            spokenText = input.sourceText
         }
 
-        let pauseSeconds = ScriptMarkup.estimateDuration(spokenText, wordsPerMinute: 0)
-        let speakingDuration = take.duration - pauseSeconds
+        // One parse gives both the pause total and the spoken word count. The
+        // old code parsed the same text twice.
+        let estimate = ScriptMarkup.estimate(spokenText, wordsPerMinute: 0)
+        let speakingDuration = input.duration - estimate.duration
         guard speakingDuration.isFinite, speakingDuration > 0 else { return nil }
 
         return DurationLearningSample(
-            languageCode: DurationLanguage.normalized(languageCode),
-            wordCount: ScriptMarkup.spokenWordCount(spokenText),
+            languageCode: DurationLanguage.normalized(input.languageCode),
+            wordCount: estimate.spokenWordCount,
             duration: speakingDuration,
-            startedAt: take.startedAt,
-            takeNumber: take.number
+            startedAt: input.startedAt,
+            takeNumber: input.takeNumber
         )
     }
 

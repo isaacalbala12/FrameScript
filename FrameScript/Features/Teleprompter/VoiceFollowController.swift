@@ -1,6 +1,7 @@
 import Foundation
 import FrameScriptCore
 import Observation
+import OSLog
 import Speech
 
 // MARK: - Failures
@@ -97,6 +98,11 @@ final class TeleprompterVoiceFollow {
     private(set) var availableInputDevices: [AudioInputDevice] = []
     private(set) var lastFailure: VoiceFollowFailure?
     private(set) var document: VoiceFollowDocument?
+
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "VoiceFollow"
+    )
 
     var onFailure: ((VoiceFollowFailure) -> Void)?
     var onSessionFinished: ((TeleprompterReadingSession) -> Void)?
@@ -204,6 +210,9 @@ final class TeleprompterVoiceFollow {
             try await beginStreaming(language: language, inputDeviceUID: inputDeviceUID)
         } catch {
             let failure = VoiceFollowFailure.from(error)
+            Self.logger.error(
+                "Voice follow could not start. failure=\(String(describing: failure), privacy: .public) detail=\(error.localizedDescription, privacy: .private)"
+            )
             if failure != .cancelled {
                 await resetAfterFailedStart(failure)
             }
@@ -571,6 +580,9 @@ final class TeleprompterVoiceFollow {
         livenessTask = nil
         streamTask = nil
         let failure = error.map(VoiceFollowFailure.from) ?? .recognitionLost
+        Self.logger.error(
+            "Voice follow stream ended; switching to timed fallback. failure=\(String(describing: failure), privacy: .public) detail=\(error?.localizedDescription ?? "stream finished", privacy: .private)"
+        )
         lastFailure = failure
         closeSpeechSegment()
         setPhase(.timedFallback)

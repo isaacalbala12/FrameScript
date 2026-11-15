@@ -54,6 +54,7 @@ extension AppState {
         delay: Duration = .milliseconds(350)
     ) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
+        DurationRevisionCounter.shared.bump()
         SceneMetricsDebouncer.shared.schedule(
             sceneID: sceneID,
             text: scene.scriptText,

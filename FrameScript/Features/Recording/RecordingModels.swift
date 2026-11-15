@@ -28,6 +28,15 @@ extension OBSClient: OBSRecordingClient {
     }
 }
 
+/// Optional capability of an OBS client: close the socket and finish its
+/// streams. Kept out of `OBSRecordingClient` so in-memory test clients do not
+/// have to implement it.
+protocol OBSRecordingClientShutdown: Sendable {
+    func shutdown() async
+}
+
+extension OBSClient: OBSRecordingClientShutdown {}
+
 // MARK: - Issues
 
 /// A user-facing recording problem. Every case has a localized title and an
@@ -204,11 +213,14 @@ enum RecordingPhase: Equatable, Sendable {
 enum TakeNumbering {
     /// Next take number for one scene and one language: the maximum existing
     /// number plus one, ignoring numbers used by other languages.
+    ///
+    /// Languages are compared through the app-wide normaliser, so `es-MX` and
+    /// `es` share one numbering sequence.
     static func nextNumber(existing: [Take], languageCode: String) -> Int {
-        let normalized = languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalized = DurationEstimator.normalizedLanguageCode(languageCode)
         let highest = existing
             .filter {
-                $0.languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalized
+                DurationEstimator.normalizedLanguageCode($0.languageCode) == normalized
             }
             .map(\.number)
             .max() ?? 0

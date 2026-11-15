@@ -49,7 +49,8 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
         speechLanguage: SpeechLanguage? = .spanish,
         speechRecognizer: (any SpeechRecognizing)? = nil,
         fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
-        languageProvider: (@MainActor () -> AppLanguage)? = nil
+        languageProvider: (@MainActor () -> AppLanguage)? = nil,
+        pauseDefaults: PauseDefaults = .standard
     ) {
         let model = TeleprompterModel(
             sections: sections,
@@ -61,7 +62,8 @@ final class TeleprompterWindowController: NSWindowController, NSWindowDelegate {
             speechLanguage: speechLanguage,
             speechRecognizer: speechRecognizer,
             fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider,
-            languageProvider: languageProvider
+            languageProvider: languageProvider,
+            pauseDefaults: pauseDefaults
         )
         self.model = model
 
@@ -314,13 +316,42 @@ final class TeleprompterPresenter {
 
     private var controller: TeleprompterWindowController?
     private var lastAnchor: TeleprompterReadingAnchor?
+    private var projectChangeObserver: NSObjectProtocol?
+
+    /// Test seam: the offscreen tests must never order a window front or
+    /// activate the app. Production leaves this `nil` and the controller
+    /// presents normally.
+    var presentHandler: ((TeleprompterWindowController) -> Void)?
 
     /// F11 learner hook. Set it from the app; the teleprompter only emits a
     /// session summary when voice following stops.
     weak var readingSessionReporter: (any TeleprompterReadingSessionReporting)?
 
+    init(notificationCenter: NotificationCenter = .default) {
+        projectChangeObserver = notificationCenter.addObserver(
+            forName: .frameScriptProjectWillChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.close()
+            }
+        }
+    }
+
+    isolated deinit {
+        if let projectChangeObserver {
+            NotificationCenter.default.removeObserver(projectChangeObserver)
+        }
+    }
+
     var activeModel: TeleprompterModel? {
         controller?.model
+    }
+
+    /// Test/QA access to the window controller (title assertions).
+    var activeController: TeleprompterWindowController? {
+        controller
     }
 
     /// Filled by `AppState` so every teleprompter (toolbar or recording) reads
@@ -334,17 +365,34 @@ final class TeleprompterPresenter {
         language: AppLanguage,
         speechLanguage: SpeechLanguage? = .spanish,
         fallbackWordsPerMinuteProvider: (@MainActor () -> Double?)? = nil,
-        languageProvider: (@MainActor () -> AppLanguage)? = nil
+        languageProvider: (@MainActor () -> AppLanguage)? = nil,
+        pauseDefaults: PauseDefaults = .standard
     ) {
         let resolvedProvider = languageProvider ?? self.languageProvider
         if let existing = controller {
+            // The window is already open: replace its document instead of
+            // returning early, otherwise it keeps showing the previous project
+            // (and its language) after a project switch.
             if let resolvedProvider {
                 existing.model.updateLanguageProvider(resolvedProvider)
+            } else {
+                existing.model.updateLanguage(language)
             }
             Task { @MainActor in
                 await existing.model.updateSpeechLanguage(speechLanguage)
             }
-            existing.bringForward()
+            existing.model.updateContent(
+                sections: source.sections,
+                provider: provider,
+                startingSectionIndex: startingSectionIndex,
+                pauseDefaults: pauseDefaults,
+                fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider
+            )
+            if let presentHandler {
+                presentHandler(existing)
+            } else {
+                existing.bringForward()
+            }
             return
         }
 
@@ -367,14 +415,19 @@ final class TeleprompterPresenter {
             speechLanguage: speechLanguage,
             speechRecognizer: simulatedRecognizer,
             fallbackWordsPerMinuteProvider: fallbackWordsPerMinuteProvider,
-            languageProvider: resolvedProvider
+            languageProvider: resolvedProvider,
+            pauseDefaults: pauseDefaults
         )
         controller.presenter = self
         controller.model.onReadingSessionFinished = { [weak self] session in
             self?.readingSessionReporter?.teleprompterDidFinishReadingSession(session)
         }
         self.controller = controller
-        controller.present()
+        if let presentHandler {
+            presentHandler(controller)
+        } else {
+            controller.present()
+        }
 
         #if DEBUG
         if VoiceFollowDebugConfiguration.autoStart {
@@ -384,6 +437,19 @@ final class TeleprompterPresenter {
             }
         }
         #endif
+    }
+
+    /// Closes the window (if any). Called when the open project is about to be
+    /// closed, replaced or deleted, so the prompter can never show a document
+    /// that no longer exists.
+    func close() {
+        guard let controller else { return }
+        controller.close()
+        if self.controller === controller {
+            // A window that was never shown may not post `windowWillClose`.
+            controller.model.stop()
+            self.controller = nil
+        }
     }
 
     func controllerDidClose(_ controller: TeleprompterWindowController) {
@@ -408,6 +474,6 @@ final class TeleprompterPresenter {
     }
 
     func closeForUITesting() {
-        controller?.close()
+        close()
     }
 }
