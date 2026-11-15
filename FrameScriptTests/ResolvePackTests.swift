@@ -523,7 +523,9 @@ final class ResolvePackTests: XCTestCase {
     func testShortcutIsRegisteredAndDoesNotClash() {
         let definition = ShortcutRegistry.definition(for: .resolvePack)
         XCTAssertEqual(definition.category, .project)
-        XCTAssertEqual(definition.factoryDefault, ShortcutBinding("e", modifiers: [.command, .option]))
+        // ⌘E (export), ⇧⌘E (escaleta) and ⌥⌘E (AV script) were taken when the
+        // pack landed, so integration moved it to ⌃⌘E.
+        XCTAssertEqual(definition.factoryDefault, ShortcutBinding("e", modifiers: [.command, .control]))
         XCTAssertNil(
             ShortcutRegistry.conflict(
                 for: definition.factoryDefault,
@@ -531,7 +533,7 @@ final class ResolvePackTests: XCTestCase {
                 overrides: [:]
             )
         )
-        XCTAssertEqual(definition.factoryDefault.display, "⌥⌘E")
+        XCTAssertEqual(definition.factoryDefault.display, "⌃⌘E")
     }
 
     func testEveryResolvePackStringExistsInEnglishSpanishAndRussian() throws {
