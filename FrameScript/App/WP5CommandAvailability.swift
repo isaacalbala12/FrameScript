@@ -120,7 +120,7 @@ struct CommandAvailability: Equatable {
             canMoveScene
         case .previousScene, .nextScene:
             canNavigateScenes
-        case .scriptMode, .visualsMode, .editingMode, .clipsMode:
+        case .scriptMode, .visualsMode, .editingMode, .clipsMode, .timelineMode:
             canSwitchMode
         case .createClip:
             canCreateClip
