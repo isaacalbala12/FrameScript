@@ -7,7 +7,9 @@ struct TopToolbar: View {
 
     var body: some View {
         GeometryReader { proxy in
-            content(compact: proxy.size.width < 1_080)
+            // Six mode buttons plus nine actions need the extra room; below the
+            // standard window width the switcher drops its shortcut badges.
+            content(compact: proxy.size.width < 1_250)
         }
         .frame(height: 58)
         .background(theme.background)
@@ -61,10 +63,13 @@ struct TopToolbar: View {
 
             Spacer(minLength: 8)
 
-            ModeSwitcher(selection: Binding(
-                get: { appState.selectedMode },
-                set: { appState.selectMode($0) }
-            ))
+            ModeSwitcher(
+                selection: Binding(
+                    get: { appState.selectedMode },
+                    set: { appState.selectMode($0) }
+                ),
+                prefersCompactButtons: compact
+            )
 
             Spacer(minLength: 8)
 
@@ -161,23 +166,23 @@ struct TopToolbar: View {
                     HStack(spacing: 5) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 13, weight: .medium))
-                        if !compact {
-                            Text(appState.shortcutDisplay(for: .commandPalette))
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .foregroundStyle(theme.tertiaryText)
-                                .fixedSize()
-                                .layoutPriority(2)
-                                .padding(.horizontal, 4)
-                                .frame(height: 17)
-                                .background {
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(theme.hover)
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                                .stroke(theme.divider, lineWidth: 1)
-                                        }
-                                }
-                        }
+                        // The keycap is part of the base toolbar contract at the
+                        // minimum window width (uiux): always keep it visible.
+                        Text(appState.shortcutDisplay(for: .commandPalette))
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(theme.tertiaryText)
+                            .fixedSize()
+                            .layoutPriority(2)
+                            .padding(.horizontal, 4)
+                            .frame(height: 17)
+                            .background {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(theme.hover)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .stroke(theme.divider, lineWidth: 1)
+                                    }
+                            }
                     }
                     .frame(height: 30)
                 }

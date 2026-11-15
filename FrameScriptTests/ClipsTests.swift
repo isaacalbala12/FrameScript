@@ -309,25 +309,39 @@ final class ClipsTests: XCTestCase {
         }
     }
 
-    func testModeSwitcherFitsFourModesAtTheWindowMinimum() {
+    /// Six workspace modes cannot fit the old button row at the minimum window
+    /// width, so the switcher falls back to a menu. Rendering through the
+    /// window-based snapshot renderer is what makes the menu label draw.
+    func testModeSwitcherFitsEveryModeAtTheWindowMinimum() {
         let appState = makeAppState()
         let theme = FrameTheme(colorScheme: .light, accent: .sage)
         let root = ModeSwitcher(selection: .constant(.clips))
             .environment(appState)
             .environment(\.frameTheme, theme)
             .environment(\.colorScheme, ColorScheme.light)
-            .frame(width: 342, height: 40)
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = CGRect(x: 0, y: 0, width: 342, height: 40)
-        hosting.layoutSubtreeIfNeeded()
-        hosting.displayIfNeeded()
-
-        let size = CGSize(width: 342, height: 40)
-        let image = render(hosting, size: size)
-        XCTAssertNotNil(image, "mode switcher did not render")
-        assertRenderedContent(image, size: size, name: "mode-switcher")
+        let hosting = NSHostingView(rootView: root.frame(width: 342, height: 40))
         XCTAssertLessThanOrEqual(hosting.fittingSize.width, 343)
-        writeSnapshot(image, name: "mode-switcher-980.png")
+
+        let result = SnapshotRenderer.render(
+            root,
+            name: "mode-switcher-980",
+            suite: "w3-f-clips",
+            size: CGSize(width: 342, height: 40),
+            appearance: .light,
+            language: .spanish,
+            appState: appState
+        )
+        XCTAssertGreaterThan(result.pixelSize.width, 0)
+        XCTAssertGreaterThan(result.distinctColorCount, 4, "mode switcher did not render")
+        XCTAssertEqual(
+            L10n.tr("mode.clips", language: .spanish),
+            "Clips",
+            "the collapsed switcher must show the selected mode"
+        )
+        XCTAssertTrue(
+            result.textFragments.contains { $0.contains("Clips") },
+            "the selected mode is not laid out: \(result.textFragments)"
+        )
     }
 
     func testClipExportSheetSnapshots() {
