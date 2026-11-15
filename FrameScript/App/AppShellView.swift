@@ -65,6 +65,11 @@ struct AppRootView: View {
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }
+            .sheet(isPresented: $windowState.isAssetsPresented) {
+                AssetsSheetView()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
             .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
                 CommandPaletteView()
                     .environment(appState)
@@ -185,17 +190,12 @@ struct AppShellView: View {
             handleDrop(urls)
         }
         .hookGeneratorSheets(presenter: HookSheetPresenter.shared)
-        .sheet(isPresented: $windowState.isAssetsPresented) {
-            AssetsSheetView()
-                .environment(appState)
-                .environment(\.frameTheme, theme)
-        }
         .task(id: appState.project.id) {
             appState.syncOBSAssetsFromTakes()
             await appState.refreshAssetReachability()
         }
         .onDisappear {
-            windowState.isAssetsPresented = false
+            appState.windowState.isAssetsPresented = false
             appState.flushActiveEditorBoundary()
         }
     }
