@@ -96,6 +96,7 @@ struct CommandAvailability: Equatable {
     var canToggleContentsPanel: Bool { hasOpenProject }
     var canToggleAIReview: Bool { hasOpenProject }
     var canToggleFocusMode: Bool { hasOpenProject }
+    var canShowAssets: Bool { hasOpenProject }
 
     func isEnabled(_ command: ShortcutCommand) -> Bool {
         switch command {
@@ -135,6 +136,8 @@ struct CommandAvailability: Equatable {
             canToggleAIReview
         case .toggleFocusMode:
             canToggleFocusMode
+        case .assets:
+            canShowAssets
         case .teleprompter:
             canOpenTeleprompter
         case .recordTake:

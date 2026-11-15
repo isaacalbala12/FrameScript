@@ -97,6 +97,12 @@ struct TopToolbar: View {
 
                 ProductionToolbarButton()
 
+                toolbarButton(
+                    systemName: "photo.stack",
+                    help: appState.localized("menu.assets"),
+                    action: { appState.isAssetsPresented = true }
+                )
+
                 toolbarDivider
 
                 Button {

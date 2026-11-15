@@ -244,6 +244,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case createClip
     case timelineZoomIn, timelineZoomOut
+    case assets
     case recordTake, toggleRecordingPanel
     case productionChecklist
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
@@ -362,6 +363,7 @@ enum ShortcutRegistry {
         .init(command: .productionChecklist, localizationKey: "production.menu", category: .workspace, factoryDefault: .init("p", modifiers: [.command, .shift]), order: 14),
         .init(command: .timelineZoomIn, localizationKey: "timeline.zoomIn", category: .workspace, factoryDefault: .init("=", modifiers: [.command]), order: 15),
         .init(command: .timelineZoomOut, localizationKey: "timeline.zoomOut", category: .workspace, factoryDefault: .init("-", modifiers: [.command]), order: 16),
+        .init(command: .assets, localizationKey: "menu.assets", category: .workspace, factoryDefault: .init("a", modifiers: [.command, .option]), order: 17),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),

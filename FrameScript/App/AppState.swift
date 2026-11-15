@@ -2840,6 +2840,7 @@ final class WindowState {
     var newProjectRequest: NewProjectRequest?
     var isExportPresented = false
     var selectedClipID: UUID?
+    var isAssetsPresented = false
     var pendingSettingsTab: SettingsTab?
     var pendingSettingsHighlightKey: String?
 }

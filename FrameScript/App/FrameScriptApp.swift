@@ -249,6 +249,9 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("command.toggleFocus"), isOn: $appState.isFocusModeEnabled)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleFocusMode))
                 .disabled(!commands.canToggleFocusMode)
+            Button(appState.localized("menu.assets")) { appState.isAssetsPresented = true }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .assets))
+                .disabled(!commands.canShowAssets)
             Button(appState.localized("toolbar.commandPalette")) { appState.isCommandPalettePresented = true }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .commandPalette))
             Button(appState.localized("command.showShortcuts")) { appState.isShortcutsPresented = true }

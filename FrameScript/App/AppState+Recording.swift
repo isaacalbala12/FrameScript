@@ -15,6 +15,9 @@ extension AppState {
             },
             language: { [weak self] in
                 self?.currentLanguage ?? .english
+            },
+            takeDidFinalize: { [weak self] sceneID, takeID, filePath in
+                self?.ensureOBSAsset(sceneID: sceneID, takeID: takeID, preferredPath: filePath)
             }
         ))
     }

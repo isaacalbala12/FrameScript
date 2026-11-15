@@ -254,6 +254,8 @@ struct CommandPaletteView: View {
             appState.selectMode(.avScript)
         case .exportAVScript:
             appState.exportAVScript(format: .markdown)
+        case .assets:
+            appState.isAssetsPresented = true
         case .commandPalette:
             break
         case .toggleContentsPanel:

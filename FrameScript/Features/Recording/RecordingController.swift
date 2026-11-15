@@ -22,6 +22,9 @@ final class RecordingController {
         var scene: @MainActor (UUID) -> Scene?
         var markProjectChanged: @MainActor () -> Void
         var language: @MainActor () -> AppLanguage
+        /// Called after a take is appended or updated so the asset library can
+        /// keep its OBS entry in sync. Defaults to a no-op for tests.
+        var takeDidFinalize: @MainActor (UUID, UUID, String) -> Void = { _, _, _ in }
     }
 
     private enum DefaultsKey {
@@ -691,6 +694,7 @@ final class RecordingController {
         phase = .idle
         elapsed = duration
         resetActiveTake(clearElapsed: false)
+        gateway.takeDidFinalize(sceneID, takeID, filePath)
         teleprompterHook?.recordingDidStop(
             sceneID: sceneID,
             takeID: takeID,
@@ -1142,6 +1146,7 @@ final class RecordingController {
         append(take, to: scene, languageCode: normalized)
         DurationRevisionCounter.shared.bump()
         gateway.markProjectChanged()
+        gateway.takeDidFinalize(sceneID, take.id, take.filePath)
         lastTakeID = take.id
         return true
     }

@@ -30,6 +30,7 @@ extension L10n {
         productionStrings,
         clipsStrings,
         timelineStrings,
-        avScriptStrings
+        avScriptStrings,
+        assetsStrings
     ]
 }
