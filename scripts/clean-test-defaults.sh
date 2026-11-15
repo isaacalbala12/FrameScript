@@ -49,7 +49,7 @@ done < <(printf '%s\n' "${DOMAINS[@]:-}" | sed '/^$/d' | sort -u)
 COUNT=${#SORTED[@]}
 echo "Matched $COUNT leftover FrameScript.<Name>.<UUID> test suite(s)."
 
-for domain in "${SORTED[@]}"; do
+for domain in "${SORTED[@]+"${SORTED[@]}"}"; do
     plist="$PREFERENCES_DIR/$domain.plist"
     if [[ $APPLY -eq 1 ]]; then
         echo "deleting domain: $domain"
