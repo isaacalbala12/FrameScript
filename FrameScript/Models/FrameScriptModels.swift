@@ -122,6 +122,26 @@ enum ClaimStatus: String, Codable, CaseIterable, Identifiable {
     case confirmed
     case probable
     case rumor
+    case communityOpinion
+
+    var id: String { rawValue }
+}
+
+enum SourceKind: String, Codable, CaseIterable, Identifiable {
+    case official
+    case press
+    case community
+    case video
+    case data
+    case other
+
+    var id: String { rawValue }
+}
+
+enum SourceReliability: String, Codable, CaseIterable, Identifiable {
+    case high
+    case medium
+    case low
 
     var id: String { rawValue }
 }
@@ -402,12 +422,26 @@ struct ProjectSource: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var title: String
     var url: String
+    var kind: SourceKind
+    var reliability: SourceReliability
+    var date: Date?
     var note: String
 
-    init(id: UUID = UUID(), title: String, url: String = "", note: String = "") {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        url: String = "",
+        kind: SourceKind = .other,
+        reliability: SourceReliability = .medium,
+        date: Date? = nil,
+        note: String = ""
+    ) {
         self.id = id
         self.title = title
         self.url = url
+        self.kind = kind
+        self.reliability = reliability
+        self.date = date
         self.note = note
     }
 }
@@ -418,19 +452,34 @@ struct ProjectClaim: Identifiable, Codable, Hashable, Sendable {
     var status: ClaimStatus
     var sourceIDs: [UUID]
     var sceneIDs: [UUID]
+    var anchorSceneID: UUID?
+    var anchor: TextAnchor?
+    var needsVerification: Bool
+    var personalExperience: Bool
+    var resolutionNote: String
 
     init(
         id: UUID = UUID(),
         text: String,
         status: ClaimStatus = .probable,
         sourceIDs: [UUID] = [],
-        sceneIDs: [UUID] = []
+        sceneIDs: [UUID] = [],
+        anchorSceneID: UUID? = nil,
+        anchor: TextAnchor? = nil,
+        needsVerification: Bool = false,
+        personalExperience: Bool = false,
+        resolutionNote: String = ""
     ) {
         self.id = id
         self.text = text
         self.status = status
         self.sourceIDs = sourceIDs
         self.sceneIDs = sceneIDs
+        self.anchorSceneID = anchorSceneID
+        self.anchor = anchor
+        self.needsVerification = needsVerification
+        self.personalExperience = personalExperience
+        self.resolutionNote = resolutionNote
     }
 }
 
@@ -439,12 +488,20 @@ struct ComparisonTable: Identifiable, Codable, Hashable, Sendable {
     var title: String
     var header: [String]
     var rows: [[String]]
+    var sceneID: UUID?
 
-    init(id: UUID = UUID(), title: String, header: [String] = [], rows: [[String]] = []) {
+    init(
+        id: UUID = UUID(),
+        title: String,
+        header: [String] = [],
+        rows: [[String]] = [],
+        sceneID: UUID? = nil
+    ) {
         self.id = id
         self.title = title
         self.header = header
         self.rows = rows
+        self.sceneID = sceneID
     }
 }
 

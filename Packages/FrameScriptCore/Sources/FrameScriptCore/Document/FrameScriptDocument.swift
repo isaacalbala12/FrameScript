@@ -202,6 +202,25 @@ extension FrameScriptDocument {
         case confirmed
         case probable
         case rumor
+        /// Community opinion: useful context, but never a verifiable fact.
+        case communityOpinion
+    }
+
+    /// What kind of research source this is (F20).
+    public enum SourceKind: String, Codable, Sendable, CaseIterable {
+        case official
+        case press
+        case community
+        case video
+        case data
+        case other
+    }
+
+    /// How much weight a source carries in a fact check (F20).
+    public enum SourceReliability: String, Codable, Sendable, CaseIterable {
+        case high
+        case medium
+        case low
     }
 
     /// Manual production task category (F16).
@@ -1137,12 +1156,27 @@ extension FrameScriptDocument {
         public var id: UUID
         public var title: String
         public var url: String
+        public var kind: SourceKind
+        public var reliability: SourceReliability
+        /// Publication or consultation date. Nil means unknown.
+        public var date: Date?
         public var note: String
 
-        public init(id: UUID = UUID(), title: String, url: String = "", note: String = "") {
+        public init(
+            id: UUID = UUID(),
+            title: String,
+            url: String = "",
+            kind: SourceKind = .other,
+            reliability: SourceReliability = .medium,
+            date: Date? = nil,
+            note: String = ""
+        ) {
             self.id = id
             self.title = title
             self.url = url
+            self.kind = kind
+            self.reliability = reliability
+            self.date = date
             self.note = note
         }
 
@@ -1150,6 +1184,9 @@ extension FrameScriptDocument {
             case id
             case title
             case url
+            case kind
+            case reliability
+            case date
             case note
         }
 
@@ -1158,6 +1195,9 @@ extension FrameScriptDocument {
             id = try container.decode(UUID.self, forKey: .id)
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
             url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+            kind = try container.decodeIfPresent(SourceKind.self, forKey: .kind) ?? .other
+            reliability = try container.decodeIfPresent(SourceReliability.self, forKey: .reliability) ?? .medium
+            date = try container.decodeIfPresent(Date.self, forKey: .date)
             note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
         }
     }
@@ -1168,19 +1208,39 @@ extension FrameScriptDocument {
         public var status: ClaimStatus
         public var sourceIDs: [UUID]
         public var sceneIDs: [UUID]
+        /// Scene that owns the optional anchored fragment.
+        public var anchorSceneID: UUID?
+        /// Optional fragment of the scene script that states the claim.
+        public var anchor: TextAnchor?
+        /// True while the creator still has to fact-check this claim.
+        public var needsVerification: Bool
+        /// True when the claim is first-hand experience, not a checkable fact.
+        public var personalExperience: Bool
+        /// How the claim was resolved, or why it stays as it is.
+        public var resolutionNote: String
 
         public init(
             id: UUID = UUID(),
             text: String,
             status: ClaimStatus = .probable,
             sourceIDs: [UUID] = [],
-            sceneIDs: [UUID] = []
+            sceneIDs: [UUID] = [],
+            anchorSceneID: UUID? = nil,
+            anchor: TextAnchor? = nil,
+            needsVerification: Bool = false,
+            personalExperience: Bool = false,
+            resolutionNote: String = ""
         ) {
             self.id = id
             self.text = text
             self.status = status
             self.sourceIDs = sourceIDs
             self.sceneIDs = sceneIDs
+            self.anchorSceneID = anchorSceneID
+            self.anchor = anchor
+            self.needsVerification = needsVerification
+            self.personalExperience = personalExperience
+            self.resolutionNote = resolutionNote
         }
 
         enum CodingKeys: String, CodingKey {
@@ -1189,6 +1249,11 @@ extension FrameScriptDocument {
             case status
             case sourceIDs
             case sceneIDs
+            case anchorSceneID
+            case anchor
+            case needsVerification
+            case personalExperience
+            case resolutionNote
         }
 
         public init(from decoder: Decoder) throws {
@@ -1198,6 +1263,11 @@ extension FrameScriptDocument {
             status = decodedEnumValue(container, .status, default: .probable)
             sourceIDs = try container.decodeIfPresent([UUID].self, forKey: .sourceIDs) ?? []
             sceneIDs = try container.decodeIfPresent([UUID].self, forKey: .sceneIDs) ?? []
+            anchorSceneID = try container.decodeIfPresent(UUID.self, forKey: .anchorSceneID)
+            anchor = try container.decodeIfPresent(TextAnchor.self, forKey: .anchor)
+            needsVerification = try container.decodeIfPresent(Bool.self, forKey: .needsVerification) ?? false
+            personalExperience = try container.decodeIfPresent(Bool.self, forKey: .personalExperience) ?? false
+            resolutionNote = try container.decodeIfPresent(String.self, forKey: .resolutionNote) ?? ""
         }
     }
 
@@ -1206,12 +1276,21 @@ extension FrameScriptDocument {
         public var title: String
         public var header: [String]
         public var rows: [[String]]
+        /// Scene where the table is shown on screen, if it is linked to one.
+        public var sceneID: UUID?
 
-        public init(id: UUID = UUID(), title: String, header: [String] = [], rows: [[String]] = []) {
+        public init(
+            id: UUID = UUID(),
+            title: String,
+            header: [String] = [],
+            rows: [[String]] = [],
+            sceneID: UUID? = nil
+        ) {
             self.id = id
             self.title = title
             self.header = header
             self.rows = rows
+            self.sceneID = sceneID
         }
 
         enum CodingKeys: String, CodingKey {
@@ -1219,6 +1298,7 @@ extension FrameScriptDocument {
             case title
             case header
             case rows
+            case sceneID
         }
 
         public init(from decoder: Decoder) throws {
@@ -1227,6 +1307,7 @@ extension FrameScriptDocument {
             title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
             header = try container.decodeIfPresent([String].self, forKey: .header) ?? []
             rows = try container.decodeIfPresent([[String]].self, forKey: .rows) ?? []
+            sceneID = try container.decodeIfPresent(UUID.self, forKey: .sceneID)
         }
     }
 

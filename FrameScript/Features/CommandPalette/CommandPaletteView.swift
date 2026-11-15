@@ -258,6 +258,8 @@ struct CommandPaletteView: View {
             appState.isAssetsPresented = true
         case .publishingPack:
             appState.showPublishingPanel()
+        case .researchPanel:
+            appState.openResearchPanel()
         case .commandPalette:
             break
         case .toggleContentsPanel:

@@ -120,6 +120,12 @@ struct TopToolbar: View {
                 ProductionToolbarButton()
 
                 toolbarButton(
+                    systemName: "books.vertical",
+                    help: appState.localized("research.toolbarHelp"),
+                    action: { appState.openResearchPanel() }
+                )
+
+                toolbarButton(
                     systemName: "photo.stack",
                     help: appState.localized("menu.assets"),
                     action: { appState.isAssetsPresented = true }

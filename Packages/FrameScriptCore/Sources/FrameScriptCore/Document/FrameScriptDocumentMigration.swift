@@ -149,6 +149,15 @@ extension FrameScriptDocument {
         for index in project.claims.indices {
             project.claims[index].sourceIDs = Self.uniqued(project.claims[index].sourceIDs.filter(sourceIDs.contains))
             project.claims[index].sceneIDs = Self.uniqued(project.claims[index].sceneIDs.filter(sceneIDs.contains))
+            if let anchorSceneID = project.claims[index].anchorSceneID, !sceneIDs.contains(anchorSceneID) {
+                project.claims[index].anchorSceneID = nil
+                project.claims[index].anchor = nil
+            }
+        }
+        for index in project.comparisonTables.indices {
+            if let sceneID = project.comparisonTables[index].sceneID, !sceneIDs.contains(sceneID) {
+                project.comparisonTables[index].sceneID = nil
+            }
         }
         for index in project.clips.indices {
             project.clips[index].sourceSceneIDs = Self.uniqued(project.clips[index].sourceSceneIDs.filter(sceneIDs.contains))
@@ -206,6 +215,14 @@ extension FrameScriptDocument {
             if changed {
                 project.scenes[sceneIndex] = scene
             }
+        }
+        // A claim anchor lives in the scene named by `anchorSceneID`. A claim
+        // that names no scene has no text to validate it against.
+        let scenesByID = Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0) })
+        for claim in project.claims {
+            guard let anchorSceneID = claim.anchorSceneID,
+                  let scene = scenesByID[anchorSceneID] else { continue }
+            try validate(claim.anchor, textLength: (scene.scriptText as NSString).length)
         }
     }
 

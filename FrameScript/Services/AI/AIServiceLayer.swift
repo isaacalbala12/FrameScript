@@ -184,6 +184,7 @@ enum AITask: String, Codable, Hashable {
     case rehook
     case clipAdaptation
     case titlesSEO
+    case claimCheck
 }
 
 @MainActor
@@ -796,7 +797,6 @@ struct PromptBuilder {
         case .rehook:
             """
             You write re-engagement bridges for a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, tuteo, short sentences, dry humour. Keep the script's language.
-
             Return exactly one JSON object:
             {"bridges":[{"text":"…","anchor":"…"}]}
 
@@ -829,6 +829,22 @@ struct PromptBuilder {
             """
         case .titlesSEO:
             PublishingTitlePrompt.systemPrompt(languageName: languageName)
+        case .claimCheck:
+            """
+            You review a YouTube script for verifiable factual claims before recording. \(languageInstruction)
+            Return exactly one JSON object:
+            {"claims":[{"text":"…","status":"probable","reason":"…"}]}
+
+            Rules:
+            - A claim is a specific statement of fact a viewer could check: numbers, dates, prices, records, names, specifications, events or attributed statements.
+            - Do not list opinions, jokes, promises, calls to action, personal experience, or rhetorical questions.
+            - "status" must be exactly one of probable, rumor or communityOpinion. Never write confirmed: only the creator can confirm a claim.
+            - "text" copies the claim from the scene as closely as possible: one short sentence, no Markdown, no quotes, no prefixes.
+            - "reason" says in one short sentence what should be checked, or which kind of source would settle it.
+            - Return at most 8 claims, in the order they appear. If there is nothing checkable, return {"claims":[]}.
+            - Do not invent facts, sources, numbers or links.
+            Respond only in \(languageName).
+            """
         }
     }
 

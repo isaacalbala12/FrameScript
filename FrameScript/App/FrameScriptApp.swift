@@ -247,6 +247,9 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("command.toggleAIReview"), isOn: aiReviewPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleAIReview))
                 .disabled(!commands.canToggleAIReview)
+            Button(appState.localized("research.menu")) { appState.openResearchPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .researchPanel))
+                .disabled(!commands.canShowResearch)
             Toggle(appState.localized("command.toggleFocus"), isOn: $appState.isFocusModeEnabled)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleFocusMode))
                 .disabled(!commands.canToggleFocusMode)

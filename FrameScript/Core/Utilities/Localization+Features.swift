@@ -32,6 +32,7 @@ extension L10n {
         timelineStrings,
         avScriptStrings,
         assetsStrings,
-        publishingStrings
+        publishingStrings,
+        researchStrings
     ]
 }

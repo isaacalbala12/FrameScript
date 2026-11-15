@@ -242,6 +242,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case nextScene, previousScene
     case scriptMode, visualsMode, editingMode, clipsMode, timelineMode, avScriptMode
     case commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
+    case researchPanel
     case createClip
     case timelineZoomIn, timelineZoomOut
     case assets
@@ -367,6 +368,7 @@ enum ShortcutRegistry {
         .init(command: .assets, localizationKey: "menu.assets", category: .workspace, factoryDefault: .init("a", modifiers: [.command, .option]), order: 17),
         // Publishing arrived after the production checklist claimed ⇧⌘P.
         .init(command: .publishingPack, localizationKey: "publishing.menu.open", category: .workspace, factoryDefault: .init("u", modifiers: [.command, .shift]), order: 18),
+        .init(command: .researchPanel, localizationKey: "research.menu", category: .workspace, factoryDefault: .init("j", modifiers: [.command, .shift]), order: 19),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),

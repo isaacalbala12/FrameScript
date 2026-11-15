@@ -50,6 +50,7 @@ enum ApplicationMenuSpec {
         .init(command: .toggleContentsPanel, menu: .view),
         .init(command: .toggleAIReview, menu: .view),
         .init(command: .toggleFocusMode, menu: .view),
+        .init(command: .researchPanel, menu: .view),
         .init(command: .assets, menu: .view),
         .init(command: .commandPalette, menu: .view),
         .init(command: .showShortcuts, menu: .view),

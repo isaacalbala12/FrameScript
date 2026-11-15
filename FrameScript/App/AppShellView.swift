@@ -847,6 +847,17 @@ private struct ExportSheetView: View {
                 }
                 .toggleStyle(.checkbox)
 
+                if warningCount > 0 {
+                    Label(
+                        String(format: appState.localized("research.exportSheet.warning"), warningCount),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 260, alignment: .leading)
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text(appState.localized("export.preview"))
                         .font(.system(size: 12, weight: .medium))
@@ -912,6 +923,10 @@ private struct ExportSheetView: View {
 
     private var previewText: String {
         appState.dependencies.exportService.render(project: appState.project, format: format, preferences: effectivePreferences, language: appState.currentLanguage)
+    }
+
+    private var warningCount: Int {
+        appState.researchExportWarnings().count
     }
 
     private func saveFile() {

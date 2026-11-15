@@ -108,6 +108,7 @@ final class EscaletaProjectMapperTests: XCTestCase {
 
         XCTAssertEqual(project.checklistTasks.filter { $0.kind == .research }.count, 6)
         XCTAssertTrue(project.claims.allSatisfy { $0.status == .probable })
+        XCTAssertTrue(project.claims.allSatisfy { $0.needsVerification })
         XCTAssertEqual(project.sources.count, mapping.stats.sourceCount)
         XCTAssertGreaterThan(project.sources.count, 0)
     }

@@ -210,6 +210,7 @@ struct ScriptEditorView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.tertiaryText)
                 }
+                ResearchSceneBadge(sceneID: scene.id)
             }
             .font(.system(size: 13))
             .foregroundStyle(theme.secondaryText)

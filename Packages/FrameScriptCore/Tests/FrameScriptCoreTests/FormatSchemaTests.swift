@@ -81,6 +81,8 @@ struct FormatSchemaTests {
             "TakeRating": FrameScriptDocument.TakeRating.allCases.map(\.rawValue),
             "AssetKind": FrameScriptDocument.AssetKind.allCases.map(\.rawValue),
             "ClaimStatus": FrameScriptDocument.ClaimStatus.allCases.map(\.rawValue),
+            "SourceKind": FrameScriptDocument.SourceKind.allCases.map(\.rawValue),
+            "SourceReliability": FrameScriptDocument.SourceReliability.allCases.map(\.rawValue),
             "ChecklistTaskKind": FrameScriptDocument.ChecklistTaskKind.allCases.map(\.rawValue),
             "ShortClipFormat": FrameScriptDocument.ShortClipFormat.allCases.map(\.rawValue),
             "ShortClipStatus": FrameScriptDocument.ShortClipStatus.allCases.map(\.rawValue)

@@ -317,7 +317,8 @@ the user decides whether to re-translate.
   `TextSegment.sceneID` → the containing `Scene.id`; `AIComment.sceneID/segmentID`;
   `BRollItem.linkedSegmentID`; `EditingItem.linkedSegmentID`;
   `ProjectAsset.linkedSceneIDs/linkedBRollItemIDs/linkedTakeIDs`;
-  `Claim.sourceIDs/sceneIDs`; `ChapterOverride.sceneID`; `ChecklistTask.sceneID`;
+  `Claim.sourceIDs/sceneIDs/anchorSceneID`; `ComparisonTable.sceneID`;
+  `ChapterOverride.sceneID`; `ChecklistTask.sceneID`;
   `ThumbnailVariant.assetID`; `ShortClip.sourceSceneIDs/anchorSceneID`;
   `PublishedVideoComparison.SceneResult.sceneID`.
 - Migration cleans dangling references from v1–v3 files. A v4 file is trusted:
@@ -634,6 +635,9 @@ payload decompresses to the minimal document above.
         "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
         "title": "Lap record",
         "url": "https://example.com/lap-record",
+        "kind": "official",
+        "reliability": "high",
+        "date": "2026-05-12T00:00:00.000000Z",
         "note": "Official timing."
       }
     ],
@@ -643,7 +647,18 @@ payload decompresses to the minimal document above.
         "text": "The record is 1:42.3.",
         "status": "confirmed",
         "sourceIDs": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
-        "sceneIDs": ["22222222-2222-4222-8222-222222222222"]
+        "sceneIDs": ["22222222-2222-4222-8222-222222222222"],
+        "anchorSceneID": "22222222-2222-4222-8222-222222222222",
+        "anchor": {
+          "startUTF16": 0,
+          "lengthUTF16": 5,
+          "selectedText": "alpha",
+          "prefixContext": "",
+          "suffixContext": " target omega"
+        },
+        "needsVerification": true,
+        "personalExperience": false,
+        "resolutionNote": "Checked against the timing sheet."
       }
     ],
     "comparisonTables": [
@@ -651,7 +666,8 @@ payload decompresses to the minimal document above.
         "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         "title": "Tyres",
         "header": ["Compound", "Lap time"],
-        "rows": [["Soft", "1:42.3"], ["Hard", "1:43.9"]]
+        "rows": [["Soft", "1:42.3"], ["Hard", "1:43.9"]],
+        "sceneID": "22222222-2222-4222-8222-222222222222"
       }
     ],
     "glossary": [
