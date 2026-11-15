@@ -321,10 +321,11 @@ enum ShortcutRegistry {
         // Raw value kept as `import` so an existing custom binding survives.
         // File > Import was the same panel as File > Open, so the command now
         // opens the built-in demo project instead of a duplicate Open item.
-        .init(command: .import, localizationKey: "menu.openDemo", category: .project, factoryDefault: .init("i", modifiers: [.command, .shift]), order: 5),
+        // ⇧⌘I used to mean "Import"; loading the demo replaces the open project,
+        // so it must not inherit that muscle-memory key.
+        .init(command: .import, localizationKey: "menu.openDemo", category: .project, factoryDefault: .init("d", modifiers: [.command, .option, .shift]), order: 5),
         .init(command: .export, localizationKey: "project.export", category: .project, factoryDefault: .init("e", modifiers: [.command]), order: 6),
-        // ⇧⌘I is already the project-import shortcut, so the escaleta keeps a
-        // separate, conflict-free binding.
+        // The escaleta import keeps its own conflict-free binding.
         .init(command: .importEscaleta, localizationKey: "menu.importEscaleta", category: .project, factoryDefault: .init("m", modifiers: [.command, .shift]), order: 7),
         .init(command: .exportEscaleta, localizationKey: "menu.exportEscaleta", category: .project, factoryDefault: .init("e", modifiers: [.command, .shift]), order: 8),
         .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 9),

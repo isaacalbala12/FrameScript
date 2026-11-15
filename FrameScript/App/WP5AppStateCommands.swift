@@ -36,7 +36,7 @@ protocol AppStateCommandSeam {
     func revertProjectToSaved() -> Bool
 }
 
-// MARK: - Default implementations (pre-WP1 behaviour)
+// MARK: - Implementation (delegates to the WP1 AppState commands)
 
 @MainActor
 extension AppState: AppStateCommandSeam {
@@ -45,43 +45,22 @@ extension AppState: AppStateCommandSeam {
         preferences: ExportPreferences,
         to url: URL
     ) -> Bool {
-        // Today's `saveExport` reports failures through `ErrorCenter` only.
-        // Keeping the sheet open on failure needs WP1's `Bool` return.
         saveExport(format: format, preferences: preferences, to: url)
-        return true
     }
 
     @discardableResult
     func selectAdjacentScene(_ direction: SceneNavigationDirection) -> Bool {
-        let scenes = project.scenes.sortedByOrder
-        guard !scenes.isEmpty else { return false }
-        let currentIndex = scenes.firstIndex { $0.id == editorState.selectedSceneID }
-        let targetIndex: Int
-        switch (direction, currentIndex) {
-        case let (.next, index?):
-            targetIndex = min(index + 1, scenes.count - 1)
-        case let (.previous, index?):
-            targetIndex = max(index - 1, 0)
-        case (.next, nil), (.previous, nil):
-            targetIndex = 0
+        let before = editorState.selectedSceneID
+        switch direction {
+        case .next: selectNextScene()
+        case .previous: selectPreviousScene()
         }
-        guard scenes[targetIndex].id != editorState.selectedSceneID else { return false }
-        selectScene(scenes[targetIndex].id)
-        return true
+        return editorState.selectedSceneID != before
     }
 
     @discardableResult
     func revertProjectToSaved() -> Bool {
-        guard hasOpenProject, projectStore.currentFileURL != nil else { return false }
-        if projectStore.hasUnsavedFileChanges {
-            let alert = NSAlert()
-            alert.messageText = localized("dialog.revertToSaved.title")
-            alert.informativeText = localized("dialog.revertToSaved.message")
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: localized("dialog.revertToSaved.revert"))
-            alert.addButton(withTitle: localized("project.unsaved.cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        }
-        return reloadProjectFromDisk()
+        guard hasOpenProject, projectStore.currentFileURL != nil, !recording.hasActiveTake else { return false }
+        return revertToSaved()
     }
 }

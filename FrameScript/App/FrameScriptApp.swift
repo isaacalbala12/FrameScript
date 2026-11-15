@@ -81,8 +81,8 @@ struct FrameScriptProductionApp: App {
             ThemedSceneRoot {
                 SettingsRootView()
             }
-                .environment(appState)
                 .errorAlert()
+                .environment(appState)
         }
     }
 
