@@ -360,7 +360,7 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
         switch request.task {
         case .analyze:
             return capability.responseFormat
-        case .hook, .rehook:
+        case .hook, .rehook, .titlesSEO:
             return capability == .promptOnly ? nil : .jsonObject
         default:
             return nil

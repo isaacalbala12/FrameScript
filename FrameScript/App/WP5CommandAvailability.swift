@@ -81,6 +81,7 @@ struct CommandAvailability: Equatable {
     /// The production checklist is derived from the open document, so it needs
     /// a project but no selected scene.
     var canShowProductionChecklist: Bool { hasOpenProject }
+    var canShowPublishing: Bool { hasOpenProject }
 
     /// Recording can always be stopped, even when the project vanished while
     /// OBS was writing the take; starting one needs a scene.
@@ -146,6 +147,8 @@ struct CommandAvailability: Equatable {
             canToggleRecordingPanel
         case .productionChecklist:
             canShowProductionChecklist
+        case .publishingPack:
+            canShowPublishing
         case .analyzeCurrentScene, .generateHook, .suggestRehooks:
             canAnalyzeScene
         case .openSettings:

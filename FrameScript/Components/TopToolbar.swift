@@ -6,7 +6,18 @@ struct TopToolbar: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        HStack(spacing: 14) {
+        GeometryReader { proxy in
+            content(compact: proxy.size.width < 1_080)
+        }
+        .frame(height: 58)
+        .background(theme.background)
+        .task {
+            await appState.recording.connectAutomaticallyIfNeeded()
+        }
+    }
+
+    private func content(compact: Bool) -> some View {
+        HStack(spacing: compact ? 10 : 14) {
             Menu {
                 Button(appState.localized("project.rename")) { appState.renameProject() }
                 projectMenuButton(appState.localized("project.save"), shortcut: .save) { appState.saveProject() }
@@ -35,7 +46,12 @@ struct TopToolbar: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
-            .frame(minWidth: 160, idealWidth: 260, maxWidth: 360, alignment: .leading)
+            .frame(
+                minWidth: compact ? 140 : 160,
+                idealWidth: compact ? 170 : 260,
+                maxWidth: 360,
+                alignment: .leading
+            )
             .layoutPriority(1)
 
             Spacer(minLength: 8)
@@ -82,11 +98,17 @@ struct TopToolbar: View {
             .accessibilityLabel("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
-            HStack(spacing: 5) {
+            HStack(spacing: compact ? 3 : 5) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
                     help: appState.localized("project.export"),
                     action: appState.exportProject
+                )
+
+                toolbarButton(
+                    systemName: "megaphone",
+                    help: appState.localized("publishing.toolbar.help"),
+                    action: appState.showPublishingPanel
                 )
 
                 toolbarButton(
@@ -128,21 +150,23 @@ struct TopToolbar: View {
                     HStack(spacing: 5) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 13, weight: .medium))
-                        Text(appState.shortcutDisplay(for: .commandPalette))
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .foregroundStyle(theme.tertiaryText)
-                            .fixedSize()
-                            .layoutPriority(2)
-                            .padding(.horizontal, 4)
-                            .frame(height: 17)
-                            .background {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(theme.hover)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                            .stroke(theme.divider, lineWidth: 1)
-                                    }
-                            }
+                        if !compact {
+                            Text(appState.shortcutDisplay(for: .commandPalette))
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(theme.tertiaryText)
+                                .fixedSize()
+                                .layoutPriority(2)
+                                .padding(.horizontal, 4)
+                                .frame(height: 17)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .fill(theme.hover)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                                .stroke(theme.divider, lineWidth: 1)
+                                        }
+                                }
+                        }
                     }
                     .frame(height: 30)
                 }
@@ -160,10 +184,6 @@ struct TopToolbar: View {
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
-        .background(theme.background)
-        .task {
-            await appState.recording.connectAutomaticallyIfNeeded()
-        }
     }
 
     private var recordingStatusColor: Color {

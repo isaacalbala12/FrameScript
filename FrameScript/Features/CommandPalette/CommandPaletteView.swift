@@ -256,6 +256,8 @@ struct CommandPaletteView: View {
             appState.exportAVScript(format: .markdown)
         case .assets:
             appState.isAssetsPresented = true
+        case .publishingPack:
+            appState.showPublishingPanel()
         case .commandPalette:
             break
         case .toggleContentsPanel:

@@ -63,6 +63,7 @@ struct FrameScriptProductionApp: App {
             .environment(escaletaImport)
             .backupsSheet(appState)
             .productionSheet(appState)
+            .publishingSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
                 appDelegate.attach(appState)
@@ -318,6 +319,10 @@ struct FrameScriptProductionApp: App {
                 .disabled(!commands.canGenerateForScene)
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
                 .disabled(!commands.canGenerateForScene)
+            Divider()
+            Button(appState.localized("publishing.menu.open")) { appState.showPublishingPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .publishingPack))
+                .disabled(!commands.canShowPublishing)
             Divider()
             // A take must always be stoppable, even when the project was closed
             // while OBS was still writing (lifecycle P1-1).
