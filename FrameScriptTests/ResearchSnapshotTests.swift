@@ -8,7 +8,8 @@ import XCTest
 /// touches the real app defaults, recent projects or Keychain.
 @MainActor
 final class ResearchSnapshotTests: XCTestCase {
-    private var suites: [String] = []
+    /// Isolated suites in the process temporary directory; no real plist.
+    private var isolatedSuites: [TestDefaults] = []
     private let branchFolder = "w3-i-research"
 
     override func setUp() async throws {
@@ -17,15 +18,10 @@ final class ResearchSnapshotTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        for suite in suites {
-            let defaults = UserDefaults(suiteName: suite)
-            defaults?.removePersistentDomain(forName: suite)
-            defaults?.synchronize()
-            let plist = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: plist)
+        for suite in isolatedSuites {
+            suite.cleanup()
         }
-        suites.removeAll()
+        isolatedSuites.removeAll()
         try await super.tearDown()
     }
 
@@ -304,12 +300,9 @@ final class ResearchSnapshotTests: XCTestCase {
     // MARK: - Fixture
 
     private func makeAppState() -> AppState {
-        let suite = "FrameScript.ResearchSnapshotTests.\(UUID().uuidString)"
-        suites.append(suite)
-        guard let defaults = UserDefaults(suiteName: suite) else {
-            fatalError("Could not create an isolated defaults suite")
-        }
-        defaults.removePersistentDomain(forName: suite)
+        let isolated = TestDefaults.make()
+        isolatedSuites.append(isolated)
+        let defaults = isolated.defaults
 
         let scene1 = Scene(
             order: 0,

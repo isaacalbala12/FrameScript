@@ -5,7 +5,8 @@ import XCTest
 
 @MainActor
 final class ResearchFeatureTests: XCTestCase {
-    private var suites: [String] = []
+    /// Isolated suites in the process temporary directory; no real plist.
+    private var isolatedSuites: [TestDefaults] = []
 
     override func setUp() async throws {
         try await super.setUp()
@@ -13,15 +14,10 @@ final class ResearchFeatureTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        for suite in suites {
-            let defaults = UserDefaults(suiteName: suite)
-            defaults?.removePersistentDomain(forName: suite)
-            defaults?.synchronize()
-            let plist = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/Preferences/\(suite).plist")
-            try? FileManager.default.removeItem(at: plist)
+        for suite in isolatedSuites {
+            suite.cleanup()
         }
-        suites.removeAll()
+        isolatedSuites.removeAll()
         resetPresentation()
         try await super.tearDown()
     }
@@ -358,12 +354,9 @@ final class ResearchFeatureTests: XCTestCase {
         provider: (any LLMProviderProtocol)? = nil,
         aiEnabled: Bool = false
     ) -> AppState {
-        let suite = "FrameScript.ResearchTests.\(UUID().uuidString)"
-        suites.append(suite)
-        guard let defaults = UserDefaults(suiteName: suite) else {
-            fatalError("Could not create an isolated defaults suite")
-        }
-        defaults.removePersistentDomain(forName: suite)
+        let isolated = TestDefaults.make()
+        isolatedSuites.append(isolated)
+        let defaults = isolated.defaults
 
         var settings = AppSettings.defaults
         settings.generalPreferences.language = .spanish
