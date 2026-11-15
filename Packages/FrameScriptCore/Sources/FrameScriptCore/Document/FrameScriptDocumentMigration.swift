@@ -217,12 +217,17 @@ extension FrameScriptDocument {
             }
         }
         // A claim anchor lives in the scene named by `anchorSceneID`. A claim
-        // that names no scene has no text to validate it against.
+        // that names no scene has no text to validate it against, so an
+        // out-of-range claim anchor is dropped like any other stale anchor
+        // instead of making the project unreadable.
         let scenesByID = Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0) })
-        for claim in project.claims {
-            guard let anchorSceneID = claim.anchorSceneID,
+        for index in project.claims.indices {
+            guard let anchorSceneID = project.claims[index].anchorSceneID,
                   let scene = scenesByID[anchorSceneID] else { continue }
-            try validate(claim.anchor, textLength: (scene.scriptText as NSString).length)
+            let textLength = (scene.scriptText as NSString).length
+            if !isValid(project.claims[index].anchor, textLength: textLength) {
+                project.claims[index].anchor = nil
+            }
         }
     }
 
