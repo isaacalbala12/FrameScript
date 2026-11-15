@@ -15,16 +15,18 @@ final class TestIsolationGuardTests: XCTestCase {
             "The app test host did not capture the standard-domain baseline at launch."
         )
         let current = TestIsolationBaseline.current()
-        let changedKeys = Set(current.appValues.keys).symmetricDifference(Set(baseline.appValues.keys))
-            + current.appValues.keys.filter { key in
-                guard let currentValue = current.appValues[key],
-                      let baselineValue = baseline.appValues[key] else { return false }
+        let currentValues = TestIsolationGuard.appValuesIgnoringLaunchMaintenance(current.appValues)
+        let baselineValues = TestIsolationGuard.appValuesIgnoringLaunchMaintenance(baseline.appValues)
+        let changedKeys = Set(currentValues.keys).symmetricDifference(Set(baselineValues.keys))
+            + currentValues.keys.filter { key in
+                guard let currentValue = currentValues[key],
+                      let baselineValue = baselineValues[key] else { return false }
                 return currentValue != baselineValue
             }
 
         XCTAssertEqual(
-            current.appValues,
-            baseline.appValues,
+            currentValues,
+            baselineValues,
             """
             The test suite wrote to the real com.drashko.FrameScript standard domain.
             Changed keys: \(Set(changedKeys).sorted().joined(separator: ", "))
@@ -34,6 +36,23 @@ final class TestIsolationGuardTests: XCTestCase {
             \(current.appDescription)
             """
         )
+    }
+
+    /// The launch-maintenance exemption must stay one key wide: the one-time
+    /// window-frame purge flag is written by the app itself from another
+    /// process, but every other key is still the test suite's responsibility.
+    func testLaunchMaintenanceExemptionIgnoresOnlyThePurgeFlag() {
+        let flag = LegacyWindowFrameKeys.purgeFlagKey
+        let values: [String: Data] = [
+            flag: Data("1".utf8),
+            "FrameScript.settings.v1": Data("settings".utf8)
+        ]
+
+        let filtered = TestIsolationGuard.appValuesIgnoringLaunchMaintenance(values)
+
+        XCTAssertNil(filtered[flag])
+        XCTAssertEqual(filtered["FrameScript.settings.v1"], Data("settings".utf8))
+        XCTAssertEqual(TestIsolationGuard.launchMaintenanceKeys, [flag])
     }
 
     func testRealSettingsLanguageProviderAndExportFolderAreUnchanged() throws {

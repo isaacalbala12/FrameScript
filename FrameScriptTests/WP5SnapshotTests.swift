@@ -60,6 +60,33 @@ final class WP5SnapshotTests: FrameScriptTestCase {
         }
     }
 
+    /// A factory-default shortcut is removable too: Remove is the only way to
+    /// free a default key without stealing it from another command. Before the
+    /// fix the button only appeared on rows that were already customized, so an
+    /// untouched settings page showed no "Quitar" at all.
+    func testShortcutSettingsShowRemoveForFactoryDefaults() {
+        let appState = makeSnapshotAppState(project: makeProject())
+        XCTAssertTrue(appState.settings.shortcutOverrides.isEmpty)
+        appState.windowState.requestedSettingsTab = .keyboardShortcuts
+        let remove = L10n.tr("shortcuts.remove", language: .spanish)
+        XCTAssertEqual(remove, "Quitar")
+
+        let result = SnapshotRenderer.render(
+            SettingsRootView(),
+            name: "settings-keyboard-shortcuts-remove-defaults",
+            suite: "WP5SnapshotTests",
+            size: SnapshotSize.standard.size,
+            appearance: .light,
+            language: .spanish,
+            appState: appState
+        )
+
+        XCTAssertTrue(
+            result.textFragments.contains { $0 == remove },
+            "an uncustomized shortcut row must offer \(remove); text was \(result.textFragments)"
+        )
+    }
+
     func testAIPanelHidesAtTheMinimumWidth() {
         let project = makeProject()
         let appState = makeSnapshotAppState(project: project)

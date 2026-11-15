@@ -226,9 +226,28 @@ extension AppState {
 
     // MARK: Targets
 
-    /// Cheap counter the toolbar observes instead of `durationLearningSignature`.
+    /// Cheap structural value the toolbar observes instead of
+    /// `durationLearningSignature` (which hashes every script text, so it must
+    /// never be read from a SwiftUI body).
+    ///
+    /// The counter alone was not enough: scene delete/duplicate, variant edits
+    /// and imported takes never bumped it, so the learned pace went stale after
+    /// structural edits (WP3 item 4). This hashes ids, take counts and variant
+    /// lengths, which is cheap but still changes for every one of those edits.
     var durationRevision: Int {
-        DurationRevisionCounter.shared.value
+        var hasher = Hasher()
+        hasher.combine(DurationRevisionCounter.shared.value)
+        hasher.combine(project.id)
+        for scene in project.scenes {
+            hasher.combine(scene.id)
+            hasher.combine(scene.takes.count)
+            for variant in scene.languageVariants {
+                hasher.combine(variant.languageCode)
+                hasher.combine(variant.text.utf16.count)
+                hasher.combine(variant.takes.count)
+            }
+        }
+        return hasher.finalize()
     }
 
     func setProjectTargetDuration(_ duration: TimeInterval?) {

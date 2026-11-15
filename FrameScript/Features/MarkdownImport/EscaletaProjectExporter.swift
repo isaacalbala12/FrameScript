@@ -271,7 +271,13 @@ enum EscaletaProjectExporter {
         if let metadata {
             for (slotIndex, references) in metadata.slots.enumerated() {
                 for reference in references
-                where reference.kind == "table" && validTables.contains(reference.index) {
+                where reference.kind == "table"
+                    && validTables.contains(reference.index)
+                    // Slots run from 0 to the text-block count; the last one is
+                    // the trailing slot, which the paragraph loop below never
+                    // reaches. Leaving those unplaced lets the trailing loop
+                    // emit them instead of dropping them (WP4 item 2).
+                    && slotIndex < parsed.count {
                     tablesBySlot[slotIndex, default: []].append(
                         tableBlock(at: reference.index, project: project, tableMetadata: tableMetadata)
                     )
@@ -767,6 +773,9 @@ enum EscaletaProjectExporter {
 
     static func clampedSeconds(_ value: Double) -> Int {
         guard value.isFinite else { return 0 }
-        return Int(min(max(value, 0), maximumSeconds))
+        // Round, never truncate: the pre-clamp code rounded, and flooring here
+        // shifted every following timestamp for projects that had fractional
+        // scene durations already.
+        return Int(min(max(value, 0), maximumSeconds).rounded())
     }
 }

@@ -17,11 +17,14 @@ public enum SpeechLanguage: String, CaseIterable, Codable, Sendable, Hashable {
     }
 
     /// Starting point used until the learner has enough personal samples.
-    /// F3 fixes ~150 WPM for Spanish; English uses the same conservative value.
+    ///
+    /// This is the single English default: `DurationEstimator` builds its
+    /// per-language table from these values, so the editor estimate, the
+    /// teleprompter and the learner can never disagree again.
     public var defaultWordsPerMinute: Double {
         switch self {
         case .spanish: 150
-        case .english: 150
+        case .english: 160
         }
     }
 }

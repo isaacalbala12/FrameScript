@@ -500,20 +500,70 @@ final class ShortcutRegistryTests: XCTestCase {
         let definition = ShortcutRegistry.definition(for: .commandPalette)
 
         XCTAssertFalse(
-            ShortcutSettingsLayout.rowState(for: definition, customizedCommands: [], recording: nil).showsReset
+            ShortcutSettingsLayout.rowState(
+                for: definition,
+                customizedCommands: [],
+                recording: nil,
+                activeBinding: definition.factoryDefault
+            ).showsReset
         )
         XCTAssertTrue(
-            ShortcutSettingsLayout.rowState(for: definition, customizedCommands: [.commandPalette], recording: nil).showsReset
+            ShortcutSettingsLayout.rowState(
+                for: definition,
+                customizedCommands: [.commandPalette],
+                recording: nil,
+                activeBinding: definition.factoryDefault
+            ).showsReset
         )
     }
 
-    func testResetActionsAreLockedWhileAnotherShortcutIsBeingCaptured() {
+    /// A factory-default shortcut must be removable: Remove is the only way to
+    /// free a default key without stealing it from another command.
+    func testShortcutSettingsRowStateShowsRemoveForAssignedDefaultBindings() {
+        let definition = ShortcutRegistry.definition(for: .save)
+        let factoryState = ShortcutSettingsLayout.rowState(
+            for: definition,
+            customizedCommands: [],
+            recording: nil,
+            activeBinding: definition.factoryDefault
+        )
+
+        XCTAssertFalse(factoryState.isCustomized)
+        XCTAssertFalse(factoryState.showsReset, "an untouched default still has nothing to reset")
+        XCTAssertTrue(factoryState.showsRemove, "a default shortcut must be removable")
+
+        // Nothing to remove once the command is explicitly unassigned.
+        XCTAssertFalse(
+            ShortcutSettingsLayout.rowState(
+                for: definition,
+                customizedCommands: [.save],
+                recording: nil,
+                activeBinding: nil
+            ).showsRemove
+        )
+    }
+
+    func testShortcutSettingsRowStateHidesRemoveWhileCapturingAKey() {
         let active = ShortcutRegistry.definition(for: .commandPalette)
+        let other = ShortcutRegistry.definition(for: .save)
+
+        let state = ShortcutSettingsLayout.rowState(
+            for: other,
+            customizedCommands: [.save],
+            recording: active.command,
+            activeBinding: other.factoryDefault
+        )
+
+        XCTAssertFalse(state.showsRemove, "Remove must not write while another row is recording a key")
+    }
+
+    func testResetActionsAreLockedWhileAnotherShortcutIsBeingCaptured() {        let active = ShortcutRegistry.definition(for: .commandPalette)
         let other = ShortcutRegistry.definition(for: .save)
         let state = ShortcutSettingsLayout.rowState(
             for: other,
             customizedCommands: [.save],
-            recording: active.command
+            recording: active.command,
+            activeBinding: other.factoryDefault
         )
 
         XCTAssertFalse(state.showsEdit)
@@ -526,10 +576,20 @@ final class ShortcutRegistryTests: XCTestCase {
         let inactive = ShortcutRegistry.definition(for: .save)
 
         XCTAssertTrue(
-            ShortcutSettingsLayout.rowState(for: active, customizedCommands: [], recording: active.command).isRecording
+            ShortcutSettingsLayout.rowState(
+                for: active,
+                customizedCommands: [],
+                recording: active.command,
+                activeBinding: active.factoryDefault
+            ).isRecording
         )
         XCTAssertFalse(
-            ShortcutSettingsLayout.rowState(for: inactive, customizedCommands: [], recording: active.command).isRecording
+            ShortcutSettingsLayout.rowState(
+                for: inactive,
+                customizedCommands: [],
+                recording: active.command,
+                activeBinding: inactive.factoryDefault
+            ).isRecording
         )
     }
 

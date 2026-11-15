@@ -63,7 +63,10 @@ public struct WPMConfiguration: Sendable, Codable, Equatable {
         smoothingFactor: Double = 0.3,
         minimumSampleDuration: TimeInterval = 5,
         minimumWordsPerMinute: Double = 60,
-        maximumWordsPerMinute: Double = 260
+        // One range for every consumer: the teleprompter
+        // (`TeleprompterSettings.Limits.wordsPerMinute`) and
+        // `DurationEstimator.learnedWordsPerMinuteRange` also accept 60…400.
+        maximumWordsPerMinute: Double = 400
     ) {
         self.defaultWordsPerMinute = defaultWordsPerMinute
         self.minimumAcceptedSamples = minimumAcceptedSamples

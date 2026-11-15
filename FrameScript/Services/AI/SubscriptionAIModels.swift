@@ -74,10 +74,14 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
     var kind: AgentCLIKind
     var providerInstanceID: String
     var modelSlug: String
-    /// The stored kind could not be decoded. The selection keeps the fallback
+    /// The stored kind could not be decoded: the selection keeps the fallback
     /// kind so the UI still renders, but every run is refused instead of
     /// silently using T3 (E27).
-    private(set) var hasUnknownKind = false
+    var hasUnknownKind: Bool { unknownKindRaw != nil }
+    /// The unrecognised raw value, kept so a settings save never rewrites it as
+    /// `"t3"`. Without it, any unrelated settings change would silently reset
+    /// the selection to T3 on the next launch (E27 again).
+    private(set) var unknownKindRaw: String?
 
     init(kind: AgentCLIKind, providerInstanceID: String = "", modelSlug: String = "") {
         self.kind = kind
@@ -99,13 +103,22 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
                 kind = decoded
             } else {
                 kind = .t3
-                hasUnknownKind = true
+                unknownKindRaw = storedKind
             }
         } else {
             kind = .t3
         }
         providerInstanceID = try container.decodeIfPresent(String.self, forKey: .providerInstanceID) ?? ""
         modelSlug = try container.decodeIfPresent(String.self, forKey: .modelSlug) ?? ""
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        // Write the unrecognised value back verbatim: encoding the fallback
+        // kind would quietly turn an unknown provider into T3.
+        try container.encode(unknownKindRaw ?? kind.rawValue, forKey: .kind)
+        try container.encode(providerInstanceID, forKey: .providerInstanceID)
+        try container.encode(modelSlug, forKey: .modelSlug)
     }
 
     var trimmedProviderInstanceID: String {
@@ -120,7 +133,9 @@ struct SubscriptionAISelection: Codable, Hashable, Sendable, Equatable {
     /// instance and model belong to the new CLI. Keeping a T3 slug on a
     /// Claude/Codex selection would run `claude --model opencode-go/...`.
     func selecting(kind newKind: AgentCLIKind) -> SubscriptionAISelection {
-        guard newKind != kind else { return self }
+        // Picking the fallback kind must still be able to clear an unknown
+        // stored provider, so the guard also looks at `hasUnknownKind`.
+        guard newKind != kind || hasUnknownKind else { return self }
         return .defaultSelection(for: newKind)
     }
 

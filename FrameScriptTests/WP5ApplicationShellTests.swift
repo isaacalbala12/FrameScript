@@ -2,8 +2,23 @@ import AppKit
 import XCTest
 @testable import FrameScript
 
-/// WP5 items 3–10: the window root type, the real application menu mirror,
-/// the single error presenter and the shell accessibility seams.
+/// WP5 items 3–10: the application menu mirror, the single error presenter and
+/// the export seam.
+///
+/// The earlier version of this file pinned most items with source-string greps.
+/// Those are gone: the shell wiring they described is exercised behaviourally by
+/// `FU4AppShellBehaviourTests` (a hosted `AppRootView`), `WP5SnapshotTests`
+/// (rendered screens and the AI-panel width rule) and the pure tests below.
+///
+/// Three SwiftUI facts genuinely cannot be observed in this test host and are
+/// therefore covered by review, not by a test:
+/// - `WindowGroup(id: "main")` is a `Scene` declaration; the stable name half
+///   (`ThemedSceneRoot`) is pinned below and the purge mechanics are covered in
+///   `WP5CommandAvailabilityTests`.
+/// - `appCommands` only exists once an `App` is running; the menu data it uses
+///   is tested through `ApplicationMenuBuilder` + `ApplicationMenuSpec`.
+/// - `@FocusState` in `WelcomeView` needs a key window, which a headless test
+///   must not create.
 final class WP5ApplicationShellTests: FrameScriptTestCase {
     // MARK: - Window identity (item 4)
 
@@ -13,14 +28,6 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertFalse(name.contains("unknown context"), name)
         XCTAssertTrue(name.contains("ThemedSceneRoot"), name)
         XCTAssertEqual(name, String(reflecting: ThemedSceneRoot<AppRootView>.self))
-    }
-
-    func testMainSceneUsesAStableWindowGroupIdentifier() throws {
-        let source = try productionSource("FrameScript/App/FrameScriptApp.swift")
-
-        XCTAssertTrue(source.contains("WindowGroup(id: \"main\")"))
-        XCTAssertFalse(source.contains("private struct ThemedSceneRoot"))
-        XCTAssertTrue(source.contains("LegacyWindowFrameKeys.purgeIfNeeded"))
     }
 
     // MARK: - Application menu (item 10)
@@ -89,24 +96,33 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertEqual(menu.items.filter(\.isEnabled).count, 0)
     }
 
-    /// The SwiftUI commands scene cannot be instanced in a test host (it needs a
-    /// running `App`), so this pins the production wiring to the mirror: every
-    /// command appears exactly once with its configured shortcut, and no raw
-    /// `.keyboardShortcut(` bypasses the registry.
-    func testProductionMenuWiresEveryCommandExactlyOnce() throws {
-        let source = try productionSource("FrameScript/App/FrameScriptApp.swift")
+    // MARK: - Settings scene composition (item 5)
 
-        XCTAssertEqual(source.components(separatedBy: ".keyboardShortcut(").count - 1, 0)
-        XCTAssertTrue(source.contains("CommandAvailability(appState: appState)"))
-        XCTAssertFalse(source.contains("!appState.hasOpenProject"))
-        for command in ShortcutCommand.allCases {
-            let needle = ".configuredKeyboardShortcut(appState.shortcutBinding(for: .\(command.rawValue)))"
-            XCTAssertEqual(
-                source.components(separatedBy: needle).count - 1,
-                1,
-                "\(command.rawValue) must be wired exactly once in the menu"
-            )
-        }
+    /// The hosted composition test lives in `FU4AppShellBehaviourTests`; this
+    /// pins the production order, which cannot be hosted without an `App`.
+    /// `.errorAlert()` reads `AppState` from the environment, so applying it
+    /// outside `.environment(appState)` traps the moment Settings opens.
+    func testSettingsSceneAppliesTheErrorAlertInsideTheAppStateEnvironment() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("FrameScript/App/FrameScriptApp.swift"),
+            encoding: .utf8
+        )
+        let settingsStart = try XCTUnwrap(source.range(of: "Settings {"))
+        let sceneEnd = try XCTUnwrap(
+            source.range(of: "\n        }", range: settingsStart.upperBound..<source.endIndex)
+        )
+        let block = String(source[settingsStart.lowerBound..<sceneEnd.upperBound])
+        let alert = try XCTUnwrap(block.range(of: ".errorAlert()"), block)
+        let environment = try XCTUnwrap(block.range(of: ".environment(appState)"), block)
+
+        XCTAssertLessThan(
+            alert.lowerBound,
+            environment.lowerBound,
+            "the Settings scene must apply .errorAlert() inside .environment(appState)"
+        )
     }
 
     // MARK: - Error presentation (item 5)
@@ -149,14 +165,6 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertFalse(ErrorAlertPresentation.shouldPresent(hasError: true, isPresenting: presenting, isKeyWindow: false))
     }
 
-    func testBothWindowsHostTheSharedErrorAlert() throws {
-        let main = try productionSource("FrameScript/App/AppShellView.swift")
-        let settings = try productionSource("FrameScript/App/FrameScriptApp.swift")
-
-        XCTAssertTrue(main.contains(".errorAlert()"))
-        XCTAssertTrue(settings.contains(".errorAlert()"))
-    }
-
     // MARK: - Accessibility announcement (item 9)
 
     func testNoticesAreAnnouncedWithHighPriority() {
@@ -166,13 +174,6 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertEqual(info[.priority] as? Int, NSAccessibilityPriorityLevel.high.rawValue)
         // Empty notices are not posted; the payload stays usable either way.
         XCTAssertEqual(AccessibilityAnnouncement.userInfo(for: "")[.announcement] as? String, "")
-    }
-
-    func testNoticeAnnouncementIsWiredToTheSharedNotice() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
-
-        XCTAssertTrue(source.contains("AccessibilityAnnouncement.post("))
-        XCTAssertTrue(source.contains("appState.errorCenter.notice"))
     }
 
     // MARK: - Palette handoff (item 8)
@@ -186,75 +187,26 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertFalse(handoff.takeExportRequest())
     }
 
-    // MARK: - Welcome and shortcut flags (item 3)
-
-    func testPaletteAndShortcutFlagsAreResetWhenTheProjectChanges() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
-
-        // The sheets live at the window root so ⌘K/⇧⌘/ work on the welcome screen.
-        XCTAssertTrue(source.contains("CommandPaletteView()"))
-        XCTAssertTrue(source.contains("ShortcutsOverlay()"))
-        XCTAssertTrue(source.contains("isCommandPalettePresented = false"))
-        XCTAssertTrue(source.contains("isShortcutsPresented = false"))
-        XCTAssertTrue(source.contains("onChange(of: appState.hasOpenProject)"))
-        // The project shell must no longer own the two sheets.
-        let shell = try XCTUnwrap(source.components(separatedBy: "struct AppShellView: View").last)
-        XCTAssertFalse(shell.contains(".sheet(isPresented: $windowState.isCommandPalettePresented"))
-        XCTAssertFalse(shell.contains(".sheet(isPresented: $windowState.isShortcutsPresented"))
-    }
-
     // MARK: - App-level windows (item 6)
 
-    func testBackupsAndOBSSettingsAreReachableWithoutAProject() throws {
-        let source = try productionSource("FrameScript/App/FrameScriptApp.swift")
+    func testBackupsAndOBSSettingsAreReachableWithoutAProject() {
         let availability = CommandAvailability()
 
+        // Both are app-level windows: no project, no recording, still enabled.
         XCTAssertTrue(availability.canShowBackups)
         XCTAssertTrue(availability.canOpenOBSSettings)
-        XCTAssertTrue(source.contains("appState.showBackupsWindow()"))
-        XCTAssertTrue(source.contains("appState.recording.isSettingsPresented = true"))
-        // The OBS sheet moved to the window root so it also works on the welcome screen.
-        let shell = try productionSource("FrameScript/App/AppShellView.swift")
-        XCTAssertTrue(shell.contains("OBSSettingsSheet()"))
-    }
 
-    // MARK: - Shell accessibility (item 9)
-
-    func testShellHonoursReduceMotionAndHidesTheAIPanelWhenNarrow() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
-
-        XCTAssertTrue(source.contains("accessibilityReduceMotion"))
-        XCTAssertTrue(source.contains("reduceMotion ? nil :"))
-        XCTAssertTrue(source.contains("aiPanelMinimumWindowWidth"))
-        XCTAssertTrue(source.contains("windowWidth >= Self.aiPanelMinimumWindowWidth"))
-    }
-
-    func testWelcomeStartsWithAKeyboardFocusTarget() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
-
-        XCTAssertTrue(source.contains("focusedWelcomeAction = .blankProject"))
-        XCTAssertTrue(source.contains(".focused($focusedAction, equals: kind)"))
-        XCTAssertTrue(source.contains("welcome.dropProject"))
-    }
-
-    func testEmptyProjectAddSceneUsesAButtonStyle() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
-        let emptyState = try XCTUnwrap(source.components(separatedBy: "struct EmptyProjectView").last)
-
-        XCTAssertTrue(emptyState.contains(".buttonStyle(.borderedProminent)"))
+        var recording = availability
+        recording.hasActiveTake = true
+        XCTAssertFalse(recording.canShowBackups, "restoring a backup replaces the project")
+        XCTAssertTrue(recording.canOpenOBSSettings, "OBS configuration never touches the project")
     }
 
     // MARK: - Export sheet (item 7)
 
     @MainActor
     func testExportSeamWritesTheFileAndReportsSuccess() throws {
-        let scene = Scene(order: 0, sectionType: .hook, title: "Gancho", scriptText: "Texto del gancho")
-        var project = FrameProject(title: "Proyecto", scenes: [scene])
-        project.targetDuration = 60
-        let store = ProjectStore(project: project)
-        store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
-        let appState = makeAppState(store: store)
-        appState.editorState.selectedSceneID = scene.id
+        let appState = try makeExportAppState()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("WP5Export-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -273,15 +225,39 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertTrue(contents.contains("Texto del gancho"))
     }
 
-    func testExportSheetKeepsTheChosenFormatWhenTheWriteSucceeds() throws {
-        let source = try productionSource("FrameScript/App/AppShellView.swift")
+    /// The export sheet only dismisses when the write succeeds. A failed write
+    /// must report `false` and present the export error, so the sheet (and the
+    /// chosen format) stays open instead of silently losing the export.
+    @MainActor
+    func testExportSeamReportsFailureSoTheSheetStaysOpen() throws {
+        let appState = try makeExportAppState()
+        // `/dev/null` is a file, so it can never be the parent of an export.
+        let url = URL(fileURLWithPath: "/dev/null/FrameScriptExport-\(UUID().uuidString).txt")
 
-        XCTAssertTrue(source.contains("saveExportReportingStatus("))
-        XCTAssertTrue(source.contains("exportPreferences.defaultFormat = format"))
-        XCTAssertTrue(source.contains("guard appState.saveExportReportingStatus"))
+        let wrote = appState.saveExportReportingStatus(
+            format: .plainText,
+            preferences: AppSettings.defaults.exportPreferences,
+            to: url
+        )
+
+        XCTAssertFalse(wrote, "a failed write must keep the sheet open")
+        XCTAssertEqual(appState.errorCenter.presentedError?.kind, .export)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
     // MARK: - Helpers
+
+    @MainActor
+    private func makeExportAppState() throws -> AppState {
+        let scene = Scene(order: 0, sectionType: .hook, title: "Gancho", scriptText: "Texto del gancho")
+        var project = FrameProject(title: "Proyecto", scenes: [scene])
+        project.targetDuration = 60
+        let store = ProjectStore(project: project)
+        store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
+        let appState = makeAppState(store: store)
+        appState.editorState.selectedSceneID = scene.id
+        return appState
+    }
 
     @MainActor
     private func makeAppState(store: ProjectStore) -> AppState {
@@ -294,11 +270,5 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
             settingsStore: SettingsStore(settings: settings, userDefaults: defaults, key: "settings"),
             aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults)
         )
-    }
-
-    private func productionSource(_ path: String) throws -> String {        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        return try String(contentsOf: root.appendingPathComponent(path))
     }
 }

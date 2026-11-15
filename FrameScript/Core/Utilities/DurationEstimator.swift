@@ -30,9 +30,13 @@ struct DurationConfiguration: Equatable, Sendable {
 enum DurationEstimator {
     /// Built-in reading speeds used until the user or the project says
     /// otherwise.
+    ///
+    /// Spanish and English come from `SpeechLanguage.defaultWordsPerMinute`,
+    /// the learner's single source of truth, so the editor estimate and the
+    /// teleprompter cannot drift apart. Russian has no speech language.
     static let defaultWordsPerMinuteByLanguage: [String: Int] = [
-        "es": 150,
-        "en": 160,
+        "es": Int(SpeechLanguage.spanish.defaultWordsPerMinute),
+        "en": Int(SpeechLanguage.english.defaultWordsPerMinute),
         "ru": 140
     ]
 

@@ -1,5 +1,20 @@
 import XCTest
 
+/// UI coverage for the recent-projects list.
+///
+/// The click/context-menu/Delete-key cases drive the real app through a
+/// temporary folder passed with `--framescript-ui-test-recent-path`, so nothing
+/// touches the user's container. They never call `activate()` on another app.
+///
+/// The old "externally deleted file, then reactivate the app" case is gone on
+/// purpose: WP1 removed the `didBecomeActiveNotification` observer because it
+/// re-resolved every bookmark on the main actor. `RecentProjectStoreTests`
+/// covers the replacement path (`validateEntriesNow()` from the project
+/// browser); this file keeps the browser-return case
+/// (`testExternalDeletionIsRemovedWhenTheBrowserReturnsWithoutGenericOpenError`).
+/// These UI tests were not run in the fix-up environment, which cannot take the
+/// foreground; they are excluded from the gate with
+/// `-skip-testing:FrameScriptUITests`.
 @MainActor
 final class RecentProjectsUITests: XCTestCase {
     nonisolated(unsafe) private var projectDirectory: URL!
@@ -88,9 +103,10 @@ final class RecentProjectsUITests: XCTestCase {
 
         // Re-enter the project browser the way a user would. The demo opens
         // without unsaved changes, so Back to Project List needs no
-        // confirmation. The browser runs its recents validation on appear, so
-        // no activation of Finder or the app is needed (which would foreground
-        // other apps on this Mac).
+        // confirmation. The browser runs its recents validation on appear; the
+        // old app-reactivation path no longer exists (WP1 removed the
+        // didBecomeActive observer), so no app or Finder activation is needed —
+        // which would foreground other apps on this Mac.
         app.buttons["welcome-open-demo"].click()
         app.menuBars.menuBarItems["File"].click()
         app.menuItems["Back to Project List"].click()

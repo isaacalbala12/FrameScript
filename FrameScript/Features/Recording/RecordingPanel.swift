@@ -1,5 +1,21 @@
 import SwiftUI
 
+/// Which issue the recording panel reports when more than one source has one.
+///
+/// The controller's issue (`lastIssue`) is the newest fact, so it wins over the
+/// panel-local file problem and over the connection state. The old order
+/// (`fileIssue ?? lastIssue ?? connectionIssue`) let a stale "file unavailable"
+/// hide every later OBS error until the scene changed.
+enum RecordingPanelIssue {
+    static func resolved(
+        lastIssue: RecordingIssue?,
+        fileIssue: RecordingIssue?,
+        connectionIssue: RecordingIssue?
+    ) -> RecordingIssue? {
+        lastIssue ?? fileIssue ?? connectionIssue
+    }
+}
+
 struct RecordingPanel: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
@@ -39,6 +55,13 @@ struct RecordingPanel: View {
         .frame(width: 330)
         .background(theme.panelBackground)
         .onChange(of: appState.selectedScene?.id) { _, _ in
+            fileIssue = nil
+        }
+        // A connection change means OBS just spoke: its newer issue wins over a
+        // file problem the panel reported earlier (for example when recording
+        // simply disconnected). Without this, a stale "file unavailable" could
+        // hide every later OBS error for the rest of the session.
+        .onChange(of: recording.connectionState) { _, _ in
             fileIssue = nil
         }
         .sheet(isPresented: $recording.isManualEntryPresented) {
@@ -151,7 +174,11 @@ struct RecordingPanel: View {
                 .foregroundStyle(theme.warning)
             }
 
-            if let issue = fileIssue ?? recording.lastIssue ?? recording.connectionIssue,
+            if let issue = RecordingPanelIssue.resolved(
+                lastIssue: recording.lastIssue,
+                fileIssue: fileIssue,
+                connectionIssue: recording.connectionIssue
+            ),
                issue != .externalRecordingActive {
                 Text(recording.issueMessage(issue))
                     .font(.system(size: 11))

@@ -67,6 +67,18 @@ final class EditorPersistenceTests: FrameScriptTestCase {
         assertNoVisibleBRoll(in: unreleased, file: "CHANGELOG.md [Unreleased]")
     }
 
+    /// The dormant-field table must describe the code, not a feature that does
+    /// not exist: nothing reads `Project.glossary` today.
+    func testDormantFieldDocsDoNotClaimAReaderForTheGlossary() throws {
+        let readme = try repositoryText("docs/format/README.md")
+        let line = try XCTUnwrap(
+            readme.split(separator: "\n").first { $0.contains("`Project.glossary`") },
+            "docs/format/README.md lost its Project.glossary row"
+        )
+        XCTAssertTrue(line.contains("Persisted only; nothing in the app reads it yet."), String(line))
+        XCTAssertFalse(line.contains("translation tooling"), String(line))
+    }
+
     func testFSCRCompatibilityKeepsBRollCodableNames() throws {
         XCTAssertEqual(WorkspaceMode.bRoll.rawValue, "B-Roll")
         XCTAssertEqual(BRollSourceType.stockFootage.rawValue, "Stock footage")

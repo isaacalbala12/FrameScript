@@ -11,7 +11,13 @@ extension AppState {
         guard !scenes.isEmpty else { return }
 
         let selectedIndex = project.scenes.sortedByOrder.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
-        let sections = TeleprompterContentBuilder.sections(from: scenes)
+        // The configured pauses matter here too: a reused window snapshots this
+        // provider and never rebuilds it, so building with `.standard` would keep
+        // the wrong pauses for the whole session (WP3 item 5).
+        let sections = TeleprompterContentBuilder.sections(
+            from: scenes,
+            pauseDefaults: settings.editorPreferences.markupPauseDefaults
+        )
         let startIndex = TeleprompterContentBuilder.startingIndex(
             in: sections,
             selectedIndex: selectedIndex

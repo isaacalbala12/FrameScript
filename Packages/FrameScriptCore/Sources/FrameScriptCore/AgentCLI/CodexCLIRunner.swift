@@ -8,8 +8,15 @@ import Foundation
 ///       [PROMPT] ... If not provided as an argument (or if `-` is used),
 ///                instructions are read from stdin.
 ///       -m, --model <MODEL>
+///       -s, --sandbox <SANDBOX_MODE>
+///                                read-only, workspace-write or
+///                                danger-full-access
 ///       --json   Print events to stdout as JSONL
 ///       -o, --output-last-message <FILE>
+///
+/// `--add-dir` (extra writable roots), `--approve-for-me` (workspace-write
+/// sandbox) and `--dangerously-bypass-approvals-and-sandbox` are never passed,
+/// so the run cannot gain write access.
 ///
 /// JSONL events used here:
 ///

@@ -489,7 +489,15 @@ final class EditorMarkupTests: FrameScriptTestCase {
         }
         let average = total / 20
         print(String(format: "Markup highlight: capped window %.3f ms (%d UTF-16 units)", average, window.length))
-        XCTAssertLessThan(average, 8)
+        #if DEBUG
+        // Debug builds are far slower and this assertion runs inside the same
+        // process as the whole snapshot suite: keep 5× headroom so normal load
+        // cannot fail it. Release keeps the real budget.
+        let averageLimit = 40.0
+        #else
+        let averageLimit = 8.0
+        #endif
+        XCTAssertLessThan(average, averageLimit)
     }
 
     // MARK: - Review fixes: paste, blocks, rhythm, contrast, metrics
@@ -861,9 +869,17 @@ final class EditorMarkupTests: FrameScriptTestCase {
         // Old behaviour parsed the whole script twice (>100 ms per keystroke).
         // The synchronous path is now text copies + the incremental styler +
         // task scheduling; the full parse runs once, off-main, after the pause.
+        // The structural guard is `maxApplied` below (the incremental window);
+        // Debug builds run in parallel with the snapshot suites, so they keep
+        // 5× timing headroom like the other perf budgets (WP8 item 2).
+        #if DEBUG
+        let averageLimit = 150.0
+        #else
+        let averageLimit = 30.0
+        #endif
         XCTAssertLessThan(
             average,
-            30,
+            averageLimit,
             "Typing must not parse the whole script per keystroke; avg=\(average) maxApplied=\(maxApplied)"
         )
 

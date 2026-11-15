@@ -487,6 +487,11 @@ final class RecordingController {
                 return
             }
 
+            // The countdown leaves the phase at `.countdown(0)`, and a stop that
+            // OBS reports while `startRecord()` is in flight is only latched in
+            // `.starting` (see `handleEvent`). Without this the latch never fires
+            // in the default configuration, where the countdown is enabled.
+            phase = .starting
             let startedAt = now()
             try await client.startRecord()
             // Only the current token proves FrameScript owns this output. A

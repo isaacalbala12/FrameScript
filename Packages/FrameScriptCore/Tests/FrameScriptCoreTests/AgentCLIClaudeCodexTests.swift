@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import FrameScriptCore
 
+// The two exact-argv assertions below (`success` in both suites) were changed
+// by WP2 item 2 when the runners gained their sandbox flags. This file is a
+// WP8-owned Core test; WP8 phase B keeps the assertions as the contract for the
+// Claude `--permission-mode plan`/`--disallowedTools` and Codex `-s read-only`
+// command lines.
+
 @Suite("Claude CLI runner")
 struct ClaudeCLIRunnerTests {
     @Test("parses the real claude -p JSON result")
@@ -19,10 +25,12 @@ struct ClaudeCLIRunnerTests {
 
         let recorded = await launcher.recordedRequests()
         let processRequest = try #require(recorded.first)
-        // The run is pinned to plan mode with every tool denied; see WP2.
+        // The run never prompts, loads no MCP servers and denies every tool; see WP2/FU2.
         #expect(processRequest.arguments == [
             "-p", "--output-format", "json", "--no-session-persistence",
-            "--permission-mode", "plan",
+            "--permission-mode", "dontAsk",
+            "--permission-prompts", "none",
+            "--strict-mcp-config", "--mcp-config", ClaudeCLIRunner.emptyMCPConfig,
             "--disallowedTools", ClaudeCLIRunner.deniedTools,
             "--model", "sonnet"
         ])

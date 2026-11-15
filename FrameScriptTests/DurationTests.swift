@@ -325,7 +325,9 @@ final class DurationTests: FrameScriptTestCase {
             makeSample(language: "es", words: 150, duration: 60, daysAgo: 4),
             makeSample(language: "es", words: 150, duration: 60, daysAgo: 3),
             makeSample(language: "es", words: 150, duration: 60, daysAgo: 2),
-            makeSample(language: "es", words: 400, duration: 60, daysAgo: 1)
+            // 450 WPM is above the shared 60…400 learning range (400 itself is
+            // accepted now that every consumer uses the same limits).
+            makeSample(language: "es", words: 450, duration: 60, daysAgo: 1)
         ]
 
         let result = DurationLearning.recompute(samples: samples)
