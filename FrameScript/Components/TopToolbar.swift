@@ -19,7 +19,7 @@ struct TopToolbar: View {
     }
 
     private func content(compact: Bool) -> some View {
-        HStack(spacing: compact ? 10 : 14) {
+        HStack(spacing: compact ? 8 : 14) {
             Menu {
                 Button(appState.localized("project.rename")) { appState.renameProject() }
                 projectMenuButton(appState.localized("project.save"), shortcut: .save) { appState.saveProject() }
@@ -54,7 +54,7 @@ struct TopToolbar: View {
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
             .frame(
-                minWidth: compact ? 140 : 160,
+                minWidth: compact ? 120 : 160,
                 idealWidth: compact ? 170 : 260,
                 maxWidth: 360,
                 alignment: .leading
@@ -105,6 +105,9 @@ struct TopToolbar: View {
             }
             .buttonStyle(.cursorPlain)
             .foregroundStyle(theme.secondaryText)
+            // The status reads as text whenever it can: the title gives up its
+            // slack first (WP6 collapses it to the dot only in a real squeeze).
+            .layoutPriority(1)
             .accessibilityLabel("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
@@ -198,7 +201,7 @@ struct TopToolbar: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, compact ? 14 : 18)
         .frame(height: 58)
     }
 
