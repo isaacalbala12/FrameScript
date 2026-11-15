@@ -212,6 +212,9 @@ extension AppState {
               expectedURL == nil || expectedURL == url else {
             return false
         }
+        // A pending background write must finish before the read: otherwise it
+        // can rename over the file after this method decoded the previous bytes.
+        syncPendingBackgroundSave()
         let previousSceneID = editorState.selectedSceneID
         let previousSceneIndex = projectStore.selectedSceneIndex(id: previousSceneID)
         let previousMode = editorState.selectedMode
