@@ -87,6 +87,8 @@ struct CommandAvailability: Equatable {
     // MARK: - Mode switches
 
     var canSwitchMode: Bool { hasOpenProject }
+    /// A clip starts from the selected scene or the current editor selection.
+    var canCreateClip: Bool { hasOpenProject && hasSelectedScene }
     var canToggleContentsPanel: Bool { hasOpenProject }
     var canToggleAIReview: Bool { hasOpenProject }
     var canToggleFocusMode: Bool { hasOpenProject }
@@ -115,8 +117,10 @@ struct CommandAvailability: Equatable {
             canMoveScene
         case .previousScene, .nextScene:
             canNavigateScenes
-        case .scriptMode, .visualsMode, .editingMode:
+        case .scriptMode, .visualsMode, .editingMode, .clipsMode:
             canSwitchMode
+        case .createClip:
+            canCreateClip
         case .commandPalette:
             canShowCommandPalette
         case .toggleContentsPanel:

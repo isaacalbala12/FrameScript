@@ -5,6 +5,7 @@
 ### Added
 
 - Added a production checklist (F16): pending recording, visuals, editing, research and publishing work is derived from the project (never stored twice), manual tasks can be added with a kind and scene, and the filterable panel groups by scene or kind with per-kind counts, a sidebar counter and one-click navigation to each item.
+- Added short clips (F24): a project-level Clips panel that turns one or several scenes or an anchored script fragment into a vertical Reel, Short or Story mini-project with its own 1–3 s hook, adapted text, on-screen text, description, hashtags and 15/30/60/90 s target; markup-aware live estimates use the learned speaking rate, per-scene source hashes plus an optional source-text baseline flag rewritten scenes with a word diff and "mark as reviewed", takes and assets are reused from the long video, and text plus zero-based Resolve marker EDL/FCPXML exports are available.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.

@@ -6,6 +6,7 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable {
     case script = "Script"
     case bRoll = "B-Roll"
     case editing = "Editing"
+    case clips = "Clips"
 
     var id: String { rawValue }
 
@@ -462,10 +463,26 @@ struct GlossaryTerm: Identifiable, Codable, Hashable, Sendable {
 struct ClipSceneSourceHash: Codable, Hashable, Sendable {
     var sceneID: UUID
     var hash: String
+    /// Source text at clip creation, kept for the stale-clip diff.
+    var sourceText: String
 
-    init(sceneID: UUID, hash: String) {
+    init(sceneID: UUID, hash: String, sourceText: String = "") {
         self.sceneID = sceneID
         self.hash = hash
+        self.sourceText = sourceText
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sceneID
+        case hash
+        case sourceText
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sceneID = try container.decode(UUID.self, forKey: .sceneID)
+        hash = try container.decodeIfPresent(String.self, forKey: .hash) ?? ""
+        sourceText = try container.decodeIfPresent(String.self, forKey: .sourceText) ?? ""
     }
 }
 

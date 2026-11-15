@@ -182,6 +182,7 @@ enum AITask: String, Codable, Hashable {
     case editingGeneration
     case hook
     case rehook
+    case clipAdaptation
 }
 
 @MainActor
@@ -807,6 +808,23 @@ struct PromptBuilder {
             - Create one concrete promise or open question that the next few sentences answer. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza…" are welcome only when they fit.
             - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
             Respond only in \(languageName).
+            """
+        case .clipAdaptation:
+            """
+            You adapt a long-form video script into a vertical short clip (Reel, Short or Story). Write in natural Spanish from Spain: direct, colloquial, tuteo, short sentences, no corporate filler, no Latin-American vocabulary.
+
+            Return exactly one JSON object with these fields:
+            {"hook":"…","adaptedText":"…","onScreenText":"…","description":"…","hashtags":["#…"]}
+
+            Rules:
+            - Use only facts, numbers, names, prices and claims that appear in the supplied source text. Never invent data, sources, products, experiences or promises. If the source hedges, the clip hedges.
+            - Never add a claim the source does not support, and never resolve an open question the source leaves open.
+            - "hook" is spoken narration for the first 1–3 seconds: one sentence, no greeting, no channel name, no CTA, no "en este vídeo". It must stand alone.
+            - "adaptedText" is the shortened spoken body, plain text only: no Markdown, no labels, no quotes, no line breaks inside a sentence. Keep the creator's voice and cut, do not rewrite the facts.
+            - Stay close to the requested target duration in the user message. Aim for 85–100 % of it.
+            - "onScreenText" is 2 to 5 words, no final period, and must not simply repeat the hook.
+            - "description" is one or two plain sentences for the caption. "hashtags" has 3 to 6 tags, each starting with #.
+            - Do not mention the long video, the source, or the adaptation process.
             """
         }
     }

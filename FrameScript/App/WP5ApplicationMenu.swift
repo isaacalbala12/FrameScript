@@ -39,6 +39,8 @@ enum ApplicationMenuSpec {
         .init(command: .scriptMode, menu: .view),
         .init(command: .visualsMode, menu: .view),
         .init(command: .editingMode, menu: .view),
+        .init(command: .clipsMode, menu: .view),
+        .init(command: .createClip, menu: .view),
         .init(command: .teleprompter, menu: .view),
         .init(command: .toggleContentsPanel, menu: .view),
         .init(command: .toggleAIReview, menu: .view),

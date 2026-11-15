@@ -240,6 +240,10 @@ struct CommandPaletteView: View {
             appState.selectMode(.bRoll)
         case .editingMode:
             appState.selectMode(.editing)
+        case .clipsMode:
+            appState.selectMode(.clips)
+        case .createClip:
+            appState.createClipFromEditorSelection()
         case .commandPalette:
             break
         case .toggleContentsPanel:

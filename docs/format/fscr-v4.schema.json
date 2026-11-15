@@ -1253,7 +1253,7 @@
 
     "ShortClipSceneSourceHash": {
       "type": "object",
-      "description": "Hash of one scene's text at the time a clip was derived from it.",
+      "description": "Hash of one scene's text (or anchored fragment) at the time a clip was derived from it. The optional sourceText keeps the baseline needed to show a word diff after the scene changes; files without it still open and simply show a coarser stale warning until the clip is reviewed once.",
       "properties": {
         "sceneID": {
           "type": "string",
@@ -1263,6 +1263,10 @@
         "hash": {
           "type": "string",
           "description": "FNV-1a 64-bit hash of the scene's scriptText, as lowercase hexadecimal without padding."
+        },
+        "sourceText": {
+          "type": "string",
+          "description": "Source text at clip creation, used for the stale-clip diff. Absent or empty in files written before F24's diff view."
         }
       },
       "required": ["sceneID", "hash"],

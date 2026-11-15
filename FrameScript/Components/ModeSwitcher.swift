@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ModeSwitcher: View {
-    private static let buttonWidth: CGFloat = 112
+    private static let buttonWidth: CGFloat = 84
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     @Binding var selection: WorkspaceMode
@@ -67,6 +67,7 @@ struct ModeSwitcher: View {
         case .script: appState.localized("mode.script")
         case .bRoll: appState.localized("mode.bRoll")
         case .editing: appState.localized("mode.editing")
+        case .clips: appState.localized("mode.clips")
         }
     }
 
@@ -75,6 +76,7 @@ struct ModeSwitcher: View {
         case .script: "mode-switcher-script"
         case .bRoll: "mode-switcher-broll"
         case .editing: "mode-switcher-editing"
+        case .clips: "mode-switcher-clips"
         }
     }
 
@@ -83,6 +85,7 @@ struct ModeSwitcher: View {
         case .script: .scriptMode
         case .bRoll: .visualsMode
         case .editing: .editingMode
+        case .clips: .clipsMode
         }
     }
 }

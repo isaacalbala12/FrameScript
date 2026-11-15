@@ -22,9 +22,17 @@ import Foundation
 /// spec caps marker names at 60 characters.
 public enum ResolveMarkerEDL {
     public static func make(scenes: [ExportScene], settings: ExportSettings) -> String {
+        make(
+            markers: ExportMarkerResolver.markers(scenes: scenes, settings: settings),
+            settings: settings
+        )
+    }
+
+    /// Writes an already resolved marker list. Short clips use this overload
+    /// so their marker set is not tied to a placeholder scene marker.
+    public static func make(markers: [ResolvedMarker], settings: ExportSettings) -> String {
         let title = ExportTextSanitizer.title(settings.projectName, asciiSafe: settings.asciiSafeNames)
         let fcm = settings.effectiveDropFrame ? "DROP FRAME" : "NON-DROP FRAME"
-        let markers = ExportMarkerResolver.markers(scenes: scenes, settings: settings)
 
         var lines: [String] = [
             "TITLE: \(title)",

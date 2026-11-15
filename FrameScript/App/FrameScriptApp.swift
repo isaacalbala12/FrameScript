@@ -210,7 +210,15 @@ struct FrameScriptProductionApp: App {
                 .disabled(!commands.canSwitchMode)
             Toggle(appState.localized("mode.editing"), isOn: modeBinding(.editing))
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
+            Toggle(appState.localized("mode.editing"), isOn: modeBinding(.editing))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
                 .disabled(!commands.canSwitchMode)
+            Toggle(appState.localized("mode.clips"), isOn: modeBinding(.clips))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .clipsMode))
+                .disabled(!commands.canSwitchMode)
+            Button(appState.localized("clips.command.create")) { appState.createClipFromEditorSelection() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .createClip))
+                .disabled(!commands.canCreateClip)
             Divider()
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))

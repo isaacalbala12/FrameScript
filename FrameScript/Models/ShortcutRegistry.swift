@@ -240,6 +240,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case nextScene, previousScene
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
+    case clipsMode, createClip
     case recordTake, toggleRecordingPanel
     case productionChecklist
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
@@ -342,14 +343,16 @@ enum ShortcutRegistry {
         .init(command: .scriptMode, localizationKey: "mode.script", category: .workspace, factoryDefault: .init("1", modifiers: [.command]), order: 0),
         .init(command: .visualsMode, localizationKey: "mode.bRoll", category: .workspace, factoryDefault: .init("2", modifiers: [.command]), order: 1),
         .init(command: .editingMode, localizationKey: "mode.editing", category: .workspace, factoryDefault: .init("3", modifiers: [.command]), order: 2),
-        .init(command: .commandPalette, localizationKey: "toolbar.commandPalette", category: .workspace, factoryDefault: .init("k", modifiers: [.command]), order: 3),
-        .init(command: .toggleContentsPanel, localizationKey: "command.toggleSidebar", category: .workspace, factoryDefault: .init("\\", modifiers: [.command]), order: 4),
-        .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 5),
-        .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 6),
-        .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 7),
-        .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 8),
-        .init(command: .toggleRecordingPanel, localizationKey: "recording.menu.togglePanel", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .option]), order: 9),
-        .init(command: .productionChecklist, localizationKey: "production.menu", category: .workspace, factoryDefault: .init("p", modifiers: [.command, .shift]), order: 10),
+        .init(command: .clipsMode, localizationKey: "mode.clips", category: .workspace, factoryDefault: .init("4", modifiers: [.command]), order: 3),
+        .init(command: .createClip, localizationKey: "clips.command.create", category: .workspace, factoryDefault: .init("c", modifiers: [.command, .shift]), order: 4),
+        .init(command: .commandPalette, localizationKey: "toolbar.commandPalette", category: .workspace, factoryDefault: .init("k", modifiers: [.command]), order: 5),
+        .init(command: .toggleContentsPanel, localizationKey: "command.toggleSidebar", category: .workspace, factoryDefault: .init("\\", modifiers: [.command]), order: 6),
+        .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 7),
+        .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 8),
+        .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 9),
+        .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 10),
+        .init(command: .toggleRecordingPanel, localizationKey: "recording.menu.togglePanel", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .option]), order: 11),
+        .init(command: .productionChecklist, localizationKey: "production.menu", category: .workspace, factoryDefault: .init("p", modifiers: [.command, .shift]), order: 12),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),

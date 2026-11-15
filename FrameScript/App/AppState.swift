@@ -124,6 +124,9 @@ final class AppState {
     let dependencies: AppDependencies
     /// F10 recording state and the obs-websocket client.
     let recording: RecordingController
+    /// Subscription AI runtime. Tests inject one backed by an isolated
+    /// `UserDefaults` suite so they never read the real app preferences.
+    let subscriptionRuntime: SubscriptionAIRuntime
     /// Seam for recording -> teleprompter (F8/F9); tests replace it with a fake.
     var recordingTeleprompter: any RecordingTeleprompterPresenting = LiveRecordingTeleprompter()
     /// Integration seam for production destinations whose panels live on
@@ -197,6 +200,7 @@ final class AppState {
         themeManager: ResolvedThemeManager = ResolvedThemeManager(),
         dependencies: AppDependencies = .live,
         recording: RecordingController? = nil,
+        subscriptionRuntime: SubscriptionAIRuntime = .shared,
         aiProviderConfigurationStore: AIProviderConfigurationStore = AIProviderConfigurationStore(),
         securityScope: SecurityScopedResourceAccess = .live,
         closeConfirmation: CloseConfirmation? = nil,
@@ -222,6 +226,7 @@ final class AppState {
         self.themeManager = themeManager
         self.dependencies = dependencies
         self.recording = recording ?? RecordingController()
+        self.subscriptionRuntime = subscriptionRuntime
         self.aiProviderConfigurationStore = aiProviderConfigurationStore
         self.securityScope = securityScope
         self.closeConfirmation = closeConfirmation
@@ -246,7 +251,7 @@ final class AppState {
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
-        SubscriptionAIRuntime.shared.attach(appState: self)
+        subscriptionRuntime.attach(appState: self)
         attachRecordingContext()
         self.recording.teleprompterHook = self
         TeleprompterPresenter.shared.readingSessionReporter = self
@@ -1113,7 +1118,7 @@ final class AppState {
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
-        case .script: []
+        case .script, .clips: []
         }
         let anchorsByID = Dictionary(uniqueKeysWithValues: items)
         let selectedIDs = itemIDs.reduce(into: [UUID]()) { result, itemID in
@@ -1170,7 +1175,7 @@ final class AppState {
             scene.editingItems.enumerated().compactMap { index, item in
                 TextAnchorRepair.current(item.textAnchor, in: scene.scriptText).map { (item.id, $0, index) }
             }
-        case .script:
+        case .script, .clips:
             []
         }
         let sorted = anchors.sorted {
@@ -1206,7 +1211,7 @@ final class AppState {
             editorState.selectedProductionItemIDs.lazy.compactMap { selectedID in
                 scene.editingItems.first(where: { $0.id == selectedID }).flatMap { TextAnchorRepair.current($0.textAnchor, in: scene.scriptText) }
             }.first
-        case .script:
+        case .script, .clips:
             nil
         }
         return selectedAnchor ?? TextAnchorRepair.anchor(
@@ -2819,6 +2824,7 @@ final class WindowState {
     var settingsRequestID = UUID()
     var newProjectRequest: NewProjectRequest?
     var isExportPresented = false
+    var selectedClipID: UUID?
     var pendingSettingsTab: SettingsTab?
     var pendingSettingsHighlightKey: String?
 }

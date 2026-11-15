@@ -20,11 +20,29 @@ import Foundation
 /// Apple format name, which this pack does not guess.
 public enum ResolveFCPXML {
     public static func make(scenes: [ExportScene], settings: ExportSettings) -> String {
+        make(
+            markers: ExportMarkerResolver.markers(scenes: scenes, settings: settings),
+            durationFrames: ExportMarkerResolver.timelineEndFrame(scenes: scenes, settings: settings),
+            settings: settings,
+            chapters: settings.includeChapterMarkers
+                ? YouTubeChapters.make(scenes: scenes, rate: settings.fps).chapters
+                : []
+        )
+    }
+
+    /// Writes an already resolved marker list with an explicit timeline
+    /// length. Short clips use this overload because they have no scenes to
+    /// derive the end frame from.
+    public static func make(
+        markers: [ResolvedMarker],
+        durationFrames: Int,
+        settings: ExportSettings,
+        chapters: [Chapter] = []
+    ) -> String {
         let projectName = XMLText.attribute(settings.projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "FrameScript"
             : settings.projectName)
-        let markers = ExportMarkerResolver.markers(scenes: scenes, settings: settings)
-        let endFrame = ExportMarkerResolver.timelineEndFrame(scenes: scenes, settings: settings)
+        let endFrame = max(1, durationFrames)
         let sequenceDuration = rationalSeconds(frames: endFrame, rate: settings.fps)
         let tcStart = rationalSeconds(frames: settings.startTimecode.frames, rate: settings.fps)
         let tcFormat = settings.effectiveDropFrame ? "DF" : "NDF"
@@ -57,9 +75,8 @@ public enum ResolveFCPXML {
             lines.append(line)
         }
 
-        if settings.includeChapterMarkers {
-            let chapters = YouTubeChapters.make(scenes: scenes, rate: settings.fps)
-            for chapter in chapters.chapters {
+        if !chapters.isEmpty {
+            for chapter in chapters {
                 let start = rationalSeconds(frames: chapter.startFrame, rate: settings.fps)
                 let duration = rationalSeconds(frames: 1, rate: settings.fps)
                 lines.append(
