@@ -399,6 +399,9 @@ struct ResolveSceneMapper: Sendable {
         case .confirmed: "confirmado"
         case .probable: "probable"
         case .rumor: "rumor"
+        // Research added community opinion; the marker says what it is so a
+        // viewer never reads it as a checked fact.
+        case .communityOpinion: "opinión de la comunidad"
         }
     }
 
