@@ -21,6 +21,18 @@ enum SceneListNavigation {
     }
 }
 
+/// Delete enablement for the scene sidebar's Delete button.
+///
+/// One rule for every surface that removes a scene: the menu and the command
+/// palette use `CommandAvailability.canDeleteScene`, and an active take blocks
+/// all of them. The old sidebar rule only looked at the selected scene, so it
+/// allowed deleting a different scene while OBS was still recording.
+enum SceneSidebarDeleteRule {
+    static func isDisabled(hasSelection: Bool, hasActiveTake: Bool) -> Bool {
+        !hasSelection || hasActiveTake
+    }
+}
+
 struct SceneSidebar: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
@@ -30,9 +42,10 @@ struct SceneSidebar: View {
     }
 
     private var deleteDisabled: Bool {
-        guard appState.selectedScene != nil else { return true }
-        return appState.recording.hasActiveTake
-            && appState.recording.activeSceneID == appState.selectedScene?.id
+        SceneSidebarDeleteRule.isDisabled(
+            hasSelection: appState.selectedScene != nil,
+            hasActiveTake: appState.recording.hasActiveTake
+        )
     }
 
     var body: some View {
@@ -57,6 +70,11 @@ struct SceneSidebar: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 12)
             }
+            // The move-command handler only fires when the scroll view owns
+            // focus; a lazy stack of buttons does not make its container
+            // focusable on macOS (uiux: arrow keys were dead code).
+            .focusable()
+            .focusEffectDisabled()
             .onMoveCommand { direction in
                 guard let destination = SceneListNavigation.destination(
                     in: orderedSceneIDs,

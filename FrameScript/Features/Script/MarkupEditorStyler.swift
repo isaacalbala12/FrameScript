@@ -370,14 +370,30 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
     /// The dotted marks this view paints, in view coordinates. Exposed so the
     /// regression test can assert that blank lines inside a warning range get
     /// no mark and that no mark is wider than its line's used rect.
-    func rhythmMarkRects() -> [NSRect] {
+    ///
+    /// `clip` limits the glyphs inspected to the ones that can be drawn in that
+    /// rectangle and `ensuringLayout` controls whether the whole text container
+    /// is laid out first. `draw(_:)` passes the dirty rect with layout off: the
+    /// text view has already laid out what it is about to paint, so forcing a
+    /// full-document layout on every redraw only wasted time on long scripts.
+    func rhythmMarkRects(in clip: NSRect? = nil, ensuringLayout: Bool = true) -> [NSRect] {
         guard !rhythmUnderlines.isEmpty,
               let layoutManager,
               let textContainer,
               let textStorage,
               textStorage.length > 0 else { return [] }
-        layoutManager.ensureLayout(for: textContainer)
+        if ensuringLayout {
+            layoutManager.ensureLayout(for: textContainer)
+        }
         let storageLength = textStorage.length
+        let clipGlyphRange = clip.map { rect in
+            // The clip arrives in view coordinates; the layout manager works in
+            // container coordinates.
+            layoutManager.glyphRange(
+                forBoundingRect: rect.offsetBy(dx: -textContainerOrigin.x, dy: -textContainerOrigin.y),
+                in: textContainer
+            )
+        }
         var marks: [NSRect] = []
 
         for underline in rhythmUnderlines {
@@ -389,7 +405,14 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
             var actual = NSRange()
             let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: &actual)
             guard glyphRange.length > 0 else { continue }
-            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
+            let inspectedGlyphRange: NSRange
+            if let clipGlyphRange {
+                inspectedGlyphRange = NSIntersectionRange(glyphRange, clipGlyphRange)
+                guard inspectedGlyphRange.length > 0 else { continue }
+            } else {
+                inspectedGlyphRange = glyphRange
+            }
+            layoutManager.enumerateLineFragments(forGlyphRange: inspectedGlyphRange) { _, usedRect, _, lineGlyphRange, _ in
                 let characterLineRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
                 let intersection = NSIntersectionRange(characterLineRange, actual)
                 guard intersection.length > 0 else { return }
@@ -420,7 +443,7 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
     private func drawRhythmUnderlines(in dirtyRect: NSRect) {
         let color = (rhythmUnderlineColor.usingColorSpace(.sRGB) ?? rhythmUnderlineColor)
             .withAlphaComponent(0.6)
-        for mark in rhythmMarkRects() where mark.intersects(dirtyRect) {
+        for mark in rhythmMarkRects(in: dirtyRect, ensuringLayout: false) where mark.intersects(dirtyRect) {
             drawDottedLine(in: mark, color: color)
         }
     }

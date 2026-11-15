@@ -9,11 +9,23 @@ import XCTest
 /// instead of an `XCTestObservation` callback because `recordFailure` from the
 /// observation center aborts the test host.
 enum TestIsolationGuard {
+    /// Keys the app writes about itself at launch. A non-test process (a
+    /// UI-test run or a manual launch while this suite runs) updates them, so
+    /// they cannot be attributed to the test suite. The list is deliberately
+    /// one exact key wide: any other `FrameScript.*` write still fails.
+    static let launchMaintenanceKeys: Set<String> = [LegacyWindowFrameKeys.purgeFlagKey]
+
+    static func appValuesIgnoringLaunchMaintenance(_ values: [String: Data]) -> [String: Data] {
+        values.filter { !launchMaintenanceKeys.contains($0.key) }
+    }
+
     static func failureMessage(phase: String, testName: String) -> String? {
         guard AppEnvironment.isRunningTests,
               let baseline = TestIsolationBaseline.initial else { return nil }
         let current = TestIsolationBaseline.current()
-        guard current.appValues != baseline.appValues || current.settingsBlob != baseline.settingsBlob else {
+        guard appValuesIgnoringLaunchMaintenance(current.appValues)
+                != appValuesIgnoringLaunchMaintenance(baseline.appValues)
+                || current.settingsBlob != baseline.settingsBlob else {
             return nil
         }
 
@@ -43,9 +55,11 @@ enum TestIsolationGuard {
         baseline: TestIsolationBaseline.Baseline,
         current: TestIsolationBaseline.Baseline
     ) -> [String] {
-        var keys = Set(current.appValues.keys).symmetricDifference(Set(baseline.appValues.keys))
-        keys.formUnion(current.appValues.compactMap { key, value in
-            baseline.appValues[key] == value ? nil : key
+        let baselineValues = appValuesIgnoringLaunchMaintenance(baseline.appValues)
+        let currentValues = appValuesIgnoringLaunchMaintenance(current.appValues)
+        var keys = Set(currentValues.keys).symmetricDifference(Set(baselineValues.keys))
+        keys.formUnion(currentValues.compactMap { key, value in
+            baselineValues[key] == value ? nil : key
         })
         if current.settingsBlob != baseline.settingsBlob {
             keys.insert("FrameScript.settings.v1")

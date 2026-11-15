@@ -51,3 +51,20 @@ extension L10n {
         ]
     ]
 }
+
+extension AppLanguage {
+    /// Project script language for newly created content, resolved against an
+    /// explicit preference list.
+    ///
+    /// `contentLanguageCode` (`DurationModels.swift`) resolves the same value
+    /// with `Locale.preferredLanguages`. This overload lets a test pin the
+    /// `.system` rule on any Mac instead of shipping a check that can only agree
+    /// with itself.
+    func contentLanguageCode(preferredLanguages: [String]) -> String {
+        switch L10n.resolve(self, preferredLanguages: preferredLanguages) {
+        case .system, .english: "en"
+        case .spanish: "es"
+        case .russian: "ru"
+        }
+    }
+}

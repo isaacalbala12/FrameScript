@@ -12,11 +12,21 @@ enum AccessibilityAnnouncement {
         ]
     }
 
+    #if DEBUG
+    /// Test seam: records every announcement the app posts so the hosted-shell
+    /// test can prove the production `.onChange` wiring runs. Never set in a
+    /// normal launch.
+    nonisolated(unsafe) static var testRecorder: ((String) -> Void)?
+    #endif
+
     /// Posts the announcement without touching focus or the window stack.
     @MainActor
     static func post(_ message: String) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        #if DEBUG
+        testRecorder?(trimmed)
+        #endif
         NSAccessibility.post(
             element: NSApplication.shared,
             notification: .announcementRequested,

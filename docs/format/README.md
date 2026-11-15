@@ -69,7 +69,7 @@ treat them as opaque data unless you are implementing the matching feature.
 | `Project.exportPresets` | Persisted only; the export UI uses the current settings. |
 | `Project.assets` | Persisted only; no asset browser yet. |
 | `Project.clips` | Persisted only; short-form clip editing is not exposed. |
-| `Project.glossary` | Persisted only; translation tooling reads it, the editor does not. |
+| `Project.glossary` | Persisted only; nothing in the app reads it yet. |
 | `Project.versionHistory` | Persisted and snapshotted; restore is not exposed in the UI. |
 | `Project.publishedVideos` | Persisted only; the published-video comparison UI is not exposed. |
 

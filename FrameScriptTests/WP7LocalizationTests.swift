@@ -43,8 +43,35 @@ final class WP7LocalizationTests: FrameScriptTestCase {
     }
 
     func testSystemContentCodeUsesTheSameResolverAsTheInterface() {
+        // The tautology this replaces compared `code` with
+        // `contentLanguageCode`, which are the same property. Resolve `.system`
+        // against explicit preference lists instead, so the expectation does not
+        // depend on this Mac's locale.
+        XCTAssertEqual(
+            AppLanguage.system.contentLanguageCode(preferredLanguages: ["fr-FR"]),
+            "en",
+            "an unsupported system language must fall back to English content"
+        )
+        XCTAssertEqual(
+            AppLanguage.system.contentLanguageCode(preferredLanguages: ["ca-ES", "es-ES"]),
+            "es"
+        )
+        XCTAssertEqual(
+            AppLanguage.system.contentLanguageCode(preferredLanguages: ["fr-FR", "ru-RU"]),
+            "ru"
+        )
+        // Non-system languages never consult the preference list.
+        XCTAssertEqual(AppLanguage.spanish.contentLanguageCode(preferredLanguages: ["en-US"]), "es")
+        XCTAssertEqual(AppLanguage.english.contentLanguageCode(preferredLanguages: ["es-ES"]), "en")
+
+        // The production property and the new-project language agree with the
+        // resolver on this machine's real preferences.
         let resolved = L10n.resolve(.system)
         XCTAssertEqual(AppLanguage.system.code, resolved.contentLanguageCode)
+        XCTAssertEqual(
+            AppLanguage.system.contentLanguageCode,
+            AppLanguage.system.contentLanguageCode(preferredLanguages: Locale.preferredLanguages)
+        )
         XCTAssertTrue(
             ["en", "es", "ru"].contains(AppLanguage.system.code),
             "an unsupported system language must not leak \(AppLanguage.system.code) into project content"
@@ -163,7 +190,16 @@ final class WP7LocalizationTests: FrameScriptTestCase {
             .merging(Self.spanishFeatureValues()) { existing, _ in existing }
         let offenders = table
             .filter { $0.key.hasPrefix("aiError.") || $0.key.hasPrefix("settings.ai.") }
-            .filter { $0.value.contains("orden") || $0.value.contains("Orden") }
+            .filter { _, value in
+                // Whole words only: «ordenador» or «ordenar» are not the
+                // command-sense mistake this test is about.
+                let words = value
+                    .folding(options: [.diacriticInsensitive], locale: Locale(identifier: "es_ES"))
+                    .lowercased()
+                    .split { !$0.isLetter }
+                    .map(String.init)
+                return words.contains("orden")
+            }
         XCTAssertTrue(offenders.isEmpty, "command-sense copy still says orden: \(offenders.keys.sorted())")
         XCTAssertEqual(
             L10n.tr("aiError.emptyReply", language: .spanish),
@@ -291,6 +327,37 @@ final class WP7LocalizationTests: FrameScriptTestCase {
         XCTAssertTrue(
             duplicates.isEmpty,
             "feature tables define keys the base table already owns (the base value wins silently): \(duplicates.sorted())"
+        )
+    }
+
+    /// Two feature tables that define the same key silently drop one of them:
+    /// `L10n.mergedStrings` keeps the first table that registered the key. The
+    /// WP1 × WP5 `dialog.revertToSaved.*` collision was found by hand, so this
+    /// checks every feature table against every other one.
+    func testNoTwoFeatureTablesDefineTheSameKey() {
+        var owners: [AppLanguage: [String: [Int]]] = [:]
+        for (index, table) in L10n.featureTables.enumerated() {
+            for (language, entries) in table {
+                for key in entries.keys {
+                    owners[language, default: [:]][key, default: []].append(index)
+                }
+            }
+        }
+
+        var duplicates: [String] = []
+        for language in [AppLanguage.english, .russian, .spanish] {
+            for (key, indices) in owners[language] ?? [:] {
+                let tables = Set(indices)
+                guard tables.count > 1 else { continue }
+                duplicates.append(
+                    "[\(language.rawValue)] \(key) is defined by feature tables \(tables.sorted())"
+                )
+            }
+        }
+
+        XCTAssertTrue(
+            duplicates.isEmpty,
+            "feature tables define the same key more than once (the first table wins silently): \(duplicates.sorted())"
         )
     }
 

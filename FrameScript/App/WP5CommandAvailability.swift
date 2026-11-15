@@ -42,7 +42,7 @@ struct CommandAvailability: Equatable {
     var canSaveProject: Bool { hasOpenProject }
     var canSaveProjectAs: Bool { hasOpenProject }
     var canExportProject: Bool { hasOpenProject }
-    var canRevertToSaved: Bool { hasOpenProject && hasSavedFile }
+    var canRevertToSaved: Bool { hasOpenProject && hasSavedFile && !hasActiveTake }
 
     /// Set by `CommandAvailability(appState:)`; kept out of the initializer so
     /// the matrix stays easy to build in tests.

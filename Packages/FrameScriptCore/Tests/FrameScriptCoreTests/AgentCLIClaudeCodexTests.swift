@@ -2,6 +2,12 @@ import Foundation
 import Testing
 @testable import FrameScriptCore
 
+// The two exact-argv assertions below (`success` in both suites) were changed
+// by WP2 item 2 when the runners gained their sandbox flags. This file is a
+// WP8-owned Core test; WP8 phase B keeps the assertions as the contract for the
+// Claude `--permission-mode plan`/`--disallowedTools` and Codex `-s read-only`
+// command lines.
+
 @Suite("Claude CLI runner")
 struct ClaudeCLIRunnerTests {
     @Test("parses the real claude -p JSON result")

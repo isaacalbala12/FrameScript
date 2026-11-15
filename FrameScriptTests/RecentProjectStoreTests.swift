@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import FrameScript
 import XCTest
@@ -60,6 +61,41 @@ final class RecentProjectStoreTests: FrameScriptTestCase {
 
         XCTAssertTrue(store.entries.isEmpty)
         XCTAssertEqual(result.removedMissingCount, 1)
+    }
+
+    /// Replaces the UI test that used to delete a recent file while the app was
+    /// in the background and then activate the app again.
+    ///
+    /// WP1 removed the `didBecomeActiveNotification` observer on purpose: every
+    /// activation re-resolved every bookmark synchronously on the main actor and
+    /// stalled the UI when a network volume disappeared. Revalidation now runs
+    /// when the project browser appears (`AppShellView.task`) and from the file
+    /// monitor. This pins that split: activation alone must not touch the
+    /// recents, the browser's validation call must remove the entry, and no
+    /// generic open error may appear.
+    @MainActor
+    func testDeletedRecentIsRemovedByTheBrowserValidationNotByAppActivation() throws {
+        let store = makeStore()
+        let appState = makeAppState(recentProjectStore: store)
+        let fileURL = try makeProjectFile(named: "GoneWhileAway.fscr")
+        try store.add(url: fileURL)
+        XCTAssertEqual(store.entries.count, 1)
+
+        try FileManager.default.removeItem(at: fileURL)
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        XCTAssertEqual(
+            store.entries.count,
+            1,
+            "activation must not re-resolve every bookmark on the main actor"
+        )
+
+        // `AppShellView.task` calls exactly this.
+        let result = store.validateEntriesNow()
+
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertEqual(result.removedMissingCount, 1, "the deleted file must be removed once")
+        XCTAssertNil(appState.errorCenter.presentedError, "a deleted recent must not raise a generic open error")
     }
 
     @MainActor
@@ -305,10 +341,11 @@ final class RecentProjectStoreTests: FrameScriptTestCase {
 
     @MainActor
     private func makeAppState(
+        recentProjectStore: RecentProjectStore? = nil,
         securityScope: SecurityScopedResourceAccess = SecurityScopedResourceAccess(start: { _ in false }, stop: { _ in })
     ) -> AppState {
         AppState(
-            recentProjectStore: RecentProjectStore(userDefaults: makeDefaults()),
+            recentProjectStore: recentProjectStore ?? RecentProjectStore(userDefaults: makeDefaults()),
             settingsStore: SettingsStore(settings: .defaults, userDefaults: makeDefaults(), key: "settings"),
             securityScope: securityScope,
             exportFolderBookmarkCreator: bookmarkCodec.createBookmark(for:),

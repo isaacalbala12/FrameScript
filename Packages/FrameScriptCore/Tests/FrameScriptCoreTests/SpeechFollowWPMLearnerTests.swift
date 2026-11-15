@@ -5,7 +5,7 @@ import Testing
 @Test func wpmLearnerReturnsLanguageDefaultInitially() {
     let learner = WPMLearner()
     #expect(learner.effectiveWordsPerMinute(for: .spanish) == 150)
-    #expect(learner.effectiveWordsPerMinute(for: .english) == 150)
+    #expect(learner.effectiveWordsPerMinute(for: .english) == 160)
 
     let statistics = learner.statistics(for: .spanish)
     #expect(statistics.acceptedSampleCount == 0)
@@ -79,14 +79,24 @@ import Testing
     }
     #expect(slowReason == .outOfRange)
 
+    // 360 WPM is inside the shared 60…400 range: it must be accepted, not
+    // rejected (the learner's default used to stop at 260).
     let fast = learner.record(wordCount: 30, duration: 5, source: .take, language: .spanish) // 360
-    guard case .rejected(let fastReason, _) = fast else {
-        Issue.record("Expected fast rejection")
+    guard case .accepted(let fastWPM) = fast else {
+        Issue.record("Expected 360 WPM to be accepted")
         return
     }
-    #expect(fastReason == .outOfRange)
+    #expect(abs(fastWPM - 360) < 0.0001)
+
+    let tooFast = learner.record(wordCount: 60, duration: 8, source: .take, language: .spanish) // 450
+    guard case .rejected(let tooFastReason, _) = tooFast else {
+        Issue.record("Expected a 450 WPM rejection")
+        return
+    }
+    #expect(tooFastReason == .outOfRange)
 
     #expect(learner.statistics(for: .spanish).rejectedSampleCount == 2)
+    #expect(learner.statistics(for: .spanish).acceptedSampleCount == 1)
     #expect(learner.effectiveWordsPerMinute(for: .spanish) == 150)
 }
 
@@ -99,12 +109,12 @@ import Testing
     }
     #expect(abs(slowWPM - 60) < 0.0001)
 
-    let fast = learner.record(wordCount: 26, duration: 6, source: .take, language: .english) // 260
+    let fast = learner.record(wordCount: 40, duration: 6, source: .take, language: .english) // 400
     guard case .accepted(let fastWPM) = fast else {
         Issue.record("Expected boundary sample to be accepted")
         return
     }
-    #expect(abs(fastWPM - 260) < 0.0001)
+    #expect(abs(fastWPM - 400) < 0.0001)
 }
 
 @Test func wpmLearnerRejectsInvalidInput() {
@@ -127,7 +137,7 @@ import Testing
 
     #expect(learner.statistics(for: .spanish).acceptedSampleCount == 3)
     #expect(learner.statistics(for: .english).acceptedSampleCount == 0)
-    #expect(learner.effectiveWordsPerMinute(for: .english) == 150)
+    #expect(learner.effectiveWordsPerMinute(for: .english) == 160)
 }
 
 @Test func wpmLearnerRecordsSourceAndLastSample() {

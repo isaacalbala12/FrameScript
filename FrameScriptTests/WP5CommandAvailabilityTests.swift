@@ -85,13 +85,25 @@ final class WP5CommandAvailabilityTests: FrameScriptTestCase {
         // Restoring a backup would replace the project mid-take.
         XCTAssertFalse(availability.canShowBackups)
         XCTAssertFalse(availability.isEnabled(.showBackups))
+        // Revert would replace the scene text mid-take.
+        XCTAssertFalse(availability.canRevertToSaved)
         // Non-destructive edits stay available.
         XCTAssertTrue(availability.canAddScene)
         XCTAssertTrue(availability.canAnalyzeScene)
     }
 
-    func testRecordingWithoutAProjectStillAllowsStop() {
-        let availability = CommandAvailability(isRecordingActive: true, hasActiveTake: true)
+    /// Revert replaces the whole project from disk, so it follows the same
+    /// mid-take rule as Backups and Delete.
+    func testRevertToSavedIsBlockedWhileATakeIsActive() {
+        var availability = CommandAvailability(hasOpenProject: true)
+        availability.hasSavedFile = true
+        XCTAssertTrue(availability.canRevertToSaved)
+
+        availability.hasActiveTake = true
+        XCTAssertFalse(availability.canRevertToSaved)
+    }
+
+    func testRecordingWithoutAProjectStillAllowsStop() {        let availability = CommandAvailability(isRecordingActive: true, hasActiveTake: true)
 
         XCTAssertTrue(availability.canToggleRecording)
         XCTAssertTrue(availability.isEnabled(.recordTake))
@@ -222,15 +234,51 @@ final class WP5CommandAvailabilityTests: FrameScriptTestCase {
         defaults.set("frame", forKey: stable)
         defaults.set("value", forKey: "FrameScript.settings.v1")
 
-        XCTAssertEqual(LegacyWindowFrameKeys.purgeIfNeeded(defaults: defaults, domainName: testDefaults.suiteName), 1)
+        XCTAssertEqual(LegacyWindowFrameKeys.purge(defaults: defaults, domainName: testDefaults.suiteName), 1)
         XCTAssertNil(defaults.object(forKey: legacy))
         XCTAssertEqual(defaults.string(forKey: stable), "frame")
         XCTAssertNotNil(defaults.object(forKey: "FrameScript.settings.v1"))
 
         // The flag makes the scan a one-time cost.
         defaults.set("frame", forKey: legacy)
-        XCTAssertEqual(LegacyWindowFrameKeys.purgeIfNeeded(defaults: defaults, domainName: testDefaults.suiteName), 0)
+        XCTAssertEqual(LegacyWindowFrameKeys.purge(defaults: defaults, domainName: testDefaults.suiteName), 0)
         XCTAssertEqual(defaults.string(forKey: legacy), "frame")
+    }
+
+    /// The one-time flag lives in the app's standard domain in production. A
+    /// test process must never write it, not even through the purge entry
+    /// point: it used to leak into the real `com.drashko.FrameScript` domain and
+    /// trip `TestIsolationGuardTests` when another build launched in parallel.
+    func testWindowFramePurgeIsSkippedInTestProcesses() {
+        let testDefaults = makeTestDefaults()
+        let defaults = testDefaults.defaults
+        let legacy = "NSWindow Frame SwiftUI.ModifiedContent<FrameScript.(unknown context at $100a1b2c0).ThemedSceneRoot<FrameScript.AppRootView>>_NSThemeFrame"
+        defaults.set("frame", forKey: legacy)
+
+        XCTAssertTrue(AppEnvironment.isRunningTests)
+        XCTAssertEqual(
+            LegacyWindowFrameKeys.purgeIfNeeded(defaults: defaults, domainName: testDefaults.suiteName),
+            0,
+            "the purge must not run inside the XCTest host"
+        )
+        XCTAssertEqual(defaults.string(forKey: legacy), "frame")
+        XCTAssertNil(
+            defaults.object(forKey: LegacyWindowFrameKeys.purgeFlagKey),
+            "the one-time flag must not be written from a test process"
+        )
+    }
+
+    func testUITestLaunchesAreTreatedAsIsolatedProcesses() {
+        XCTAssertTrue(LegacyWindowFrameKeys.isUITestLaunch(arguments: [
+            "/path/FrameScript.app/Contents/MacOS/FrameScript",
+            "--framescript-ui-test-show-browser",
+            "--framescript-ui-test-language-english"
+        ]))
+        XCTAssertFalse(LegacyWindowFrameKeys.isUITestLaunch(arguments: [
+            "/path/FrameScript.app/Contents/MacOS/FrameScript",
+            "-NSDocumentRevisionsDebugMode", "YES"
+        ]))
+        XCTAssertTrue(LegacyWindowFrameKeys.mustStayIsolated)
     }
 
     // MARK: - Helpers

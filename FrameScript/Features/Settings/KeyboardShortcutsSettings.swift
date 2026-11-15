@@ -96,7 +96,8 @@ struct KeyboardShortcutsSettings: View {
         let state = ShortcutSettingsLayout.rowState(
             for: definition,
             customizedCommands: Set(settings.shortcutOverrides.keys),
-            recording: recording
+            recording: recording,
+            activeBinding: settings.activeShortcut(for: definition.command)
         )
 
         SettingsRow(appState.localized(definition.localizationKey), isHighlighted: state.isRecording) {
@@ -372,12 +373,18 @@ struct ShortcutSettingsRowState {
     let isCustomized: Bool
     let isRecording: Bool
     let isLocked: Bool
+    let hasActiveBinding: Bool
 
     var showsEdit: Bool { !isRecording && !isLocked }
     var showsReset: Bool { isCustomized && !isLocked }
     /// Removing a shortcut writes an explicit `.unassigned` override instead of
     /// relying on assigning the same key to another command.
-    var showsRemove: Bool { showsReset }
+    ///
+    /// Any assigned command can be removed, including one that still uses its
+    /// factory default: the remove affordance is the only way to free a default
+    /// key without overwriting another command. Only a command that is already
+    /// unassigned has nothing to remove.
+    var showsRemove: Bool { !isRecording && !isLocked && hasActiveBinding }
 }
 
 enum ShortcutSettingsLayout {
@@ -393,12 +400,14 @@ enum ShortcutSettingsLayout {
     static func rowState(
         for definition: ShortcutDefinition,
         customizedCommands: Set<ShortcutCommand>,
-        recording: ShortcutCommand?
+        recording: ShortcutCommand?,
+        activeBinding: ShortcutBinding?
     ) -> ShortcutSettingsRowState {
         ShortcutSettingsRowState(
             isCustomized: customizedCommands.contains(definition.command),
             isRecording: recording == definition.command,
-            isLocked: recording != nil
+            isLocked: recording != nil,
+            hasActiveBinding: activeBinding != nil
         )
     }
 

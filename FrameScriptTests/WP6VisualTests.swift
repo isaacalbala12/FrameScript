@@ -70,7 +70,7 @@ final class WP6VisualTests: FrameScriptTestCase {
 
     // MARK: - Rhythm marks
 
-    func testRhythmMarkSkipsBlankLinesInsideTheWarningRange() {
+    func testRhythmMarkSkipsBlankLinesInsideTheWarningRange() throws {
         let textView = makeRhythmTextView("Uno dos\n\nTres cuatro")
         let range = NSRange(location: 0, length: (textView.string as NSString).length)
         textView.rhythmUnderlines = [RhythmEditorUnderline(range: range, kind: .longSentence, message: "aviso")]
@@ -79,10 +79,28 @@ final class WP6VisualTests: FrameScriptTestCase {
 
         // Two paragraphs, so two marks: the empty line between them gets none.
         XCTAssertEqual(marks.count, 2)
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
         for mark in marks {
             XCTAssertGreaterThan(mark.width, 0)
-            XCTAssertLessThanOrEqual(mark.maxX, textView.bounds.width + 0.5)
+            // The mark must stop at the used part of its own line, not run to
+            // the 320 pt container edge.
+            let glyph = layoutManager.glyphIndex(
+                for: NSPoint(x: mark.minX + 1, y: mark.midY),
+                in: container
+            )
+            let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+            XCTAssertLessThanOrEqual(mark.maxX, used.maxX + 0.5, "mark \(mark) spilled past its line \(used)")
+            XCTAssertLessThanOrEqual(mark.height, 1.5)
         }
+
+        // "Uno dos" is much narrower than the container: a mark wider than the
+        // text itself would mean the trailing margin is being painted.
+        let firstLineWidth = ("Uno dos" as NSString).size(
+            withAttributes: [.font: NSFont.systemFont(ofSize: 14)]
+        ).width
+        XCTAssertLessThan(marks[0].width, firstLineWidth + 1, "the first mark covers the whole line box")
     }
 
     func testRhythmMarkIgnoresWhitespaceOnlyRanges() {
@@ -110,7 +128,144 @@ final class WP6VisualTests: FrameScriptTestCase {
         XCTAssertEqual(textView.rhythmToolTipRects().count, 2)
     }
 
+    // MARK: - Recording issues
+
+    func testNewerControllerIssueWinsOverAStaleFileProblem() {
+        XCTAssertEqual(
+            RecordingPanelIssue.resolved(
+                lastIssue: .startFailed("OBS refused"),
+                fileIssue: .fileUnavailable,
+                connectionIssue: .connectionLost
+            ),
+            .startFailed("OBS refused"),
+            "a newer OBS error must not be hidden by a stale file problem"
+        )
+        XCTAssertEqual(
+            RecordingPanelIssue.resolved(
+                lastIssue: nil,
+                fileIssue: .fileUnavailable,
+                connectionIssue: .connectionLost
+            ),
+            .fileUnavailable
+        )
+        XCTAssertEqual(
+            RecordingPanelIssue.resolved(lastIssue: nil, fileIssue: nil, connectionIssue: .connectionLost),
+            .connectionLost
+        )
+        XCTAssertNil(RecordingPanelIssue.resolved(lastIssue: nil, fileIssue: nil, connectionIssue: nil))
+    }
+
+    // MARK: - Rhythm underlines on redraw
+
+    /// Drawing must not lay out the whole script: only the glyphs that can be
+    /// painted in the dirty rect are inspected, and `draw(_:)` must not call
+    /// `ensureLayout(for:)`. A spy layout manager counts full-layout requests.
+    func testRhythmRedrawDoesNotLayOutTheWholeDocument() throws {
+        let paragraph = "Una frase larga que ocupa una línea entera del guion."
+        let text = Array(repeating: paragraph, count: 400).joined(separator: "\n\n")
+        let storage = NSTextStorage(string: text)
+        let spy = FullLayoutSpyLayoutManager()
+        storage.addLayoutManager(spy)
+        let container = NSTextContainer(
+            containerSize: NSSize(width: 320, height: CGFloat.greatestFiniteMagnitude)
+        )
+        container.widthTracksTextView = false
+        spy.addTextContainer(container)
+        let textView = MarkupEditorTextView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 400),
+            textContainer: container
+        )
+        textView.textContainerInset = NSSize.zero
+        container.lineFragmentPadding = 0
+        textView.font = NSFont.systemFont(ofSize: 14)
+        textView.frame = NSRect(x: 0, y: 0, width: 320, height: 400)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 400),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.contentView = textView
+        window.layoutIfNeeded()
+        textView.layoutSubtreeIfNeeded()
+
+        textView.rhythmUnderlines = [
+            RhythmEditorUnderline(
+                range: NSRange(location: 0, length: (text as NSString).length),
+                kind: .longSentence,
+                message: "aviso"
+            )
+        ]
+        textView.layoutSubtreeIfNeeded()
+
+        let visible = NSRect(x: 0, y: 0, width: 320, height: 400)
+        spy.fullLayoutRequests = 0
+        let visibleMarks = textView.rhythmMarkRects(in: visible, ensuringLayout: false)
+        XCTAssertEqual(spy.fullLayoutRequests, 0, "the redraw path forced a full-document layout")
+        XCTAssertFalse(visibleMarks.isEmpty, "the visible warning produced no mark")
+        XCTAssertLessThan(
+            visibleMarks.count,
+            40,
+            "the clipped path inspected the whole 400-paragraph script"
+        )
+
+        // The explicit full path (tooltips) still lays out everything and sees
+        // every mark, so the spy and the clipping are not vacuous.
+        spy.fullLayoutRequests = 0
+        let allMarks = textView.rhythmMarkRects()
+        XCTAssertEqual(spy.fullLayoutRequests, 1)
+        XCTAssertGreaterThan(allMarks.count, visibleMarks.count)
+
+        // And the real draw path uses the clipped variant.
+        spy.fullLayoutRequests = 0
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 320,
+            pixelsHigh: 400,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        textView.draw(visible)
+        NSGraphicsContext.restoreGraphicsState()
+        XCTAssertEqual(spy.fullLayoutRequests, 0, "draw(_:) laid out the whole script")
+
+        window.contentView = nil
+        textView.removeFromSuperview()
+    }
+
     // MARK: - Scene list navigation
+
+    /// The sidebar's arrow keys are only delivered when the scroll view itself
+    /// is focusable; the lazy stack of buttons does not make its container
+    /// focusable on macOS. SwiftUI's focus engine is not observable in a
+    /// headless host (every view reports `acceptsFirstResponder == false`, even
+    /// buttons), so this pins the two modifiers that keep the handler alive.
+    func testSceneSidebarScrollViewIsFocusableBeforeItsMoveHandler() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("FrameScript/Components/SceneSidebar.swift"),
+            encoding: .utf8
+        )
+        let focusable = try XCTUnwrap(source.range(of: ".focusable()"))
+        let moveCommand = try XCTUnwrap(source.range(of: ".onMoveCommand"))
+        XCTAssertLessThan(
+            focusable.lowerBound,
+            moveCommand.lowerBound,
+            ".focusable() must be attached to the scroll view before its move-command handler"
+        )
+        XCTAssertTrue(source.contains(".focusEffectDisabled()"), "the scroll view must not paint a focus ring")
+    }
 
     func testSceneListArrowKeysStopAtTheEnds() {
         let first = UUID()
@@ -372,4 +527,15 @@ final class WP6VisualTests: FrameScriptTestCase {
 private struct WP6SnapshotSecretStore: OBSSecretStoring {
     func readPassword() throws -> String? { nil }
     func savePassword(_ password: String) throws {}
+}
+
+/// Counts `ensureLayout(for:)` calls so a redraw cannot hide a full-document
+/// layout behind the same result.
+private final class FullLayoutSpyLayoutManager: NSLayoutManager {
+    var fullLayoutRequests = 0
+
+    override func ensureLayout(for container: NSTextContainer) {
+        fullLayoutRequests += 1
+        super.ensureLayout(for: container)
+    }
 }
