@@ -6,8 +6,10 @@ import XCTest
 
 @MainActor
 final class PublishingTests: XCTestCase {
-    private var suiteName = ""
-    private var recordingSuiteName = ""
+    /// Two isolated suites in the process temporary directory: one for the app
+    /// preferences and one for the OBS recording preferences.
+    private var preferencesSuite: TestDefaults?
+    private var recordingSuite: TestDefaults?
     private var defaults: UserDefaults!
     private var recordingDefaults: UserDefaults!
     private var temporaryDirectory: URL!
@@ -15,10 +17,12 @@ final class PublishingTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        suiteName = "FrameScript.PublishingTests.\(UUID().uuidString)"
-        recordingSuiteName = "\(suiteName).recording"
-        defaults = UserDefaults(suiteName: suiteName)
-        recordingDefaults = UserDefaults(suiteName: recordingSuiteName)
+        let preferencesSuite = TestDefaults.make()
+        let recordingSuite = TestDefaults.make()
+        self.preferencesSuite = preferencesSuite
+        self.recordingSuite = recordingSuite
+        defaults = preferencesSuite.defaults
+        recordingDefaults = recordingSuite.defaults
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("PublishingTests-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
@@ -28,18 +32,10 @@ final class PublishingTests: XCTestCase {
 
     override func tearDown() {
         appState = nil
-        if !suiteName.isEmpty {
-            defaults?.removePersistentDomain(forName: suiteName)
-            let plist = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-            try? FileManager.default.removeItem(at: plist)
-        }
-        if !recordingSuiteName.isEmpty {
-            UserDefaults(suiteName: recordingSuiteName)?.removePersistentDomain(forName: recordingSuiteName)
-            let plist = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent("Library/Preferences/\(recordingSuiteName).plist")
-            try? FileManager.default.removeItem(at: plist)
-        }
+        preferencesSuite?.cleanup()
+        preferencesSuite = nil
+        recordingSuite?.cleanup()
+        recordingSuite = nil
         if let temporaryDirectory {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
@@ -419,7 +415,7 @@ final class PublishingTests: XCTestCase {
                 preferences: OBSPreferencesStore(defaults: recordingDefaults),
                 defaults: recordingDefaults
             ),
-            customTemplatesLoader: { [] }
+            customTemplates: []
         )
         appState = state
         state.editorState.selectedSceneID = project.scenes.sortedByOrder.first?.id
