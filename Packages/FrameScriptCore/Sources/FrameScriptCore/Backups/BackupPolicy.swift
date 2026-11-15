@@ -51,13 +51,13 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
 
     /// Existing backups that may be removed under this policy.
     ///
-    /// Keeps the newest `maximumCount` automatic entries plus the newest entry of
-    /// each calendar day inside the last `dailyRetentionDays` days (today
+    /// Keeps the newest `maximumCount` automatic entries plus the newest automatic
+    /// entry of each calendar day inside the last `dailyRetentionDays` days (today
     /// included). Forced safety copies (pre-restore, pre-reload, pre-overwrite
-    /// safeguards) never consume a slot in that newest-N window: a safeguard must
-    /// not evict an older automatic backup the user may still need. At least the
-    /// newest entry always survives, even if a decoded policy carries degenerate
-    /// values.
+    /// safeguards) never consume a slot in that newest-N window and never claim a
+    /// day's retained slot either: a safeguard must not evict an older automatic
+    /// backup the user may still need. At least the newest entry always survives,
+    /// even if a decoded policy carries degenerate values.
     public func backupsToDelete(
         from existing: [BackupEntry],
         now: Date,
@@ -90,11 +90,14 @@ public struct BackupPolicy: Codable, Hashable, Sendable {
             let today = calendar.startOfDay(for: now)
             let oldestDay = calendar.date(byAdding: .day, value: -(retentionDays - 1), to: today) ?? today
             var seenDays = Set<Date>()
-            for entry in sorted {
+            // Only automatic backups own a day. A safety copy made later on an
+            // old day must not take that day's slot and evict its automatic
+            // backup once the automatic one falls outside the newest-N window.
+            for entry in automatic {
                 let day = calendar.startOfDay(for: entry.createdAt)
                 guard day >= oldestDay, day <= today else { continue }
-                // `sorted` is newest first, so the first entry for a day is the
-                // one worth keeping.
+                // `automatic` keeps the newest-first order, so the first entry
+                // for a day is the one worth keeping.
                 if seenDays.insert(day).inserted {
                     kept.insert(entry.url.standardizedFileURL)
                 }

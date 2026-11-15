@@ -12,24 +12,41 @@ enum SampleData {
     ] + SimracingTemplates.frameTemplates
 
     static var defaultProject: FrameProject {
-        project(named: "Untitled Script", template: templates.first, blankProjectStart: .oneEmptyScene)
+        defaultProject(language: .system)
+    }
+
+    /// Placeholder project with the default titles in `language`. A Spanish or
+    /// Russian interface must never show the English "Untitled Script"/"New
+    /// scene"; both strings come from the same localization keys the new-project
+    /// flow uses.
+    static func defaultProject(language: AppLanguage) -> FrameProject {
+        project(
+            named: L10n.tr("project.untitled", language: language),
+            template: templates.first,
+            blankProjectStart: .oneEmptyScene,
+            language: language
+        )
     }
 
     static func project(
         named title: String,
         template: FrameTemplate?,
         blankProjectStart: BlankProjectStart = .oneEmptyScene,
-        defaultSceneName: String = "New scene",
-        exportPresetName: String = "Editor handoff",
+        defaultSceneName: String? = nil,
+        exportPresetName: String? = nil,
         language: AppLanguage = .english,
         sceneNameResolver: (String) -> String = { $0 }
     ) -> FrameProject {
+        // Both defaults are localized UI strings, not fixture text: a project
+        // created without an explicit scene/preset name must follow `language`.
+        let sceneName = defaultSceneName ?? L10n.tr("templates.defaultScene", language: language)
+        let presetName = exportPresetName ?? L10n.tr("export.editorHandoff", language: language)
         if let template, template.builtIn, let blueprint = SimracingTemplates.definition(for: template) {
             return blueprint.makeProject(
                 named: title,
                 template: template,
                 language: language,
-                exportPresetName: exportPresetName
+                exportPresetName: presetName
             )
         }
         let structure: [String]
@@ -40,14 +57,14 @@ enum SampleData {
         }
         let scenes = structure.enumerated().map { index, name in
             let sceneID = UUID()
-            let sceneTitle = name.isEmpty ? defaultSceneName : sceneNameResolver(name)
+            let sceneTitle = name.isEmpty ? sceneName : sceneNameResolver(name)
             return Scene(id: sceneID, order: index, sectionType: SectionType(rawValue: name) ?? .custom, title: sceneTitle, scriptText: "", notes: "", textSegments: [TextSegment(sceneID: sceneID, order: 0, sourceText: "", segmentType: .paragraph)])
         }
         return FrameProject(
             title: title,
             templateID: template?.id,
             scenes: scenes,
-            exportPresets: [ExportPreset(id: UUID(), name: exportPresetName, format: .productionOutline)],
+            exportPresets: [ExportPreset(id: UUID(), name: presetName, format: .productionOutline)],
             primaryLanguage: SimracingCopy.resolvedLanguage(language).contentLanguageCode
         )
     }

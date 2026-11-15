@@ -18,6 +18,7 @@ extension AppState {
         trackedProjectFileURL = nil
         trackedProjectFileSnapshot = nil
         declinedExternalProjectSnapshot = nil
+        declinedUnreadableProjectFileURL = nil
         reportedMissingProjectFileURL = nil
     }
 
@@ -65,6 +66,7 @@ extension AppState {
         )
         trackedProjectFileURL = url
         declinedExternalProjectSnapshot = nil
+        declinedUnreadableProjectFileURL = nil
         reportedMissingProjectFileURL = nil
     }
 
@@ -89,6 +91,7 @@ extension AppState {
                 }
                 trackedProjectFileURL = url
                 declinedExternalProjectSnapshot = nil
+                declinedUnreadableProjectFileURL = nil
                 reportedMissingProjectFileURL = nil
                 return
             } catch {
@@ -110,6 +113,14 @@ extension AppState {
         switch diskStatus(at: url) {
         case .missing:
             handleMissingProjectFile(at: url)
+        case .unreadable:
+            // The file exists but FrameScript cannot read it (no permission, a
+            // dataless iCloud file, a locked volume). Never treat that as
+            // "missing": a save would overwrite a version the app could not
+            // read. With local edits, ask exactly like an external change.
+            if projectStore.hasUnsavedFileChanges, declinedUnreadableProjectFileURL != url {
+                _ = resolveExternalProjectChange(diskSnapshot: nil, url: url)
+            }
         case let .snapshot(disk):
             guard let known = trackedProjectFileSnapshot else {
                 // No baseline (the open-time read failed): the model may be
@@ -155,6 +166,13 @@ extension AppState {
                 // let the write try instead of blocking their save forever.
                 handleMissingProjectFile(at: url, reportsError: reportsMissingFile)
                 return .proceed
+            case .unreadable:
+                // It exists but cannot be read, so it may hold another
+                // version. Ask instead of overwriting what the app cannot see.
+                if honoringDeclinedConflict, declinedUnreadableProjectFileURL == url {
+                    return .declined
+                }
+                return resolveExternalProjectChange(diskSnapshot: nil, url: url)
             case let .snapshot(disk):
                 if honoringDeclinedConflict,
                    let declined = declinedExternalProjectSnapshot,
@@ -168,6 +186,11 @@ extension AppState {
         case .missing:
             handleMissingProjectFile(at: url, reportsError: reportsMissingFile)
             return .proceed
+        case .unreadable:
+            if honoringDeclinedConflict, declinedUnreadableProjectFileURL == url {
+                return .declined
+            }
+            return resolveExternalProjectChange(diskSnapshot: nil, url: url)
         case let .snapshot(disk):
             if disk.contentHash == known.contentHash {
                 trackedProjectFileSnapshot = disk
@@ -287,6 +310,12 @@ extension AppState {
             return saved ? .handled : .failed
         case .cancel:
             declinedExternalProjectSnapshot = diskSnapshot
+            if diskSnapshot == nil {
+                // No hash to remember: the URL remembers that the user already
+                // said no to an unreadable file, so background autosaves do not
+                // re-open the dialog every interval.
+                declinedUnreadableProjectFileURL = url
+            }
             return .failed
         }
     }
@@ -331,16 +360,36 @@ extension AppState {
 
     private enum DiskStatus {
         case snapshot(ProjectFileSnapshot)
+        /// The file is gone (ENOENT): saving recreates it.
         case missing
+        /// The file exists but cannot be read right now (no permission, a
+        /// dataless iCloud placeholder, a locked volume). It may still hold a
+        /// version FrameScript has never seen, so it must go through the
+        /// conflict prompt instead of being overwritten.
+        case unreadable
     }
 
     private func diskStatus(at url: URL) -> DiskStatus {
         do {
-            return .snapshot(try securityScope.withAccess(to: url) {
+            let snapshot = try securityScope.withAccess(to: url) {
                 try ProjectFileSnapshotReader.read(at: url)
-            })
+            }
+            // Readable again: a cancelled unreadable prompt no longer applies.
+            if declinedUnreadableProjectFileURL == url {
+                declinedUnreadableProjectFileURL = nil
+            }
+            return .snapshot(snapshot)
         } catch {
-            return .missing
+            // Only "no such file" may take the missing-file path. Any other
+            // read failure (EACCES, EPERM, EIO, undownloaded iCloud file) must
+            // never be silently replaced.
+            if Self.isMissingFileError(error, url: url) {
+                if declinedUnreadableProjectFileURL == url {
+                    declinedUnreadableProjectFileURL = nil
+                }
+                return .missing
+            }
+            return .unreadable
         }
     }
 

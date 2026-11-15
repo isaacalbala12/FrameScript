@@ -140,6 +140,8 @@ struct ScriptEditorView: View {
             rhythmColor: rhythmColor,
             addBRollLabel: appState.localized("production.addBRollForSelection"),
             addEditingLabel: appState.localized("production.addEditingForSelection"),
+            bRollMarkerLabel: appState.localized("production.markerTooltip.bRoll"),
+            editingMarkerLabel: appState.localized("production.markerTooltip.editing"),
             onTextCommitted: { previousText, text in
                 appState.commitScriptTextChange(sceneID: sceneID, previousText: previousText, text: text)
             },
@@ -427,6 +429,10 @@ struct LinkedScriptTextView: NSViewRepresentable {
     var rhythmColor: NSColor = .systemOrange
     let addBRollLabel: String
     let addEditingLabel: String
+    /// Tooltip shown over an existing marker. Defaults keep previews and older
+    /// call sites compiling.
+    var bRollMarkerLabel: String = ""
+    var editingMarkerLabel: String = ""
     let onTextCommitted: (String, String) -> Void
     let autocomplete: @MainActor (AutocompleteContext) async -> AutocompleteResult
     let onTeardown: () -> Void
@@ -489,6 +495,8 @@ struct LinkedScriptTextView: NSViewRepresentable {
         view.editingColor = editingColor
         view.addBRollLabel = addBRollLabel
         view.addEditingLabel = addEditingLabel
+        view.bRollMarkerLabel = bRollMarkerLabel
+        view.editingMarkerLabel = editingMarkerLabel
         view.markupStyler.configure(MarkupEditorStyler.Configuration(
             isEnabled: true,
             pauseDefaults: pauseDefaults,
@@ -1608,6 +1616,11 @@ final class MarkerTextContainerView: NSView {
     var editingColor = NSColor.systemGreen
     var addBRollLabel = ""
     var addEditingLabel = ""
+    /// Tooltip for the marker column when it points at an existing marker. Set
+    /// by the editor; the "Add … for selection" text is only for the empty-column
+    /// context menu and must never describe an existing marker.
+    var bRollMarkerLabel = ""
+    var editingMarkerLabel = ""
     var cachedFontSize: Double?
     var markerTextRevision = 0 {
         didSet {
@@ -1665,6 +1678,10 @@ final class MarkerTextContainerView: NSView {
         markerView.needsDisplay = true
     }
 
+    /// The marker strip itself. Exposed so tests can exercise the AppKit
+    /// tooltip owner path (`view(_:stringForToolTip:point:userData:)`).
+    var markerStripView: TextRangeMarkerView { markerView }
+
     func markerRects() -> [ViewportMarkerRect] {
         rebuildMarkerGeometryIfNeeded()
         return viewportMarkerRects(from: cachedMarkerGeometry.renderRuns)
@@ -1679,10 +1696,16 @@ final class MarkerTextContainerView: NSView {
         markerHitRects().first { $0.rect.contains(point) }
     }
 
-    /// Tooltip for the marker column at `point` (in this view's coordinates).
+    /// Tooltip for the marker column at `point`, in the marker strip's own
+    /// coordinates (the same space `markerHitTest(at:)` and `markerRects()`
+    /// use; the strip is flipped relative to the document).
     func markerTooltip(at point: NSPoint) -> String? {
         guard let marker = markerHitTest(at: point), !marker.itemIDs.isEmpty else { return nil }
-        return marker.mode == .bRoll ? addBRollLabel : addEditingLabel
+        let existing = marker.mode == .bRoll ? bRollMarkerLabel : editingMarkerLabel
+        // A caller that only knows the context-menu labels still gets a tooltip
+        // instead of none.
+        let fallback = marker.mode == .bRoll ? addBRollLabel : addEditingLabel
+        return existing.isEmpty ? fallback : existing
     }
 
     func documentMarkerGeometry() -> MarkerGeometry {
@@ -1974,7 +1997,7 @@ enum TextAnchorGeometry {
     }
 }
 
-private final class TextRangeMarkerView: NSView {
+final class TextRangeMarkerView: NSView, NSViewToolTipOwner {
     weak var container: MarkerTextContainerView?
     private var toolTipTag: NSView.ToolTipTag?
     override var isFlipped: Bool { false }
@@ -2008,6 +2031,9 @@ private final class TextRangeMarkerView: NSView {
         toolTipTag = addToolTip(bounds, owner: self, userData: nil)
     }
 
+    /// AppKit calls this through `NSViewToolTipOwner` for the tooltip registered
+    /// in `resetCursorRects`. `point` arrives in this view's coordinates, which
+    /// is the space the marker rects are laid out in.
     func view(
         _ view: NSView,
         stringForToolTip tag: NSView.ToolTipTag,

@@ -106,6 +106,7 @@ final class AppState {
     typealias ExportFolderBookmarkResolver = @MainActor @Sendable (Data, inout Bool) throws -> URL
     typealias CloseConfirmation = @MainActor () -> CloseConfirmationResult
     typealias ExternalProjectChangeConfirmation = @MainActor () -> ExternalProjectChangeResolution
+    typealias ConfirmationHandler = @MainActor (_ title: String, _ message: String) -> Bool
     typealias SaveAsDestinationProvider = @MainActor () -> URL?
 
     enum CloseConfirmationResult {
@@ -134,6 +135,9 @@ final class AppState {
     private let exportFolderBookmarkResolver: ExportFolderBookmarkResolver
     private let closeConfirmation: CloseConfirmation?
     let externalChangeConfirmation: ExternalProjectChangeConfirmation?
+    /// Test/QA seam for the generic yes/no alert. Production leaves it `nil` and
+    /// the alert runs modally.
+    private let confirmationHandler: ConfirmationHandler?
     let saveProjectCopyHandler: (@MainActor () -> Bool)?
     let saveAsDestinationProvider: SaveAsDestinationProvider?
 
@@ -148,6 +152,10 @@ final class AppState {
     var trackedProjectFileURL: URL?
     var trackedProjectFileSnapshot: ProjectFileSnapshot?
     var declinedExternalProjectSnapshot: ProjectFileSnapshot?
+    /// URL whose unreadable-file prompt the user already cancelled. There is no
+    /// on-disk hash to remember for an unreadable file, so the URL stands in for
+    /// it and only background autosaves honour it; a manual save asks again.
+    var declinedUnreadableProjectFileURL: URL?
     /// URL of a file whose "missing" error was already shown, so the one-shot
     /// notice is not repeated on every autosave.
     var reportedMissingProjectFileURL: URL?
@@ -189,6 +197,7 @@ final class AppState {
         securityScope: SecurityScopedResourceAccess = .live,
         closeConfirmation: CloseConfirmation? = nil,
         externalChangeConfirmation: ExternalProjectChangeConfirmation? = nil,
+        confirmationHandler: ConfirmationHandler? = nil,
         saveProjectCopyHandler: (@MainActor () -> Bool)? = nil,
         saveAsDestinationProvider: SaveAsDestinationProvider? = nil,
         exportFolderBookmarkCreator: @escaping ExportFolderBookmarkCreator = { url in
@@ -213,6 +222,7 @@ final class AppState {
         self.securityScope = securityScope
         self.closeConfirmation = closeConfirmation
         self.externalChangeConfirmation = externalChangeConfirmation
+        self.confirmationHandler = confirmationHandler
         self.saveProjectCopyHandler = saveProjectCopyHandler
         self.saveAsDestinationProvider = saveAsDestinationProvider
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
@@ -445,6 +455,7 @@ final class AppState {
             language: resolvedCurrentLanguage,
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
+        willReplaceOpenProject()
         projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true, recalculateDurations: false)
         resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
@@ -456,6 +467,7 @@ final class AppState {
     func openDemoProject() {
         guard prepareForProjectReplacement() else { return }
         let project = SampleData.demoProject(language: resolvedCurrentLanguage)
+        willReplaceOpenProject()
         projectStore.openProject(
             project,
             fileURL: nil,
@@ -488,6 +500,9 @@ final class AppState {
                 try FrameScriptFileStore.readWithData(from: url)
             }
             let project = opened.project
+            // The file was read and decoded: only now may the open project and
+            // its teleprompter/AI state be dropped.
+            willReplaceOpenProject()
             projectStore.openProject(
                 project,
                 fileURL: url,
@@ -524,6 +539,7 @@ final class AppState {
             try securityScope.withAccess(to: url) {
                 let opened = try FrameScriptFileStore.readWithData(from: url)
                 let project = opened.project
+                willReplaceOpenProject()
                 projectStore.openProject(
                     project,
                     fileURL: url,
@@ -800,13 +816,21 @@ final class AppState {
         guard !refuseProjectChangeWhileRecording() else { return false }
         flushActiveEditorBoundary()
         guard !hasOpenProject || confirmCloseProjectIfNeeded() else { return false }
-        // The open project is about to be replaced: drop per-project runtime
-        // state (AI run, editor restoration, teleprompter) before the new
-        // document lands.
+        return true
+    }
+
+    /// Drops per-project runtime state and tells observers (AI runtime,
+    /// teleprompter) that the open document is about to be replaced.
+    ///
+    /// Call it only after the replacement document has been read or built, just
+    /// before `projectStore.openProject(...)`. Posting it in
+    /// `prepareForProjectReplacement` would tear down the current project's
+    /// teleprompter and AI run even when the open then fails and the old
+    /// project stays open.
+    private func willReplaceOpenProject() {
         aiState.isAnalyzing = false
         editorState.resetScriptEditorStates()
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
-        return true
     }
 
     func touchProject() {
@@ -1210,11 +1234,12 @@ final class AppState {
            refuseProjectChangeWhileRecording() {
             return
         }
+        // Nothing to delete: do not ask for confirmation for a no-op.
+        guard let selectedSceneIndex else { return }
         if settings.generalPreferences.confirmBeforeDeleting,
            !confirm(title: localized("dialog.deleteScene.title"), message: localized("dialog.deleteScene.message")) {
             return
         }
-        guard let selectedSceneIndex else { return }
         // `selectedSceneIndex` is an index into visual (sorted) order, while
         // `project.scenes` keeps insertion order. Subscripting storage with it
         // selects an unrelated scene after "Add Scene After".
@@ -1787,6 +1812,9 @@ final class AppState {
     }
 
     private func confirm(title: String, message: String, confirmButtonTitle: String? = nil) -> Bool {
+        if let confirmationHandler {
+            return confirmationHandler(title, message)
+        }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
