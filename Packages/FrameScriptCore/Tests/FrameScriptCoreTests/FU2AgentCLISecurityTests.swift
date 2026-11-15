@@ -67,6 +67,10 @@ struct FU2AgentCLISecurityTests {
         )
         #expect((config["mcpServers"] as? [String: Any])?.isEmpty == true)
 
+        // Every built-in tool is disabled, including ones newer than the deny list.
+        let toolsIndex = try #require(arguments.firstIndex(of: "--tools"))
+        #expect(arguments[safe: toolsIndex + 1] == "")
+
         let deniedIndex = try #require(arguments.firstIndex(of: "--disallowedTools"))
         let deniedList = try #require(arguments[safe: deniedIndex + 1])
         let names = Set(deniedList.split(separator: ",").map(String.init))

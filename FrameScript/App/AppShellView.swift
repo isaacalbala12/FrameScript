@@ -129,13 +129,19 @@ struct AppShellView: View {
     /// (uiux 20).
     static let aiPanelMinimumWindowWidth: CGFloat = 1080
 
+    static func showsAIReviewPanel(enabled: Bool, windowWidth: CGFloat) -> Bool {
+        enabled && windowWidth >= aiPanelMinimumWindowWidth
+    }
+
     var body: some View {
         @Bindable var settingsStore = appState.settingsStore
         let sidebarWidth = settingsStore.settings.windowPreferences.sidebarWidth
         let hidesSidebarForFocus = appState.isFocusModeEnabled
             && appState.settings.windowPreferences.focusModeBehavior == .hidePanels
-        let showsAIReviewPanel = appState.settings.editorPreferences.showAIReviewPanel
-            && windowWidth >= Self.aiPanelMinimumWindowWidth
+        let showsAIReviewPanel = Self.showsAIReviewPanel(
+            enabled: appState.settings.editorPreferences.showAIReviewPanel,
+            windowWidth: windowWidth
+        )
 
         VStack(spacing: 0) {
             TopToolbar()

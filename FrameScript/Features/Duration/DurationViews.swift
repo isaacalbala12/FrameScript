@@ -132,7 +132,7 @@ struct SceneDurationPopover: View {
                     )
                 )
                 durationRow(
-                    label: appState.localized("duration.real"),
+                    label: appState.localized("duration.realLabel"),
                     value: summary.real.map(DurationEstimator.formatted) ?? appState.localized("duration.noReal"),
                     detail: realTakeDetail
                 )

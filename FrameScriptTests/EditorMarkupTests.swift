@@ -870,10 +870,18 @@ final class EditorMarkupTests: FrameScriptTestCase {
         // The synchronous path is now text copies + the incremental styler +
         // task scheduling; the full parse runs once, off-main, after the pause.
         // The structural guard is `maxApplied` below (the incremental window);
-        // Debug builds run in parallel with the snapshot suites, so they keep
-        // 5× timing headroom like the other perf budgets (WP8 item 2).
+        // Debug builds run in parallel with the snapshot suites, so the timing
+        // budget gets 2× headroom there; the old full-parse path was >100 ms.
+        // Structural guard (load-independent): each keystroke restyles only
+        // the paragraphs around the caret, never the whole 20k-word script.
+        XCTAssertGreaterThan(maxApplied, 0)
+        XCTAssertLessThan(
+            maxApplied,
+            (text as NSString).length / 20,
+            "The styler must stay incremental per keystroke; maxApplied=\(maxApplied)"
+        )
         #if DEBUG
-        let averageLimit = 150.0
+        let averageLimit = 60.0
         #else
         let averageLimit = 30.0
         #endif

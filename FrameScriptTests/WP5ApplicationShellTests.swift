@@ -30,6 +30,32 @@ final class WP5ApplicationShellTests: FrameScriptTestCase {
         XCTAssertEqual(name, String(reflecting: ThemedSceneRoot<AppRootView>.self))
     }
 
+    /// Wiring guard: a `Scene` cannot be instantiated headless, so this pins the
+    /// two lines that stop every launch from adding a new window-frame key to
+    /// the user's preferences (stable `WindowGroup` id + the one-time purge).
+    func testMainSceneKeepsTheStableIdentifierAndTheLegacyKeyPurge() throws {
+        let appFile = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("FrameScript/App/FrameScriptApp.swift")
+        let source = try String(contentsOf: appFile, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("WindowGroup(id: \"main\")"))
+        XCTAssertTrue(source.contains("LegacyWindowFrameKeys.purgeIfNeeded"))
+    }
+
+    // MARK: - AI panel in narrow windows
+
+    func testAIReviewPanelHidesBelowTheMinimumWindowWidth() {
+        let minimum = AppShellView.aiPanelMinimumWindowWidth
+        XCTAssertEqual(minimum, 1080)
+        XCTAssertTrue(AppShellView.showsAIReviewPanel(enabled: true, windowWidth: minimum))
+        XCTAssertTrue(AppShellView.showsAIReviewPanel(enabled: true, windowWidth: 1440))
+        XCTAssertFalse(AppShellView.showsAIReviewPanel(enabled: true, windowWidth: minimum - 1))
+        XCTAssertFalse(AppShellView.showsAIReviewPanel(enabled: true, windowWidth: 980))
+        XCTAssertFalse(AppShellView.showsAIReviewPanel(enabled: false, windowWidth: 1440))
+    }
+
     // MARK: - Application menu (item 10)
 
     @MainActor

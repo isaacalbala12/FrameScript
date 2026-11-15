@@ -4,6 +4,7 @@ extension L10n {
     static let durationStrings: [AppLanguage: [String: String]] = [
         .english: [
             "duration.real": "real",
+            "duration.realLabel": "Real",
             "duration.estimated": "Estimated",
             "duration.atWordsPerMinute": "at %d words/min",
             "duration.noReal": "Not recorded",
@@ -41,6 +42,7 @@ extension L10n {
         ],
         .spanish: [
             "duration.real": "real",
+            "duration.realLabel": "Real",
             "duration.estimated": "Estimado",
             "duration.atWordsPerMinute": "a %d palabras/min",
             "duration.noReal": "Sin grabar",
@@ -78,6 +80,7 @@ extension L10n {
         ],
         .russian: [
             "duration.real": "факт",
+            "duration.realLabel": "Факт",
             "duration.estimated": "Оценка",
             "duration.atWordsPerMinute": "при %d слов/мин",
             "duration.noReal": "Не записано",

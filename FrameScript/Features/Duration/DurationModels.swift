@@ -44,11 +44,7 @@ enum DurationNumber {
 extension AppLanguage {
     /// Project script language for newly created content.
     var contentLanguageCode: String {
-        switch L10n.resolve(self) {
-        case .system, .english: "en"
-        case .spanish: "es"
-        case .russian: "ru"
-        }
+        contentLanguageCode(preferredLanguages: Locale.preferredLanguages)
     }
 }
 

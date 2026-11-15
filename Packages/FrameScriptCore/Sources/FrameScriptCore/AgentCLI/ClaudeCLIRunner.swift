@@ -11,6 +11,7 @@ import Foundation
 ///     --permission-prompts     "none": anything that would prompt is denied
 ///     --strict-mcp-config      only servers from --mcp-config
 ///     --mcp-config             JSON files or strings
+///     --tools                  "" disables every built-in tool
 ///     --disallowedTools        comma or space separated tool names
 ///     --model <model>          Alias ('fable', 'opus', 'sonnet') or full name
 ///
@@ -68,6 +69,10 @@ public struct ClaudeCLIRunner: AgentCLIRunner {
             // Never load the user's MCP servers: strict config plus an empty
             // inline configuration means the MCP surface is empty.
             "--strict-mcp-config", "--mcp-config", Self.emptyMCPConfig,
+            // `--tools ""` disables every built-in tool, including tools added
+            // to Claude Code after this list was written; the deny list stays
+            // as a second layer.
+            "--tools", "",
             "--disallowedTools", Self.deniedTools
         ]
         if let model = request.model.modelSlug?.nilIfBlank {
