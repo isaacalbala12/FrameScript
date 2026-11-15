@@ -1389,7 +1389,16 @@ extension FrameScriptDocument {
         public var isAutomatic: Bool
         public var label: String
         /// zlib-compressed payload, base64-encoded by JSONEncoder.
-        public var compressedPayload: Data
+        public var compressedPayload: Data {
+            didSet {
+                if compressedPayload != oldValue {
+                    encodedPayloadBase64 = nil
+                }
+            }
+        }
+        /// Base64 text exactly as it was read from a file. Writing an unchanged
+        /// payload reuses it instead of re-encoding every snapshot on save.
+        public private(set) var encodedPayloadBase64: String?
 
         public init(
             id: UUID = UUID(),
@@ -1397,7 +1406,8 @@ extension FrameScriptDocument {
             name: String? = nil,
             isAutomatic: Bool = true,
             label: String = "",
-            compressedPayload: Data = Data()
+            compressedPayload: Data = Data(),
+            encodedPayloadBase64: String? = nil
         ) {
             self.id = id
             self.createdAt = createdAt
@@ -1405,6 +1415,7 @@ extension FrameScriptDocument {
             self.isAutomatic = isAutomatic
             self.label = label
             self.compressedPayload = compressedPayload
+            self.encodedPayloadBase64 = encodedPayloadBase64
         }
 
         enum CodingKeys: String, CodingKey {
@@ -1423,7 +1434,43 @@ extension FrameScriptDocument {
             name = try container.decodeIfPresent(String.self, forKey: .name)
             isAutomatic = try container.decodeIfPresent(Bool.self, forKey: .isAutomatic) ?? true
             label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
-            compressedPayload = try container.decodeIfPresent(Data.self, forKey: .compressedPayload) ?? Data()
+            guard let base64 = try container.decodeIfPresent(String.self, forKey: .compressedPayload) else {
+                compressedPayload = Data()
+                encodedPayloadBase64 = nil
+                return
+            }
+            guard let payload = Data(base64Encoded: base64) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .compressedPayload,
+                    in: container,
+                    debugDescription: "Invalid base64 version snapshot payload"
+                )
+            }
+            compressedPayload = payload
+            encodedPayloadBase64 = base64
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(id, forKey: .id)
+            try container.encode(createdAt, forKey: .createdAt)
+            try container.encodeIfPresent(name, forKey: .name)
+            try container.encode(isAutomatic, forKey: .isAutomatic)
+            try container.encode(label, forKey: .label)
+            try container.encode(
+                encodedPayloadBase64 ?? compressedPayload.base64EncodedString(),
+                forKey: .compressedPayload
+            )
+        }
+
+        /// The base64 cache is an encoding detail, never part of the value.
+        public static func == (lhs: VersionSnapshot, rhs: VersionSnapshot) -> Bool {
+            lhs.id == rhs.id
+                && lhs.createdAt == rhs.createdAt
+                && lhs.name == rhs.name
+                && lhs.isAutomatic == rhs.isAutomatic
+                && lhs.label == rhs.label
+                && lhs.compressedPayload == rhs.compressedPayload
         }
     }
 

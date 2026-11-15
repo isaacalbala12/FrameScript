@@ -372,7 +372,8 @@ extension VersionSnapshot {
             name: name,
             isAutomatic: isAutomatic,
             label: label,
-            compressedPayload: compressedPayload
+            compressedPayload: compressedPayload,
+            encodedPayloadBase64: encodedPayloadBase64
         )
     }
 }

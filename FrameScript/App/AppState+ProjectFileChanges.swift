@@ -106,6 +106,7 @@ extension AppState {
     func checkForExternalProjectChanges() {
         guard projectStore.hasOpenProject,
               !projectStore.isBuiltInDemo,
+              !projectStore.hasPendingBackgroundWrite,
               !externalChangePromptIsActive,
               let url = projectStore.currentFileURL else {
             return

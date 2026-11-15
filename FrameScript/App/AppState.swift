@@ -236,6 +236,7 @@ final class AppState {
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
             self?.durationConfiguration(for: scene) ?? .standard
         }
+        self.projectStore.markAllDurationsDirty()
         self.projectStore.markupReviewRefreshHandler = { [weak self] in
             self?.scheduleRhythmReview()
         }
@@ -575,10 +576,21 @@ final class AppState {
         openProject()
     }
 
+    /// Waits for a background autosave and adopts its bytes as the new
+    /// external-change baseline, so the pre-write check does not mistake our own
+    /// write for an external edit.
+    private func syncPendingBackgroundSave() {
+        guard projectStore.waitForBackgroundWrite() != nil else { return }
+        if let url = projectStore.currentFileURL, let data = projectStore.lastSavedFileData {
+            recordProjectFileSnapshot(data: data, at: url)
+        }
+    }
+
     @discardableResult
     func saveProject() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        syncPendingBackgroundSave()
         guard let url = projectStore.currentFileURL else { return saveProjectAs() }
         switch prepareProjectFileForWrite() {
         case .proceed:
@@ -607,6 +619,7 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        syncPendingBackgroundSave()
         let url: URL
         if let saveAsDestinationProvider {
             guard let chosenURL = saveAsDestinationProvider() else { return false }
@@ -1674,10 +1687,18 @@ final class AppState {
               projectStore.hasUnsavedFileChanges else {
             return
         }
+        // A write that is already running carries the edits up to its snapshot.
+        // Starting a second one would queue behind it; the next edit or the next
+        // interval starts a new save with the newer text.
+        guard !projectStore.hasPendingBackgroundWrite else { return }
         switch prepareProjectFileForWrite(honoringDeclinedConflict: true, reportsMissingFile: false) {
         case .proceed:
             break
         case .handled, .declined, .failed:
+            return
+        }
+        if projectStore.canSaveInBackground {
+            startBackgroundAutosave(at: url)
             return
         }
         do {
@@ -1689,6 +1710,45 @@ final class AppState {
         } catch {
             Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             errorCenter.presentAutosave(AppError.project(error, fileURL: projectStore.currentFileURL, operation: .autosave))
+        }
+    }
+
+    /// Snapshot and write off the main actor. The write is atomic and serialized
+    /// with every other write; `completeBackgroundSave` keeps the project dirty
+    /// when an edit landed while the bytes were being written.
+    private func startBackgroundAutosave(at url: URL) {
+        let didAccess = securityScope.start(url)
+        let pending: ProjectStore.BackgroundSave
+        do {
+            pending = try projectStore.startBackgroundSave(wordsPerMinute: currentDurationWordsPerMinute)
+        } catch {
+            if didAccess {
+                securityScope.stop(url)
+            }
+            Self.projectFilesLogger.error("Operation autosave start failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+            errorCenter.presentAutosave(AppError.project(error, fileURL: url, operation: .autosave))
+            return
+        }
+        Task { @MainActor [weak self] in
+            let result = await pending.task.result
+            if didAccess {
+                self?.securityScope.stop(url)
+            }
+            guard let self else { return }
+            self.projectStore.completeBackgroundSave(pending, result: result)
+            switch result {
+            case .success:
+                self.recordProjectFileSnapshotAfterSave(at: url)
+                self.errorCenter.clearAutosaveFailureSuppression()
+                if self.projectStore.hasUnsavedFileChanges {
+                    self.scheduleAutosaveIfNeeded()
+                }
+            case .failure(let error):
+                Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+                self.errorCenter.presentAutosave(
+                    AppError.project(error, fileURL: url, operation: .autosave)
+                )
+            }
         }
     }
 
@@ -2084,6 +2144,10 @@ final class ProjectStore {
         case missingFileURL
     }
 
+    enum ProjectFileBackgroundSaveError: Error {
+        case unavailable
+    }
+
     private var isConfigured = false
     private(set) var project: FrameProject
     private(set) var hasOpenProject = false
@@ -2099,6 +2163,24 @@ final class ProjectStore {
     /// Text hash per scene at the last full segmentation. Unchanged scenes keep
     /// their segments, so a save does not re-split the whole script.
     private var segmentedTextHashes: [UUID: String] = [:]
+    /// Scenes whose stored duration must be recomputed on the next duration
+    /// pass. Typing a character dirties one scene, not the whole project.
+    private var durationDirtySceneIDs: Set<UUID> = []
+    /// Bumped on every document mutation. A background save only clears the
+    /// dirty flag when nothing changed after its snapshot.
+    private var contentRevision = 0
+    /// Last background write, used to serialize writes and to let close/quit
+    /// wait for a pending save.
+    private var backgroundWriteTask: Task<Data, Error>?
+    private var backgroundWriteID: UUID?
+    /// True while bytes written off the main actor are not reflected in the
+    /// external-change baseline yet.
+    var hasPendingBackgroundWrite: Bool { backgroundWriteTask != nil }
+    private var textRevisions: [UUID: Int] = [:]
+    private var textHashCache: [UUID: (revision: Int, hash: String)] = [:]
+    /// Configuration used by the last duration pass. A settings change without
+    /// a text edit still forces one full pass, exactly like the old save path.
+    private var lastDurationConfiguration: DurationConfiguration?
     private let projectWriter: ((FrameProject, URL) throws -> Void)?
     /// Resolves the markup-aware duration configuration for a scene. Set by
     /// `AppState`; a closure keeps this store independent from settings.
@@ -2112,7 +2194,7 @@ final class ProjectStore {
     ) {
         self.project = project
         self.projectWriter = projectWriter
-        recalculateDurations(wordsPerMinute: AppSettings.defaults.editorPreferences.wordsPerMinute)
+        recalculateAllDurations(wordsPerMinute: AppSettings.defaults.editorPreferences.wordsPerMinute)
     }
 
     func setSegmentSplitMode(_ splitMode: SegmentType) {
@@ -2121,10 +2203,37 @@ final class ProjectStore {
 
     func configure(wordsPerMinute: Int) {
         isConfigured = true
-        recalculateDurations(wordsPerMinute: wordsPerMinute)
+        recalculateAllDurations(wordsPerMinute: wordsPerMinute)
     }
 
     var isBuiltInDemo: Bool { origin == .builtInDemo }
+
+    /// The injected writer seam is synchronous by contract (tests, diagnostics
+    /// and the CLI rely on the bytes being on disk when the call returns).
+    /// Production has no writer and can encode/write off the main actor.
+    var canSaveInBackground: Bool { projectWriter == nil }
+
+    /// Cached SHA-256 of a scene's script text. Scenes without takes never ask
+    /// for it; scenes with takes asked for it on every keystroke before.
+    func textHash(for scene: Scene) -> String {
+        let revision = textRevisions[scene.id, default: 0]
+        if let cached = textHashCache[scene.id], cached.revision == revision {
+            return cached.hash
+        }
+        let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        textHashCache[scene.id] = (revision, hash)
+        return hash
+    }
+
+    private func bumpTextRevision(for sceneID: UUID) {
+        textRevisions[sceneID, default: 0] &+= 1
+    }
+
+    private func resetTextCaches() {
+        textRevisions.removeAll()
+        textHashCache.removeAll()
+        segmentedTextHashes.removeAll()
+    }
 
     func openProject(
         _ project: FrameProject,
@@ -2139,10 +2248,16 @@ final class ProjectStore {
         self.origin = origin
         hasOpenProject = true
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
         if recalculateDurations {
-            self.recalculateDurations(wordsPerMinute: wordsPerMinute)
+            recalculateAllDurations(wordsPerMinute: wordsPerMinute)
+        } else {
+            // Trust the estimates stored in the file (one full pass on open was
+            // duplicate work). Only a missing/implausible value needs a parse.
+            markScenesWithInvalidDurationsDirty()
         }
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
@@ -2156,7 +2271,9 @@ final class ProjectStore {
         origin = .normal
         project = SampleData.defaultProject
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
     }
 
@@ -2175,7 +2292,36 @@ final class ProjectStore {
         try saveCurrentProject(to: currentFileURL, wordsPerMinute: wordsPerMinute)
     }
 
+    /// Result of a write that runs off the main actor.
+    struct BackgroundSave: Sendable {
+        let id: UUID
+        let url: URL
+        let projectID: UUID
+        let revision: Int
+        let task: Task<Data, Error>
+    }
+
+    private final class BackgroundWriteBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Result<Data, Error>?
+
+        func store(_ result: Result<Data, Error>) {
+            lock.lock()
+            stored = result
+            lock.unlock()
+        }
+
+        func read() -> Result<Data, Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+    }
+
     func saveCurrentProject(to url: URL, wordsPerMinute: Int) throws {
+        // A pending background write must land before this one so an older
+        // snapshot can never overwrite the newer bytes.
+        waitForBackgroundWrite()
         prepareForSave(wordsPerMinute: wordsPerMinute)
         if currentFileURL != url {
             // Save As: the destination may belong to another project. Back it up
@@ -2206,6 +2352,81 @@ final class ProjectStore {
         saveState = .saved
     }
 
+    /// Snapshots the model on the main actor, then encodes and writes it on a
+    /// detached task. The next save chains after this one, so writes to the same
+    /// URL can never complete out of order.
+    func startBackgroundSave(wordsPerMinute: Int) throws -> BackgroundSave {
+        guard projectWriter == nil else {
+            throw ProjectFileBackgroundSaveError.unavailable
+        }
+        guard let url = currentFileURL else { throw ProjectFileError.missingFileURL }
+        prepareForSave(wordsPerMinute: wordsPerMinute)
+        BackupsCenter.backUpBeforeOverwrite(project: project, fileURL: url)
+        let document = FrameScriptDocument(project: project)
+        let projectID = project.id
+        let revision = contentRevision
+        let previous = backgroundWriteTask
+        saveState = .autosaving
+        let task = Task.detached(priority: .userInitiated) {
+            if let previous {
+                _ = try? await previous.value
+            }
+            let data = try FrameScriptDocumentCodec.encode(document)
+            try FrameScriptDocumentCodec.writeEncoded(data, to: url)
+            return data
+        }
+        backgroundWriteTask = task
+        let saveID = UUID()
+        backgroundWriteID = saveID
+        return BackgroundSave(id: saveID, url: url, projectID: projectID, revision: revision, task: task)
+    }
+
+    /// Applies a completed background write. An edit that landed while the
+    /// write was running keeps the project dirty instead of being marked saved.
+    func completeBackgroundSave(_ save: BackgroundSave, result: Result<Data, Error>) {
+        if backgroundWriteID == save.id {
+            backgroundWriteTask = nil
+            backgroundWriteID = nil
+        }
+        guard project.id == save.projectID, currentFileURL == save.url else { return }
+        switch result {
+        case .success(let data):
+            lastSavedFileData = data
+            if contentRevision == save.revision {
+                hasUnsavedFileChanges = false
+                saveState = .saved
+            } else {
+                hasUnsavedFileChanges = true
+                saveState = .edited
+            }
+        case .failure:
+            lastSavedFileData = nil
+            hasUnsavedFileChanges = true
+            saveState = .edited
+        }
+    }
+
+    /// Blocks until the last background write finished. Only used by the
+    /// synchronous save paths and by close/quit, which must not race a write.
+    @discardableResult
+    func waitForBackgroundWrite() -> Result<Data, Error>? {
+        guard let task = backgroundWriteTask else { return nil }
+        backgroundWriteTask = nil
+        backgroundWriteID = nil
+        let box = BackgroundWriteBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached(priority: .userInitiated) {
+            box.store(await task.result)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        let result = box.read()
+        if case .success(let data)? = result {
+            lastSavedFileData = data
+        }
+        return result
+    }
+
     func duplicateProject(copySuffix: String) -> FrameProject {
         let copy = project.copied(title: "\(project.title) \(copySuffix)")
         project = copy
@@ -2214,7 +2435,9 @@ final class ProjectStore {
         hasUnsavedFileChanges = true
         saveState = .edited
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
         return copy
     }
@@ -2226,7 +2449,9 @@ final class ProjectStore {
         hasUnsavedFileChanges = false
         saveState = .saved
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
     }
 
@@ -2291,6 +2516,9 @@ final class ProjectStore {
         }
         project.scenes.remove(at: storageIndex)
         segmentedTextHashes[scene.id] = nil
+        textRevisions[scene.id] = nil
+        textHashCache[scene.id] = nil
+        durationDirtySceneIDs.remove(scene.id)
         EditorMarkupSessionCaches.removeScene(scene.id)
         normalizeSceneOrder()
         markProjectDirty()
@@ -2311,20 +2539,41 @@ final class ProjectStore {
 
     func markProjectDirty() {
         project.updatedAt = Date()
+        contentRevision &+= 1
         hasUnsavedFileChanges = true
         saveState = .edited
+    }
+
+    /// Marks every scene for one duration pass. Used when the resolved pace can
+    /// differ from the stored estimates without any text edit.
+    func markAllDurationsDirty() {
+        durationDirtySceneIDs = Set(project.scenes.map(\.id))
+    }
+
+    /// Records that a caller just recomputed every estimate with this
+    /// configuration, so the next save does not repeat the pass.
+    func adoptDurationConfiguration(_ configuration: DurationConfiguration) {
+        lastDurationConfiguration = configuration
+        durationDirtySceneIDs.removeAll()
     }
 
     func commitScriptText(_ text: String, sceneID: UUID, previousText: String? = nil) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         let oldText = previousText ?? scene.scriptText
+        let changed = scene.scriptText != text
         scene.scriptText = text
+        if changed {
+            bumpTextRevision(for: sceneID)
+            durationDirtySceneIDs.insert(sceneID)
+            contentRevision &+= 1
+        }
         refreshProductionAnchors(in: scene, previousText: oldText)
     }
 
     func updateCurrentSceneMetrics(sceneID: UUID, wordsPerMinute: Int) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        durationDirtySceneIDs.remove(sceneID)
     }
 
     private func prepareForSave(wordsPerMinute: Int) {
@@ -2334,10 +2583,11 @@ final class ProjectStore {
     }
 
     func synchronizeTextSegments(splitMode: SegmentType, wordsPerMinute: Int, markUnsaved: Bool = true) {
+        refreshDurationsIfConfigurationChanged(wordsPerMinute: wordsPerMinute)
         let splitModeChanged = segmentSplitMode != splitMode
         segmentSplitMode = splitMode
         for scene in project.scenes {
-            let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+            let hash = textHash(for: scene)
             guard splitModeChanged || segmentedTextHashes[scene.id] != hash else { continue }
             synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
             segmentedTextHashes[scene.id] = hash
@@ -2354,7 +2604,7 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
-        segmentedTextHashes[sceneID] = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        segmentedTextHashes[sceneID] = textHash(for: scene)
         // The scene-level estimate is owned by `SceneMetricsDebouncer`: one
         // off-main parse per settled edit. Recomputing it here would parse the
         // same script a second time on the main actor, just before the debounced
@@ -2397,11 +2647,16 @@ final class ProjectStore {
     }
 
     private func refreshProductionAnchors(in scene: Scene, previousText: String? = nil) {
+        let edit = previousText.map {
+            TextAnchorRepair.contiguousEdit(from: $0, to: scene.scriptText)
+        }
         for item in scene.bRollItems {
             guard item.textAnchor != nil else { continue }
-            let repaired = previousText == nil
-                ? TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
-                : TextAnchorRepair.repair(item.textAnchor, from: previousText!, to: scene.scriptText)
+            let repaired = if let previousText, let edit {
+                TextAnchorRepair.repair(item.textAnchor, from: previousText, to: scene.scriptText, edit: edit)
+            } else {
+                TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
+            }
             guard let repaired else {
                 item.textAnchor = nil
                 item.linkedSegmentID = nil
@@ -2411,9 +2666,11 @@ final class ProjectStore {
         }
         for item in scene.editingItems {
             guard item.textAnchor != nil else { continue }
-            let repaired = previousText == nil
-                ? TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
-                : TextAnchorRepair.repair(item.textAnchor, from: previousText!, to: scene.scriptText)
+            let repaired = if let previousText, let edit {
+                TextAnchorRepair.repair(item.textAnchor, from: previousText, to: scene.scriptText, edit: edit)
+            } else {
+                TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
+            }
             guard let repaired else {
                 item.textAnchor = nil
                 item.linkedSegmentID = nil
@@ -2490,8 +2747,56 @@ final class ProjectStore {
 
 
     private func recalculateDurations(wordsPerMinute: Int) {
+        guard !durationDirtySceneIDs.isEmpty else { return }
+        for scene in project.scenes where durationDirtySceneIDs.contains(scene.id) {
+            scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        }
+        durationDirtySceneIDs.removeAll()
+    }
+
+    private func recalculateAllDurations(wordsPerMinute: Int) {
         for scene in project.scenes {
             scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        }
+        durationDirtySceneIDs.removeAll()
+        if lastDurationConfiguration == nil {
+            lastDurationConfiguration = currentDurationConfiguration(wordsPerMinute: wordsPerMinute)
+        }
+    }
+
+    /// A provider or a settings change can imply a different pace without any
+    /// text edit. Detecting it here keeps stored estimates in sync with the
+    /// current configuration, which is what the old every-save pass did.
+    private func refreshDurationsIfConfigurationChanged(wordsPerMinute: Int) {
+        guard !project.scenes.isEmpty else { return }
+        let configuration = currentDurationConfiguration(wordsPerMinute: wordsPerMinute)
+        guard let lastConfiguration = lastDurationConfiguration else {
+            lastDurationConfiguration = configuration
+            return
+        }
+        guard configuration != lastConfiguration else { return }
+        lastDurationConfiguration = configuration
+        durationDirtySceneIDs = Set(project.scenes.map(\.id))
+    }
+
+    private func currentDurationConfiguration(wordsPerMinute: Int) -> DurationConfiguration {
+        if let durationConfigurationProvider,
+           let scene = project.scenes.first {
+            return durationConfigurationProvider(scene)
+        }
+        return DurationConfiguration(wordsPerMinute: Double(wordsPerMinute))
+    }
+
+    /// A stored estimate is trusted on open (the app used to parse the whole
+    /// project twice to rebuild it). Only files with a missing or impossible
+    /// value pay for a pass.
+    private func markScenesWithInvalidDurationsDirty() {
+        for scene in project.scenes {
+            let stored = scene.estimatedDuration
+            let hasText = !scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !stored.isFinite || stored < 0 || (stored == 0 && hasText) {
+                durationDirtySceneIDs.insert(scene.id)
+            }
         }
     }
 
@@ -2635,6 +2940,24 @@ enum TextAnchorRepair {
         FrameScriptDocument.TextAnchorRepair
             .repair(coreAnchor(anchor), from: previousText, to: text)
             .map(appAnchor)
+    }
+
+    static func repair(
+        _ anchor: TextAnchor?,
+        from previousText: String,
+        to text: String,
+        edit: FrameScriptDocument.TextAnchorRepair.ContiguousEdit
+    ) -> TextAnchor? {
+        FrameScriptDocument.TextAnchorRepair
+            .repair(coreAnchor(anchor), from: previousText, to: text, edit: edit)
+            .map(appAnchor)
+    }
+
+    static func contiguousEdit(
+        from previousText: String,
+        to text: String
+    ) -> FrameScriptDocument.TextAnchorRepair.ContiguousEdit {
+        FrameScriptDocument.TextAnchorRepair.contiguousEdit(from: previousText, to: text)
     }
 
     static func current(_ anchor: TextAnchor?, in text: String) -> TextAnchor? {

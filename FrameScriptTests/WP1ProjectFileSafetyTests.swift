@@ -437,6 +437,8 @@ final class WP1ProjectFileSafetyTests: FrameScriptTestCase {
             wordsPerMinute: 150,
             markUnsaved: false
         )
+        let sceneID = try XCTUnwrap(appState.project.scenes.first?.id)
+        appState.commitScriptTextChange(sceneID: sceneID, text: "one two three four five six")
         var providerCalls = 0
         appState.projectStore.durationConfigurationProvider = { _ in
             providerCalls += 1
@@ -445,7 +447,13 @@ final class WP1ProjectFileSafetyTests: FrameScriptTestCase {
 
         XCTAssertTrue(appState.saveProject())
 
-        XCTAssertEqual(providerCalls, appState.project.scenes.count)
+        // WP9: only the edited scene is recomputed, plus the single cheap
+        // configuration probe that detects a pace change without an edit. The
+        // original regression was two passes over the whole project.
+        XCTAssertLessThanOrEqual(providerCalls, appState.project.scenes.count + 1)
+        let saved = try FrameScriptFileStore.read(from: url)
+        let savedScene = try XCTUnwrap(saved.scenes.first(where: { $0.id == sceneID }))
+        XCTAssertGreaterThan(savedScene.estimatedDuration, 0)
     }
 
     // MARK: - Recents on an unmounted volume

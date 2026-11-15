@@ -537,7 +537,25 @@ struct VersionSnapshot: Identifiable, Codable, Hashable, Sendable {
     var isAutomatic: Bool
     var label: String
     /// zlib-compressed payload.
-    var compressedPayload: Data
+    var compressedPayload: Data {
+        didSet {
+            if compressedPayload != oldValue {
+                encodedPayloadBase64 = nil
+            }
+        }
+    }
+    /// Base64 text read from the file. Carried through the app model so saving
+    /// an unchanged history does not base64-encode every payload again.
+    private(set) var encodedPayloadBase64: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case createdAt
+        case name
+        case isAutomatic
+        case label
+        case compressedPayload
+    }
 
     init(
         id: UUID = UUID(),
@@ -545,7 +563,8 @@ struct VersionSnapshot: Identifiable, Codable, Hashable, Sendable {
         name: String? = nil,
         isAutomatic: Bool = true,
         label: String = "",
-        compressedPayload: Data = Data()
+        compressedPayload: Data = Data(),
+        encodedPayloadBase64: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -553,6 +572,62 @@ struct VersionSnapshot: Identifiable, Codable, Hashable, Sendable {
         self.isAutomatic = isAutomatic
         self.label = label
         self.compressedPayload = compressedPayload
+        self.encodedPayloadBase64 = encodedPayloadBase64
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        isAutomatic = try container.decodeIfPresent(Bool.self, forKey: .isAutomatic) ?? true
+        label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
+        guard let base64 = try container.decodeIfPresent(String.self, forKey: .compressedPayload) else {
+            compressedPayload = Data()
+            encodedPayloadBase64 = nil
+            return
+        }
+        guard let payload = Data(base64Encoded: base64) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .compressedPayload,
+                in: container,
+                debugDescription: "Invalid base64 version snapshot payload"
+            )
+        }
+        compressedPayload = payload
+        encodedPayloadBase64 = base64
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(name, forKey: .name)
+        try container.encode(isAutomatic, forKey: .isAutomatic)
+        try container.encode(label, forKey: .label)
+        try container.encode(
+            encodedPayloadBase64 ?? compressedPayload.base64EncodedString(),
+            forKey: .compressedPayload
+        )
+    }
+
+    /// The base64 cache is an encoding detail, never part of the value.
+    static func == (lhs: VersionSnapshot, rhs: VersionSnapshot) -> Bool {
+        lhs.id == rhs.id
+            && lhs.createdAt == rhs.createdAt
+            && lhs.name == rhs.name
+            && lhs.isAutomatic == rhs.isAutomatic
+            && lhs.label == rhs.label
+            && lhs.compressedPayload == rhs.compressedPayload
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(createdAt)
+        hasher.combine(name)
+        hasher.combine(isAutomatic)
+        hasher.combine(label)
+        hasher.combine(compressedPayload)
     }
 }
 

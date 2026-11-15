@@ -1,5 +1,44 @@
 import Foundation
 
+/// Regex literals are compiled when the expression is evaluated, not when the
+/// source is compiled. A parser that calls a helper per line therefore paid a
+/// regex compilation per line. These values are built once and reused.
+///
+/// `Regex` is immutable and safe to share, but it does not conform to
+/// `Sendable`, so the immutable statics are marked `nonisolated(unsafe)`.
+private enum MarkdownRegex {
+    nonisolated(unsafe) static let heading =
+        #/^\s{0,3}(#{1,6})\s+(.+?)\s*$/#
+    nonisolated(unsafe) static let horizontalRule =
+        #/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/#
+    nonisolated(unsafe) static let sceneHeading =
+        #/^\s{0,3}##\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*([—–-])\s*(.+?)\s*$/#
+    nonisolated(unsafe) static let sceneHeadingPrefix =
+        #/^\s{0,3}##\s+\d{1,2}:\d{2}/#
+    nonisolated(unsafe) static let emptySceneTitle =
+        #/^\s{0,3}##\s+\d{1,2}:\d{2}(?::\d{2})?\s*[—–-]\s*$/#
+    nonisolated(unsafe) static let chapter =
+        #/^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(.+?)\s*$/#
+    nonisolated(unsafe) static let cue =
+        #/^\s*\[([A-ZÁÉÍÓÚÜÑ0-9 /-]+?)(?::\s*(.*?))?\]\s*$/#
+    nonisolated(unsafe) static let inlineCue =
+        #/\[([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ0-9 /-]{1,40})(?::[^\]]*)?\](?!\()/#
+    nonisolated(unsafe) static let boldLabel =
+        #/^\s*\*\*(.+?)\*\*\s*:?\s*(.*)$/#
+    nonisolated(unsafe) static let numberedListItem =
+        #/^(\d{1,2})[.)]\s+(.+?)\s*$/#
+    nonisolated(unsafe) static let bulletListItem =
+        #/^[-*+]\s+(.+?)\s*$/#
+    nonisolated(unsafe) static let separatorCell =
+        #/^:?-{3,}:?$/#
+    nonisolated(unsafe) static let markdownLink =
+        #/\[([^\]]+)\]\(([^)]+)\)/#
+    nonisolated(unsafe) static let bareURL =
+        #/https?:\/\/[^\s<>"']+/#
+    nonisolated(unsafe) static let thumbnailConceptHeading =
+        #/^Concepto\s+([A-Z])\s*[—–-]\s*(.+?)(?:\s*[—–-]\s*(Recomendado))?\s*$/#
+}
+
 /// Small, dependency-free Markdown helpers shared by the escaleta and
 /// thumbnail parsers.
 enum MarkdownParsingSupport {
@@ -52,14 +91,14 @@ enum MarkdownParsingSupport {
     // MARK: Headings
 
     static func heading(_ line: String) -> (level: Int, text: String)? {
-        guard let match = line.wholeMatch(of: #/^\s{0,3}(#{1,6})\s+(.+?)\s*$/#) else {
+        guard let match = line.wholeMatch(of: MarkdownRegex.heading) else {
             return nil
         }
         return (match.1.count, text(match.2))
     }
 
     static func isHorizontalRule(_ line: String) -> Bool {
-        line.wholeMatch(of: #/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/#) != nil
+        line.wholeMatch(of: MarkdownRegex.horizontalRule) != nil
     }
 
     /// Removes a trailing horizontal rule from a block, reporting whether it
@@ -113,7 +152,7 @@ enum MarkdownParsingSupport {
         _ line: String
     ) -> (timestampText: String, seconds: Int, separator: String, title: String)? {
         guard let match = line.wholeMatch(
-            of: #/^\s{0,3}##\s+(\d{1,2}:\d{2}(?::\d{2})?)\s*([—–-])\s*(.+?)\s*$/#
+            of: MarkdownRegex.sceneHeading
         ) else {
             return nil
         }
@@ -123,11 +162,11 @@ enum MarkdownParsingSupport {
     }
 
     static func looksLikeSceneHeading(_ line: String) -> Bool {
-        line.firstMatch(of: #/^\s{0,3}##\s+\d{1,2}:\d{2}/#) != nil
+        line.firstMatch(of: MarkdownRegex.sceneHeadingPrefix) != nil
     }
 
     static func looksLikeEmptySceneTitle(_ line: String) -> Bool {
-        line.wholeMatch(of: #/^\s{0,3}##\s+\d{1,2}:\d{2}(?::\d{2})?\s*[—–-]\s*$/#) != nil
+        line.wholeMatch(of: MarkdownRegex.emptySceneTitle) != nil
     }
 
     static func seconds(fromTimestamp timestamp: String) -> Int? {
@@ -145,7 +184,7 @@ enum MarkdownParsingSupport {
     // MARK: Chapters
 
     static func chapter(_ line: String) -> EscaletaChapter? {
-        guard let match = line.wholeMatch(of: #/^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(.+?)\s*$/#),
+        guard let match = line.wholeMatch(of: MarkdownRegex.chapter),
               let minutes = Int(match.1),
               let secondsPart = Int(match.2) else {
             return nil
@@ -173,7 +212,7 @@ enum MarkdownParsingSupport {
     // MARK: Cues
 
     static func cue(_ line: String) -> (label: String, payload: String?)? {
-        guard let match = line.wholeMatch(of: #/^\s*\[([A-ZÁÉÍÓÚÜÑ0-9 /-]+?)(?::\s*(.*?))?\]\s*$/#) else {
+        guard let match = line.wholeMatch(of: MarkdownRegex.cue) else {
             return nil
         }
         let label = text(match.1)
@@ -182,7 +221,7 @@ enum MarkdownParsingSupport {
     }
 
     static func inlineCue(in line: String) -> String? {
-        guard let match = line.firstMatch(of: #/\[([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ0-9 /-]{1,40})(?::[^\]]*)?\](?!\()/#) else {
+        guard let match = line.firstMatch(of: MarkdownRegex.inlineCue) else {
             return nil
         }
         return text(match.1)
@@ -191,7 +230,7 @@ enum MarkdownParsingSupport {
     // MARK: Bold labels
 
     static func boldLabel(_ line: String) -> (label: String, value: String, colonInsideBold: Bool)? {
-        guard let match = line.wholeMatch(of: #/^\s*\*\*(.+?)\*\*\s*:?\s*(.*)$/#) else {
+        guard let match = line.wholeMatch(of: MarkdownRegex.boldLabel) else {
             return nil
         }
         var label = text(match.1)
@@ -218,10 +257,10 @@ enum MarkdownParsingSupport {
         let indent = leading.filter { $0 == " " }.count / 2
         let body = String(line.dropFirst(leading.count))
 
-        if let match = body.wholeMatch(of: #/^(\d{1,2})[.)]\s+(.+?)\s*$/#), let number = Int(match.1) {
+        if let match = body.wholeMatch(of: MarkdownRegex.numberedListItem), let number = Int(match.1) {
             return ListItem(text: text(match.2), marker: .numbered(number), indent: indent, line: lineNumber)
         }
-        if let match = body.wholeMatch(of: #/^[-*+]\s+(.+?)\s*$/#) {
+        if let match = body.wholeMatch(of: MarkdownRegex.bulletListItem) {
             return ListItem(text: text(match.1), marker: .bullet, indent: indent, line: lineNumber)
         }
         return nil
@@ -313,7 +352,7 @@ enum MarkdownParsingSupport {
     }
 
     static func isSeparatorCell(_ cell: String) -> Bool {
-        cell.wholeMatch(of: #/^:?-{3,}:?$/#) != nil
+        cell.wholeMatch(of: MarkdownRegex.separatorCell) != nil
     }
 
     static func alignment(for cell: String) -> EscaletaTableAlignment {
@@ -371,14 +410,14 @@ enum MarkdownParsingSupport {
 
     // MARK: Links
 
-    // Computed properties: `Regex` is not Sendable, so a stored static let
-    // would trip Swift 6 strict concurrency.
+    // Cached instances: a regex literal is compiled when it is evaluated, so
+    // these helpers must not spell the literal on every call.
     static var markdownLinkRegex: Regex<(Substring, Substring, Substring)> {
-        #/\[([^\]]+)\]\(([^)]+)\)/#
+        MarkdownRegex.markdownLink
     }
 
     static var bareURLRegex: Regex<Substring> {
-        #/https?:\/\/[^\s<>"']+/#
+        MarkdownRegex.bareURL
     }
 
     static func linkMatches(in line: String) -> [EscaletaSourceLink] {
@@ -407,7 +446,7 @@ enum MarkdownParsingSupport {
     // MARK: Thumbnail concepts
 
     static func thumbnailConceptHeading(_ heading: String) -> (label: String, text: String, recommended: Bool)? {
-        guard let match = heading.wholeMatch(of: #/^Concepto\s+([A-Z])\s*[—–-]\s*(.+?)(?:\s*[—–-]\s*(Recomendado))?\s*$/#) else {
+        guard let match = heading.wholeMatch(of: MarkdownRegex.thumbnailConceptHeading) else {
             return nil
         }
         return (text(match.1), text(match.2), match.3 != nil)
