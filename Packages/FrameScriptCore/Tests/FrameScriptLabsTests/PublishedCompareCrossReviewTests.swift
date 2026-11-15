@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
 
 @Suite("Cross-review regressions – published compare")
 struct PublishedCompareCrossReviewTests {

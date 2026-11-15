@@ -281,8 +281,7 @@ public enum DurationFormat {
     }
 
     public static func clock(seconds: TimeInterval, rate: FrameRate) -> String {
-        // Durations are display-only; round to the nearest second. Chapter
-        // starts use the frame-accurate, floor-based overload above.
+        // Durations are display-only; round to the nearest second.
         clock(seconds: Int(max(0, seconds).rounded()))
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import OSLog
 
 /// Structural information that the application model cannot represent without
 /// changing the frozen v4 schema. It travels in `FrameProject.topic` as a
@@ -229,6 +230,11 @@ struct EscaletaProjectNotes: Equatable, Sendable {
     static let pacingLabel = "Notas de ritmo:"
     static let metadataLabel = "__framescript_escaleta_metadata__:"
 
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+        category: "EscaletaRoundTrip"
+    )
+
     var isEmpty: Bool {
         promise == nil
             && thesis == nil
@@ -292,9 +298,16 @@ struct EscaletaProjectNotes: Equatable, Sendable {
                 currentLabel = nil
                 currentLines = []
                 let encoded = String(trimmed.dropFirst(metadataLabel.count))
-                if let data = Data(base64Encoded: encoded),
-                   let metadata = try? JSONDecoder().decode(EscaletaRoundTripMetadata.self, from: data) {
-                    notes.metadata = metadata
+                if let data = Data(base64Encoded: encoded) {
+                    do {
+                        notes.metadata = try JSONDecoder().decode(EscaletaRoundTripMetadata.self, from: data)
+                    } catch {
+                        // The document is still usable; only the structure that
+                        // cannot be derived from the app model is lost.
+                        Self.logger.error("Escaleta round-trip metadata could not be decoded.")
+                    }
+                } else {
+                    Self.logger.error("Escaleta round-trip metadata is not valid base64.")
                 }
                 continue
             }

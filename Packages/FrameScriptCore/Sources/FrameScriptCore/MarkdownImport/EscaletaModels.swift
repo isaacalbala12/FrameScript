@@ -42,11 +42,25 @@ public struct EscaletaWarning: Equatable, Sendable {
     public var kind: Kind
     public var message: String
     public var line: Int?
+    /// Values for the localized message. The UI formats the key with them and
+    /// falls back to `message` when the key or the arguments are unavailable.
+    public var arguments: [String]
+    /// Overrides the default `escaleta.warning.<kind>` lookup for warnings that
+    /// share a kind but need a different sentence.
+    public var localizationKey: String?
 
-    public init(kind: Kind, message: String, line: Int? = nil) {
+    public init(
+        kind: Kind,
+        message: String,
+        line: Int? = nil,
+        arguments: [String] = [],
+        localizationKey: String? = nil
+    ) {
         self.kind = kind
         self.message = message
         self.line = line
+        self.arguments = arguments
+        self.localizationKey = localizationKey
     }
 }
 
@@ -293,6 +307,9 @@ public enum EscaletaCueKind: String, Sendable, CaseIterable {
     case screenTable
     case recordingNote
     case rehook
+    /// A non re-hook editing note written by the app exporter. It maps back to
+    /// an `EditingItem` instead of being kept as an unknown note.
+    case montage
     case unknown
 
     /// True for cues that the app turns into B-roll items.
@@ -301,7 +318,7 @@ public enum EscaletaCueKind: String, Sendable, CaseIterable {
         case .image, .bRoll, .capture, .test, .testOnScreen, .proposedTest,
              .record, .comparison, .lowerThird, .graphic, .screenTable:
             return true
-        case .recordingNote, .rehook, .unknown:
+        case .recordingNote, .rehook, .montage, .unknown:
             return false
         }
     }
@@ -374,6 +391,8 @@ public extension EscaletaCueKind {
             self = .recordingNote
         case "RE-HOOK", "REHOOK", "RE HOOK":
             self = .rehook
+        case "MONTAJE", "EDICION", "EDITING":
+            self = .montage
         default:
             if normalized.hasPrefix("PRUEBA") {
                 if normalized.contains("PANTALLA") { self = .testOnScreen }

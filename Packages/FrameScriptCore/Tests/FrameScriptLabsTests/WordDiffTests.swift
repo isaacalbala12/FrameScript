@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
+import FrameScriptCore
 
 @Suite("WordDiff")
 struct WordDiffTests {

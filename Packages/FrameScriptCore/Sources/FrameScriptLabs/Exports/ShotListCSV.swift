@@ -65,10 +65,12 @@ public enum ShotListCSV {
         if escapeFormulas, let first = value.first, "=+-@".contains(first) {
             value = "'" + value
         }
+        // `"\r\n"` is a single grapheme cluster, so `contains("\r")` is false
+        // for Windows line endings. The quoting decision must see scalars.
+        let hasLineBreak = value.unicodeScalars.contains { $0 == "\r" || $0 == "\n" }
         let needsQuoting = value.contains(",")
             || value.contains("\"")
-            || value.contains("\n")
-            || value.contains("\r")
+            || hasLineBreak
             || value.contains("\t")
             || value.hasPrefix(" ")
             || value.hasSuffix(" ")

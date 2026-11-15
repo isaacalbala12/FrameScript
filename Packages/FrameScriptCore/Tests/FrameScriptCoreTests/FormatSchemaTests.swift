@@ -2,6 +2,7 @@ import CoreFoundation
 import Foundation
 import Testing
 @testable import FrameScriptCore
+import FrameScriptLabs
 
 /// Guards `docs/format/fscr-v4.schema.json` against drift from the Swift types.
 ///

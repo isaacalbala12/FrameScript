@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
 
 @Suite("Resolve FCPXML")
 struct ResolveFCPXMLTests {

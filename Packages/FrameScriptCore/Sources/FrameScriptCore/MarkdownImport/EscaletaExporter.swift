@@ -6,6 +6,19 @@ import Foundation
 /// contract round-trip to text that is identical modulo whitespace; documents
 /// with unknown sections keep them verbatim in `unparsedSections`.
 public enum EscaletaExporter {
+    /// Canonical `m:ss` / `h:mm:ss` scene timestamp, clamped to non-negative
+    /// seconds. Shared with the app exporter so both write the same text.
+    public static func timestampText(fromSeconds seconds: Int) -> String {
+        let safe = max(0, seconds)
+        let hours = safe / 3600
+        let minutes = (safe % 3600) / 60
+        let secs = safe % 60
+        if hours > 0 {
+            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", secs))"
+        }
+        return "\(minutes):\(String(format: "%02d", secs))"
+    }
+
     public static func markdown(from document: EscaletaDocument) -> String {
         if document.kind == .thumbnailConcepts, let thumbnail = document.thumbnailConcepts {
             return renderThumbnail(document: document, thumbnail: thumbnail)
@@ -647,10 +660,14 @@ public enum EscaletaExporter {
         }
 
         mutating func appendTable(_ table: ComparisonTable) {
-            if !table.header.isEmpty {
-                lines.append(Self.tableRow(table.header))
-            }
-            let columnCount = max(table.header.count, table.alignments.count)
+            // A header row is required by the parser; synthesize column names
+            // for tables that were created without one instead of writing a
+            // separator-only block that cannot be read back.
+            let columnCount = max(table.header.count, table.alignments.count, table.rows.map(\.count).max() ?? 0, 1)
+            let header = table.header.isEmpty
+                ? (0..<columnCount).map { "Columna \($0 + 1)" }
+                : table.header
+            lines.append(Self.tableRow(header))
             var separatorCells: [String] = []
             for index in 0..<columnCount {
                 let alignment = index < table.alignments.count ? table.alignments[index] : .none
@@ -668,7 +685,18 @@ public enum EscaletaExporter {
         }
 
         static func tableRow(_ cells: [String]) -> String {
-            "|" + cells.map { $0.isEmpty ? " |" : " \($0) |" }.joined()
+            "|" + cells.map { cell in
+                let escaped = escapedTableCell(cell)
+                return escaped.isEmpty ? " |" : " \(escaped) |"
+            }.joined()
+        }
+
+        /// Escapes the two characters that are structural inside a Markdown
+        /// table cell. The parser reads `\|` and `\\` back as one character.
+        static func escapedTableCell(_ cell: String) -> String {
+            cell
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "|", with: "\\|")
         }
 
         mutating func concept(_ concept: ThumbnailConcept) {
@@ -749,14 +777,7 @@ public enum EscaletaExporter {
         }
 
         static func timestamp(from seconds: Int) -> String {
-            let safe = max(0, seconds)
-            let hours = safe / 3600
-            let minutes = (safe % 3600) / 60
-            let secs = safe % 60
-            if hours > 0 {
-                return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", secs))"
-            }
-            return "\(minutes):\(String(format: "%02d", secs))"
+            EscaletaExporter.timestampText(fromSeconds: seconds)
         }
     }
 }

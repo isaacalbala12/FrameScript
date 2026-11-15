@@ -17,9 +17,11 @@ enum EscaletaProjectExporter {
 
         var scenes: [EscaletaScene] = []
         var fallbackStart = 0
-        for scene in project.scenes.sortedByOrder {
+        for (sceneIndex, scene) in project.scenes.sortedByOrder.enumerated() {
             let sceneMeta = sceneMetadata[scene.id.uuidString]
-            let start = sceneMeta?.startSeconds ?? fallbackStart
+            // Metadata is decoded from the project's topic blob; an Int.max
+            // start would overflow the fallback arithmetic below.
+            let start = min(max(sceneMeta?.startSeconds ?? fallbackStart, 0), Int(Self.maximumSeconds))
             let timestamp = sceneMeta?.timestampText ?? formatTimestamp(start)
             scenes.append(
                 EscaletaScene(
@@ -28,6 +30,7 @@ enum EscaletaProjectExporter {
                     title: scene.title,
                     blocks: blocks(
                         from: scene,
+                        sceneIndex: sceneIndex,
                         metadata: sceneMeta,
                         project: project,
                         tableMetadata: metadata?.comparisonTables
@@ -37,7 +40,7 @@ enum EscaletaProjectExporter {
                     isOutlineFallback: sceneMeta?.isOutlineFallback ?? false
                 )
             )
-            fallbackStart = start + max(1, Int((scene.targetDuration ?? scene.estimatedDuration).rounded()))
+            fallbackStart = start + max(1, clampedSeconds(scene.targetDuration ?? scene.estimatedDuration))
         }
 
         let legacyEvidence = metadata == nil
@@ -121,7 +124,7 @@ enum EscaletaProjectExporter {
             seoHeadingLevel: metadata?.seoHeadingLevel ?? 1,
             seoLayout: metadata?.coreSeoLayout ?? .sectioned,
             comparisonTables: project.comparisonTables.enumerated().map { index, table in
-                let tableMeta = tableMetadata(at: index, in: metadata?.comparisonTables)
+                let tableMeta = tableMetadataEntry(at: index, in: metadata?.comparisonTables)
                 return .init(
                     heading: table.title,
                     header: table.header,
@@ -155,17 +158,20 @@ enum EscaletaProjectExporter {
 
     private static func blocks(
         from scene: Scene,
+        sceneIndex: Int,
         metadata: EscaletaRoundTripMetadata.SceneMetadata?,
         project: FrameProject,
         tableMetadata: [EscaletaRoundTripMetadata.TableMetadata]?
     ) -> [EscaletaSceneBlock] {
         let parsed = scriptParts(scene.scriptText)
         let notes = noteLines(scene)
+        let sceneTableIndices = tableIndices(forScene: sceneIndex, project: project, tableMetadata: tableMetadata)
         if let metadata,
            metadata.textBlockCount == parsed.count,
            metadata.bRollCount == scene.bRollItems.count,
            metadata.editingCount == scene.editingItems.count,
-           metadata.noteCount == notes.count {
+           metadata.noteCount == notes.count,
+           metadata.tableCount == sceneTableIndices.count {
             return plannedBlocks(
                 parsed: parsed,
                 notes: notes,
@@ -175,7 +181,13 @@ enum EscaletaProjectExporter {
                 tableMetadata: tableMetadata
             )
         }
-        return fallbackBlocks(from: scene)
+        return fallbackBlocks(
+            from: scene,
+            sceneIndex: sceneIndex,
+            project: project,
+            metadata: metadata,
+            tableMetadata: tableMetadata
+        )
     }
 
     private static func plannedBlocks(
@@ -196,14 +208,14 @@ enum EscaletaProjectExporter {
                     blocks.append(.cue(cue(from: scene.bRollItems[reference.index])))
                 case "editing":
                     guard scene.editingItems.indices.contains(reference.index) else { continue }
-                    blocks.append(.cue(EscaletaCue(label: "RE-HOOK", kind: .rehook)))
+                    blocks.append(editingBlock(from: scene.editingItems[reference.index]))
                 case "note":
                     guard notes.indices.contains(reference.index) else { continue }
                     blocks.append(.cue(cue(fromNote: notes[reference.index])))
                 case "table":
                     guard project.comparisonTables.indices.contains(reference.index) else { continue }
                     let table = project.comparisonTables[reference.index]
-                    let tableMeta = Self.tableMetadata(at: reference.index, in: tableMetadata)
+                    let tableMeta = Self.tableMetadataEntry(at: reference.index, in: tableMetadata)
                     blocks.append(
                         .table(
                             .init(
@@ -234,14 +246,39 @@ enum EscaletaProjectExporter {
         return blocks
     }
 
-    private static func fallbackBlocks(from scene: Scene) -> [EscaletaSceneBlock] {
+    private static func fallbackBlocks(
+        from scene: Scene,
+        sceneIndex: Int,
+        project: FrameProject,
+        metadata: EscaletaRoundTripMetadata.SceneMetadata?,
+        tableMetadata: [EscaletaRoundTripMetadata.TableMetadata]?
+    ) -> [EscaletaSceneBlock] {
         let parsed = scriptParts(scene.scriptText)
         var before: [Int: [BRollItem]] = [:]
         var after: [Int: [BRollItem]] = [:]
         var dangling: [BRollItem] = []
-        var rehookBefore: [Int: [EditingItem]] = [:]
-        var rehookAfter: [Int: [EditingItem]] = [:]
-        var danglingRehooks: [EditingItem] = []
+        var editingBefore: [Int: [EscaletaSceneBlock]] = [:]
+        var editingAfter: [Int: [EscaletaSceneBlock]] = [:]
+        var danglingEditing: [EscaletaSceneBlock] = []
+        var tablesBySlot: [Int: [EscaletaSceneBlock]] = [:]
+        var placedTables: Set<Int> = []
+        let sceneTables = tableIndices(forScene: sceneIndex, project: project, tableMetadata: tableMetadata)
+        let validTables = Set(sceneTables)
+
+        // The imported slot tells where a scene table used to sit. A paragraph
+        // edit changes the text-block count and forces this fallback path; the
+        // table must survive anyway.
+        if let metadata {
+            for (slotIndex, references) in metadata.slots.enumerated() {
+                for reference in references
+                where reference.kind == "table" && validTables.contains(reference.index) {
+                    tablesBySlot[slotIndex, default: []].append(
+                        tableBlock(at: reference.index, project: project, tableMetadata: tableMetadata)
+                    )
+                    placedTables.insert(reference.index)
+                }
+            }
+        }
 
         for item in scene.bRollItems {
             guard let anchor = item.textAnchor,
@@ -256,27 +293,27 @@ enum EscaletaProjectExporter {
             }
         }
 
-        for item in scene.editingItems where isReHook(item) {
+        for item in scene.editingItems {
+            let block = editingBlock(from: item)
             guard let anchor = item.textAnchor,
                   let index = paragraphIndex(for: anchor, in: parsed) else {
-                danglingRehooks.append(item)
+                danglingEditing.append(block)
                 continue
             }
             if notesContainAfter(item.notes) {
-                rehookAfter[index, default: []].append(item)
+                editingAfter[index, default: []].append(block)
             } else {
-                rehookBefore[index, default: []].append(item)
+                editingBefore[index, default: []].append(block)
             }
         }
 
         var blocks: [EscaletaSceneBlock] = []
         for (index, part) in parsed.enumerated() {
+            blocks.append(contentsOf: tablesBySlot[index, default: []])
             for item in before[index, default: []] {
                 blocks.append(.cue(cue(from: item)))
             }
-            for _ in rehookBefore[index, default: []] {
-                blocks.append(.cue(EscaletaCue(label: "RE-HOOK", kind: .rehook)))
-            }
+            blocks.append(contentsOf: editingBefore[index, default: []])
 
             switch part.kind {
             case .paragraph(let text):
@@ -290,16 +327,16 @@ enum EscaletaProjectExporter {
             for item in after[index, default: []] {
                 blocks.append(.cue(cue(from: item)))
             }
-            for _ in rehookAfter[index, default: []] {
-                blocks.append(.cue(EscaletaCue(label: "RE-HOOK", kind: .rehook)))
-            }
+            blocks.append(contentsOf: editingAfter[index, default: []])
         }
 
         for item in dangling {
             blocks.append(.cue(cue(from: item)))
         }
-        for _ in danglingRehooks {
-            blocks.append(.cue(EscaletaCue(label: "RE-HOOK", kind: .rehook)))
+        blocks.append(contentsOf: danglingEditing)
+
+        for index in sceneTables where !placedTables.contains(index) {
+            blocks.append(tableBlock(at: index, project: project, tableMetadata: tableMetadata))
         }
 
         for note in noteLines(scene) {
@@ -307,6 +344,13 @@ enum EscaletaProjectExporter {
         }
 
         return blocks
+    }
+
+    private static func editingBlock(from item: EditingItem) -> EscaletaSceneBlock {
+        if isReHook(item) {
+            return .cue(EscaletaCue(label: "RE-HOOK", kind: .rehook))
+        }
+        return .cue(cue(from: item))
     }
 
     private enum ScriptPartKind {
@@ -391,16 +435,71 @@ enum EscaletaProjectExporter {
     }
 
     private static func cue(from item: BRollItem) -> EscaletaCue {
+        let fallbackLabel = defaultLabel(for: item.sourceType)
+        let description = item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let original = originalCueLine(in: item.notes) {
-            return original
+            // The original cue line is only valid while it still describes the
+            // item. An edited description must reach the escaleta.
+            let originalPayload = original.payload?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? original.label
+            let current = description.isEmpty ? fallbackLabel : description
+            if originalPayload == current {
+                return original
+            }
+            let label = original.label.isEmpty ? fallbackLabel : original.label
+            return EscaletaCue(
+                label: label,
+                payload: description.isEmpty || description == label ? nil : description,
+                kind: EscaletaCueKind(label: label)
+            )
         }
-        let label = defaultLabel(for: item.sourceType)
-        let payload = item.descriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         return EscaletaCue(
-            label: label,
-            payload: payload.isEmpty || payload == label ? nil : payload,
-            kind: EscaletaCueKind(label: label)
+            label: fallbackLabel,
+            payload: description.isEmpty || description == fallbackLabel ? nil : description,
+            kind: EscaletaCueKind(label: fallbackLabel)
         )
+    }
+
+    /// Label used for editing notes that are not re-hooks. The importer turns
+    /// it back into an `EditingItem`.
+    private static let montageLabel = "MONTAJE"
+
+    private static func cue(from item: EditingItem) -> EscaletaCue {
+        let description = editingDescription(item)
+        if let original = originalCueLine(in: item.notes) {
+            let originalPayload = original.payload?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if originalPayload == description {
+                return original
+            }
+            let label = original.label.isEmpty ? montageLabel : original.label
+            return EscaletaCue(
+                label: label,
+                payload: description.isEmpty ? nil : description,
+                kind: .montage
+            )
+        }
+        return EscaletaCue(
+            label: montageLabel,
+            payload: description.isEmpty ? nil : description,
+            kind: .montage
+        )
+    }
+
+    private static func editingDescription(_ item: EditingItem) -> String {
+        let noteText = item.notes
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter {
+                !$0.isEmpty
+                    && !$0.hasPrefix("Cue original: [")
+                    && !$0.hasPrefix("Posición:")
+            }
+            .joined(separator: " · ")
+        return [item.cutStyle, item.transition, noteText]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
     }
 
     private static func originalCueLine(in notes: String) -> EscaletaCue? {
@@ -493,7 +592,7 @@ enum EscaletaProjectExporter {
             .sorted { ($0.startSeconds ?? 0) < ($1.startSeconds ?? 0) }
             .enumerated()
             .map { index, override in
-                let seconds = Int((override.startSeconds ?? 0).rounded())
+                let seconds = clampedSeconds(override.startSeconds ?? 0)
                 let original = metadata.flatMap {
                     $0.indices.contains(index) && $0[index].seconds == seconds && $0[index].title == override.title
                         ? $0[index]
@@ -604,12 +703,41 @@ enum EscaletaProjectExporter {
 
     // MARK: - Tables
 
-    private static func tableMetadata(
+    private static func tableMetadataEntry(
         at index: Int,
         in metadata: [EscaletaRoundTripMetadata.TableMetadata]?
     ) -> EscaletaRoundTripMetadata.TableMetadata? {
         guard let metadata, metadata.indices.contains(index) else { return nil }
         return metadata[index]
+    }
+
+    /// Indices of the project tables that belong to one scene.
+    private static func tableIndices(
+        forScene sceneIndex: Int,
+        project: FrameProject,
+        tableMetadata: [EscaletaRoundTripMetadata.TableMetadata]?
+    ) -> [Int] {
+        project.comparisonTables.indices.filter { index in
+            tableMetadataEntry(at: index, in: tableMetadata)?.sceneIndex == sceneIndex
+        }
+    }
+
+    private static func tableBlock(
+        at index: Int,
+        project: FrameProject,
+        tableMetadata: [EscaletaRoundTripMetadata.TableMetadata]?
+    ) -> EscaletaSceneBlock {
+        let table = project.comparisonTables[index]
+        let metadata = tableMetadataEntry(at: index, in: tableMetadata)
+        return .table(
+            .init(
+                heading: table.title,
+                header: table.header,
+                alignments: coreAlignments(metadata?.alignments ?? []),
+                rows: table.rows,
+                sceneIndex: metadata?.sceneIndex
+            )
+        )
     }
 
     private static func coreAlignments(_ raw: [String]) -> [EscaletaTableAlignment] {
@@ -630,13 +758,15 @@ enum EscaletaProjectExporter {
     }
 
     private static func formatTimestamp(_ seconds: Int) -> String {
-        let safe = max(0, seconds)
-        let hours = safe / 3600
-        let minutes = (safe % 3600) / 60
-        let secs = safe % 60
-        if hours > 0 {
-            return "\(hours):\(String(format: "%02d", minutes)):\(String(format: "%02d", secs))"
-        }
-        return "\(minutes):\(String(format: "%02d", secs))"
+        EscaletaExporter.timestampText(fromSeconds: seconds)
+    }
+
+    /// One day of seconds, the cap for every value read from a project. Values
+    /// from disk are untrusted: `Int(Double.infinity)` and `Int(1e300)` trap.
+    private static let maximumSeconds: Double = 86_400
+
+    static func clampedSeconds(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value, 0), maximumSeconds))
     }
 }

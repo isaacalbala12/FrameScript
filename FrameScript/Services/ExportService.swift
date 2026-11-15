@@ -26,13 +26,17 @@ struct ExportService: ExportServicing {
     }
 
     private func renderPlainText(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
-        project.scenes.sortedByOrder.map { scene in
+        let body = project.scenes.sortedByOrder.map { scene in
             var output = ""
             if preferences.includeSectionNames {
                 let timestamp = preferences.includeTimestamps ? " [\(DurationEstimator.formatted(scene.estimatedDuration))]" : ""
                 output += "\(scene.title)\(timestamp)\n\n"
             }
             output += formattedScript(scene.scriptText, preferences: preferences)
+
+            if let notes = sceneNotes(scene) {
+                output += "\n\n\(label("export.label.notes", language: language)):\n\(notes)"
+            }
 
             if preferences.includeBRoll, !scene.bRollItems.isEmpty {
                 output += "\n\n\(label("export.label.broll", language: language)):\n"
@@ -62,6 +66,7 @@ struct ExportService: ExportServicing {
             return output
         }
         .joined(separator: "\n\n")
+        return body.isEmpty ? "" : body + "\n"
     }
 
     private func renderMarkdown(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
@@ -72,6 +77,10 @@ struct ExportService: ExportServicing {
                 output += "## \(scene.title)\(timestamp)\n\n"
             }
             output += "\(formattedScript(scene.scriptText, preferences: preferences))\n\n"
+
+            if let notes = sceneNotes(scene) {
+                output += "### \(label("export.label.notes", language: language))\n\n\(notes)\n\n"
+            }
 
             output += renderSegmentProduction(scene: scene, preferences: preferences, language: language, headingPrefix: "### ")
 
@@ -93,8 +102,13 @@ struct ExportService: ExportServicing {
     private func renderProductionOutline(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
         var output = "# \(project.title)\n\n"
         for (index, scene) in project.scenes.sortedByOrder.enumerated() {
-            let sceneTitle = preferences.includeSectionNames ? scene.title : label("export.label.scene", language: language)
-            output += "## \(label("export.label.scene", language: language)) \(String(format: "%02d", index + 1)) — \(sceneTitle)\n"
+            let sceneNumber = String(format: "%02d", index + 1)
+            let sceneLabel = label("export.label.scene", language: language)
+            if preferences.includeSectionNames {
+                output += "## \(sceneLabel) \(sceneNumber) — \(scene.title)\n"
+            } else {
+                output += "## \(sceneLabel) \(sceneNumber)\n"
+            }
             if preferences.includeTimestamps {
                 output += "\(label("export.label.estimatedDuration", language: language)): \(DurationEstimator.formatted(scene.estimatedDuration))\n\n"
             } else {
@@ -103,6 +117,10 @@ struct ExportService: ExportServicing {
 
             output += "\(label("export.label.script", language: language).uppercased()):\n"
             output += "\(formattedScript(scene.scriptText, preferences: preferences))\n\n"
+
+            if let notes = sceneNotes(scene) {
+                output += "\(label("export.label.notes", language: language).uppercased()):\n\(notes)\n\n"
+            }
 
             output += renderSegmentProduction(scene: scene, preferences: preferences, language: language, headingPrefix: "### ")
 
@@ -119,34 +137,59 @@ struct ExportService: ExportServicing {
     }
 
     private func renderCSV(project: FrameProject, preferences: ExportPreferences, language: AppLanguage) -> String {
-        let headers = ["export.csv.sceneOrder", "export.label.title", "export.csv.segmentOrder", "export.csv.segmentText", "export.csv.itemType", "export.label.source", "export.label.description", "export.label.notes"].map { label($0, language: language) }
+        let headers = [
+            "export.csv.sceneOrder", "export.label.title", "export.csv.segmentOrder",
+            "export.csv.segmentText", "export.csv.itemType", "export.label.source",
+            "export.label.description", "export.label.notes", "export.csv.sceneNotes"
+        ].map { label($0, language: language) }
         var rows = [headers.map(csvEscape).joined(separator: ",")]
         for scene in project.scenes.sortedByOrder {
+            let sceneNotes = sceneNotes(scene) ?? ""
             let segments = scene.textSegments.sortedByOrder
+            var emittedRow = false
             for segment in segments {
                 if preferences.includeBRoll {
                     for item in scene.bRollItems where isLinked(item.textAnchor, to: segment, in: scene) {
-                        rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.broll", language: language), source: label("brollSource.\(item.sourceType.rawValue)", language: language), description: item.descriptionText, notes: item.notes))
+                        rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.broll", language: language), source: label("brollSource.\(item.sourceType.rawValue)", language: language), description: item.descriptionText, notes: item.notes, sceneNotes: sceneNotes))
+                        emittedRow = true
                     }
                 }
                 if preferences.includeEditingNotes {
                     for item in scene.editingItems where isLinked(item.textAnchor, to: segment, in: scene) {
-                        rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.editing", language: language), source: "", description: item.cutStyle, notes: item.notes))
+                        rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.editing", language: language), source: "", description: item.cutStyle, notes: item.notes, sceneNotes: sceneNotes))
+                        emittedRow = true
                     }
                 }
             }
             if preferences.includeBRoll {
                 for item in scene.bRollItems where item.textAnchor == nil {
-                    rows.append(csvRow(scene: scene, segment: nil, type: label("export.label.broll", language: language), source: label("brollSource.\(item.sourceType.rawValue)", language: language), description: item.descriptionText, notes: item.notes))
+                    rows.append(csvRow(scene: scene, segment: nil, type: label("export.label.broll", language: language), source: label("brollSource.\(item.sourceType.rawValue)", language: language), description: item.descriptionText, notes: item.notes, sceneNotes: sceneNotes))
+                    emittedRow = true
                 }
             }
             if preferences.includeEditingNotes {
                 for item in scene.editingItems where item.textAnchor == nil {
-                    rows.append(csvRow(scene: scene, segment: nil, type: label("export.label.editing", language: language), source: "", description: item.cutStyle, notes: item.notes))
+                    rows.append(csvRow(scene: scene, segment: nil, type: label("export.label.editing", language: language), source: "", description: item.cutStyle, notes: item.notes, sceneNotes: sceneNotes))
+                    emittedRow = true
                 }
             }
+            // A scene with notes but no production items still needs a row,
+            // otherwise its notes would never reach the editor.
+            if !emittedRow, !sceneNotes.isEmpty {
+                rows.append(
+                    csvRow(
+                        scene: scene,
+                        segment: nil,
+                        type: label("export.label.scene", language: language),
+                        source: "",
+                        description: "",
+                        notes: "",
+                        sceneNotes: sceneNotes
+                    )
+                )
+            }
         }
-        return rows.joined(separator: "\n")
+        return rows.joined(separator: "\r\n")
     }
 
     private func renderSegmentProduction(scene: Scene, preferences: ExportPreferences, language: AppLanguage, headingPrefix: String) -> String {
@@ -189,8 +232,19 @@ struct ExportService: ExportServicing {
         }
     }
 
-    private func csvRow(scene: Scene, segment: TextSegment?, type: String, source: String, description: String, notes: String) -> String {
-        ["\(scene.order + 1)", scene.title, segment.map { "\($0.order + 1)" } ?? "", segment?.sourceText ?? "", type, source, description, notes].map(csvEscape).joined(separator: ",")
+    private func csvRow(
+        scene: Scene,
+        segment: TextSegment?,
+        type: String,
+        source: String,
+        description: String,
+        notes: String,
+        sceneNotes: String
+    ) -> String {
+        [
+            "\(scene.order + 1)", scene.title, segment.map { "\($0.order + 1)" } ?? "",
+            segment?.sourceText ?? "", type, source, description, notes, sceneNotes
+        ].map(csvEscape).joined(separator: ",")
     }
 
     private func segmentPreview(_ text: String) -> String {
@@ -215,8 +269,22 @@ struct ExportService: ExportServicing {
         L10n.tr(key, language: language)
     }
 
+    /// RFC 4180 quoting plus spreadsheet-formula neutralisation: a cell that
+    /// starts with `= + - @`, a tab or a CR is prefixed with an apostrophe so
+    /// Excel and Sheets keep it as text.
     private func csvEscape(_ value: String) -> String {
-        "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        // `value.first` is a grapheme cluster: "\r\n" is one Character, so the
+        // check must use unicode scalars to see a leading CR.
+        let needsPrefix = value.unicodeScalars.first.map {
+            "=+-@\t\r".unicodeScalars.contains($0)
+        } ?? false
+        let safe = needsPrefix ? "'" + value : value
+        return "\"\(safe.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private func sceneNotes(_ scene: Scene) -> String? {
+        let notes = scene.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return notes.isEmpty ? nil : notes
     }
 }
 

@@ -1,5 +1,5 @@
 import Testing
-@testable import FrameScriptCore
+@testable import FrameScriptLabs
 
 @Suite("Resolve marker EDL")
 struct ResolveMarkerEDLTests {

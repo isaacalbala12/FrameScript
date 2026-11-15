@@ -115,7 +115,7 @@ struct EscaletaImportPreviewSheet: View {
                         if scene.hasReHook {
                             Text("RE-HOOK")
                                 .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(theme.accent.color)
+                                .foregroundStyle(theme.accentText)
                         }
                         Spacer(minLength: 6)
                         if scene.bRollCount > 0 {
@@ -249,7 +249,7 @@ struct EscaletaImportPreviewSheet: View {
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundStyle(theme.tertiaryText)
                             }
-                            Text(warning.message)
+                            Text(warningText(warning))
                                 .font(.system(size: 12))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -280,6 +280,18 @@ struct EscaletaImportPreviewSheet: View {
         }
         .padding(.horizontal, 20)
         .frame(height: 62)
+    }
+
+    /// Warnings travel with a stable kind, arguments and a Spanish fallback.
+    /// The preview shows them in the app language when the string exists.
+    private func warningText(_ warning: EscaletaWarning) -> String {
+        let key = warning.localizationKey ?? "escaleta.warning.\(warning.kind.rawValue)"
+        let format = appState.localized(key)
+        guard format != key else { return warning.message }
+        let placeholderCount = format.components(separatedBy: "%@").count - 1
+        guard placeholderCount == warning.arguments.count else { return warning.message }
+        guard placeholderCount > 0 else { return format }
+        return String(format: format, arguments: warning.arguments.map { $0 as CVarArg })
     }
 
     private func sectionTitle(_ key: String) -> some View {
