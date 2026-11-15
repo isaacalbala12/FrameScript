@@ -131,7 +131,8 @@ final class AVScriptTests: XCTestCase {
     func testModeAndShortcutRegistrations() {
         XCTAssertEqual(WorkspaceMode.avScript.rawValue, "AV Script")
         XCTAssertTrue(WorkspaceMode.allCases.contains(.avScript))
-        XCTAssertEqual(harness.appState.shortcutDisplay(for: .avScriptMode), "⌘4")
+        // Integration moved AV Script to ⌘6: clips owns ⌘4 and timeline ⌘5.
+        XCTAssertEqual(harness.appState.shortcutDisplay(for: .avScriptMode), "⌘6")
         XCTAssertEqual(harness.appState.shortcutDisplay(for: .exportAVScript), "⌥⌘E")
 
         let bindings = ShortcutCommand.allCases.compactMap {
@@ -480,19 +481,18 @@ final class AVScriptSnapshotTests: XCTestCase {
 
 @MainActor
 private final class AVTestHarness {
-    let suiteName: String
-    let defaults: UserDefaults
+    /// Isolated suite in the process temporary directory: no test writes
+    /// `~/Library/Preferences`.
+    let isolatedDefaults: TestDefaults
+    var defaults: UserDefaults { isolatedDefaults.defaults }
     let appState: AppState
     let project: FrameProject
     let scene: FrameScript.Scene
 
     init() throws {
-        suiteName = "FrameScript.AVScriptTests.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            throw HarnessError.defaultsUnavailable
-        }
-        self.defaults = defaults
-        defaults.removePersistentDomain(forName: suiteName)
+        let isolatedDefaults = TestDefaults.make()
+        self.isolatedDefaults = isolatedDefaults
+        let defaults = isolatedDefaults.defaults
 
         let project = try Self.makeProject()
         let scene = try XCTUnwrap(project.scenes.first)
@@ -523,23 +523,19 @@ private final class AVTestHarness {
             themeManager: ResolvedThemeManager(systemColorScheme: .light),
             dependencies: dependencies,
             recording: recording,
-            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults),
-            templates: SampleData.templates,
-            customTemplates: [],
             subscriptionRuntime: SubscriptionAIRuntime(
                 store: SubscriptionAISettingsStore(userDefaults: defaults),
                 routerFactory: SubscriptionAIRouterFactory(),
                 inspector: SubscriptionAIT3ThreadInspector()
-            )
+            ),
+            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults),
+            templates: SampleData.templates,
+            customTemplates: []
         )
     }
 
     func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.synchronize()
-        let plist = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/\(suiteName).plist")
-        try? FileManager.default.removeItem(at: plist)
+        isolatedDefaults.cleanup()
     }
 
     private static func makeProject() throws -> FrameProject {
@@ -598,9 +594,6 @@ private final class AVTestHarness {
         )
     }
 
-    private enum HarnessError: Error {
-        case defaultsUnavailable
-    }
 }
 
 private struct FakeOBSSecretStore: OBSSecretStoring {
