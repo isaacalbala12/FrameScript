@@ -59,6 +59,7 @@ enum ApplicationMenuSpec {
         .init(command: .suggestRehooks, menu: .tools),
         .init(command: .recordTake, menu: .tools),
         .init(command: .toggleRecordingPanel, menu: .tools),
+        .init(command: .productionChecklist, menu: .tools),
 
         .init(command: .openSettings, menu: .application)
     ]

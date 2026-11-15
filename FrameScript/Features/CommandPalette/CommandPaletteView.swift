@@ -254,6 +254,8 @@ struct CommandPaletteView: View {
             appState.toggleRecordingTake()
         case .toggleRecordingPanel:
             appState.recording.isPanelVisible.toggle()
+        case .productionChecklist:
+            ProductionPresentation.shared.presentAfterPaletteDismissal()
         case .analyzeCurrentScene:
             appState.settings.editorPreferences.showAIReviewPanel = true
             Task { await appState.analyzeSelectedScene() }

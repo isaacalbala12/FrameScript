@@ -76,6 +76,9 @@ struct CommandAvailability: Equatable {
     var canGenerateForScene: Bool { hasOpenProject && hasSelectedScene }
     var canOpenTeleprompter: Bool { hasOpenProject && hasScenes }
     var canToggleRecordingPanel: Bool { hasOpenProject }
+    /// The production checklist is derived from the open document, so it needs
+    /// a project but no selected scene.
+    var canShowProductionChecklist: Bool { hasOpenProject }
 
     /// Recording can always be stopped, even when the project vanished while
     /// OBS was writing the take; starting one needs a scene.
@@ -128,6 +131,8 @@ struct CommandAvailability: Equatable {
             canToggleRecording
         case .toggleRecordingPanel:
             canToggleRecordingPanel
+        case .productionChecklist:
+            canShowProductionChecklist
         case .analyzeCurrentScene, .generateHook, .suggestRehooks:
             canAnalyzeScene
         case .openSettings:

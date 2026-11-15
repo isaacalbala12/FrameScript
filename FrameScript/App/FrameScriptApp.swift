@@ -62,6 +62,7 @@ struct FrameScriptProductionApp: App {
             .environment(appState)
             .environment(escaletaImport)
             .backupsSheet(appState)
+            .productionSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
                 appDelegate.attach(appState)
@@ -299,6 +300,11 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("recording.menu.togglePanel"), isOn: recordingPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleRecordingPanel))
                 .disabled(!commands.canToggleRecordingPanel)
+            Button(appState.localized("production.menu")) {
+                ProductionPresentation.shared.present()
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .productionChecklist))
+            .disabled(!commands.canShowProductionChecklist)
             Button(appState.localized("recording.obs.settings")) {
                 appState.recording.isSettingsPresented = true
             }

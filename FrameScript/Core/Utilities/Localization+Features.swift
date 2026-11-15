@@ -26,6 +26,7 @@ extension L10n {
         wp5Strings,
         wp6Strings,
         wp7Strings,
-        wp8Strings
+        wp8Strings,
+        productionStrings
     ]
 }

@@ -95,6 +95,8 @@ struct TopToolbar: View {
                     action: appState.presentTeleprompter
                 )
 
+                ProductionToolbarButton()
+
                 toolbarDivider
 
                 Button {

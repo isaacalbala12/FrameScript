@@ -50,6 +50,14 @@ struct SceneSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ProductionSidebarEntry()
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+
+            Divider()
+                .overlay(theme.divider)
+                .padding(.top, 8)
+
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(appState.project.scenes.sortedByOrder) { scene in

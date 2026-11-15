@@ -126,6 +126,10 @@ final class AppState {
     let recording: RecordingController
     /// Seam for recording -> teleprompter (F8/F9); tests replace it with a fake.
     var recordingTeleprompter: any RecordingTeleprompterPresenting = LiveRecordingTeleprompter()
+    /// Integration seam for production destinations whose panels live on
+    /// another branch (publishing, research). Local destinations are handled by
+    /// `AppState+Production`.
+    var productionNavigator: (any ProductionNavigator)?
     /// Last accepted teleprompter learning sample, used to drop duplicate
     /// reports of the same reading.
     var lastTeleprompterLearningSignature: TeleprompterLearningSignature?
@@ -246,6 +250,17 @@ final class AppState {
         attachRecordingContext()
         self.recording.teleprompterHook = self
         TeleprompterPresenter.shared.readingSessionReporter = self
+        projectStore.projectDidChangeHandler = { [weak self] in
+            guard let self else { return }
+            if self.hasOpenProject {
+                ProductionChecklistCenter.shared.scheduleRefresh(project: self.project)
+            } else {
+                ProductionChecklistCenter.shared.clear()
+            }
+        }
+        if projectStore.hasOpenProject {
+            ProductionChecklistCenter.shared.refreshNow(project: project)
+        }
     }
 
     func configure() {
@@ -2105,6 +2120,9 @@ final class ProjectStore {
     var durationConfigurationProvider: ((Scene) -> DurationConfiguration)?
     /// Re-runs the rhythm review after anchor mutations. Set by `AppState`.
     var markupReviewRefreshHandler: (() -> Void)?
+    /// Called after the open project, its dirty flag, or its contents change.
+    /// AppState uses it to keep derived caches (production checklist) fresh.
+    @ObservationIgnored var projectDidChangeHandler: (() -> Void)?
 
     init(
         project: FrameProject = SampleData.defaultProject,
@@ -2146,6 +2164,7 @@ final class ProjectStore {
         }
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
+        projectDidChangeHandler?()
     }
 
     func closeProject() {
@@ -2158,6 +2177,7 @@ final class ProjectStore {
         lastSavedFileData = nil
         segmentedTextHashes.removeAll()
         EditorMarkupSessionCaches.reset()
+        projectDidChangeHandler?()
     }
 
     var needsCloseConfirmation: Bool {
@@ -2313,6 +2333,7 @@ final class ProjectStore {
         project.updatedAt = Date()
         hasUnsavedFileChanges = true
         saveState = .edited
+        projectDidChangeHandler?()
     }
 
     func commitScriptText(_ text: String, sceneID: UUID, previousText: String? = nil) {

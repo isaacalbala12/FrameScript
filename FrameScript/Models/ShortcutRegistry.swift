@@ -241,6 +241,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case nextScene, previousScene
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case recordTake, toggleRecordingPanel
+    case productionChecklist
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
     case generateHook, suggestRehooks
 
@@ -348,6 +349,7 @@ enum ShortcutRegistry {
         .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 7),
         .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 8),
         .init(command: .toggleRecordingPanel, localizationKey: "recording.menu.togglePanel", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .option]), order: 9),
+        .init(command: .productionChecklist, localizationKey: "production.menu", category: .workspace, factoryDefault: .init("p", modifiers: [.command, .shift]), order: 10),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),

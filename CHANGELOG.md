@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a production checklist (F16): pending recording, visuals, editing, research and publishing work is derived from the project (never stored twice), manual tasks can be added with a kind and scene, and the filterable panel groups by scene or kind with per-kind counts, a sidebar counter and one-click navigation to each item.
 - Added script-editor markup styling for inline pauses (`/`, `//`, `[2s]`, `[pausa]`), emphasis (`*…*`, `**…**`) and bracket cues: delimiters stay visible but dim, emphasis renders italic/bold, and pauses/cues get subtle tinted tags.
 - Added a local rhythm review (F26): wavy underlines in the editor, a "Ritmo" section in the review panel with click-to-select warnings, sidebar badge counts, per-video-type thresholds in Settings and a per-project override.
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
