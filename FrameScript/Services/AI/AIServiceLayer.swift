@@ -183,6 +183,7 @@ enum AITask: String, Codable, Hashable {
     case hook
     case rehook
     case clipAdaptation
+    case titlesSEO
 }
 
 @MainActor
@@ -826,6 +827,8 @@ struct PromptBuilder {
             - "description" is one or two plain sentences for the caption. "hashtags" has 3 to 6 tags, each starting with #.
             - Do not mention the long video, the source, or the adaptation process.
             """
+        case .titlesSEO:
+            PublishingTitlePrompt.systemPrompt(languageName: languageName)
         }
     }
 
