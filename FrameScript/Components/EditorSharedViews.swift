@@ -22,22 +22,36 @@ struct EditorModeHeader: View {
 struct EmptyProductionState: View {
     @Environment(\.frameTheme) private var theme
     let message: String
+    /// Optional way out of the dead end ("Go to Script"). Omitted when the
+    /// caller cannot switch modes.
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
-        Text(message)
-            .font(.system(size: 14))
-            .foregroundStyle(theme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(theme.background.opacity(0.45))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(theme.divider, lineWidth: 1)
-                    )
+        VStack(alignment: .leading, spacing: 12) {
+            Text(message)
+                .font(.system(size: 14))
+                .foregroundStyle(theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.cursorPlain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(theme.accentText)
+                    .help(actionTitle)
             }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.background.opacity(0.45))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(theme.divider, lineWidth: 1)
+                )
+        }
     }
 }
 
@@ -57,40 +71,6 @@ struct ProductionUnlinkedBlock<Content: View>: View {
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(theme.background.opacity(0.35))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(theme.divider, lineWidth: 1)
-                )
-        }
-    }
-}
-
-struct EmptyModeState: View {
-    @Environment(\.frameTheme) private var theme
-    let title: String
-    let message: String
-    let actionTitle: String
-    let action: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 17, weight: .medium))
-            Text(message)
-                .font(.system(size: 14))
-                .foregroundStyle(theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(actionTitle, action: action)
-                .buttonStyle(.cursorPlain)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.primaryText)
-                .padding(.top, 4)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(theme.background.opacity(0.45))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(theme.divider, lineWidth: 1)

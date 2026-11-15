@@ -4,6 +4,10 @@ struct RecordingPanel: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     @State private var pendingDeletion: PendingTakeDeletion?
+    /// Set when a take has no readable file. `RecordingController.lastIssue` is
+    /// read-only from the view layer, so the panel keeps its own message and
+    /// merges it into the status card.
+    @State private var fileIssue: RecordingIssue?
 
     private var recording: RecordingController { appState.recording }
 
@@ -34,6 +38,9 @@ struct RecordingPanel: View {
         }
         .frame(width: 330)
         .background(theme.panelBackground)
+        .onChange(of: appState.selectedScene?.id) { _, _ in
+            fileIssue = nil
+        }
         .sheet(isPresented: $recording.isManualEntryPresented) {
             if let scene = appState.selectedScene {
                 ManualTakeSheet(scene: scene, languageCode: recording.effectiveLanguage(for: scene))
@@ -144,7 +151,7 @@ struct RecordingPanel: View {
                 .foregroundStyle(theme.warning)
             }
 
-            if let issue = recording.lastIssue ?? recording.connectionIssue,
+            if let issue = fileIssue ?? recording.lastIssue ?? recording.connectionIssue,
                issue != .externalRecordingActive {
                 Text(recording.issueMessage(issue))
                     .font(.system(size: 11))
@@ -260,7 +267,7 @@ struct RecordingPanel: View {
                     .font(.system(size: 11))
                     .foregroundStyle(theme.secondaryText)
                 Spacer()
-                Picker("", selection: obsSceneBinding(for: scene)) {
+                Picker(appState.localized("recording.scene.obsScene"), selection: obsSceneBinding(for: scene)) {
                     Text(appState.localized("recording.scene.none")).tag("")
                     ForEach(obsSceneOptions(for: scene), id: \.self) { name in
                         Text(name).tag(name)
@@ -277,7 +284,7 @@ struct RecordingPanel: View {
                         .font(.system(size: 11))
                         .foregroundStyle(theme.secondaryText)
                     Spacer()
-                    Picker("", selection: Binding(
+                    Picker(appState.localized("recording.scene.language"), selection: Binding(
                         get: { recording.effectiveLanguage(for: scene) },
                         set: { recording.selectedLanguageCode = $0 }
                     )) {
@@ -343,7 +350,7 @@ struct RecordingPanel: View {
     }
 
     private func languageName(_ code: String) -> String {
-        Locale.current.localizedString(forLanguageCode: code)?.capitalized ?? code.uppercased()
+        RecordingLanguageNames.name(for: code, interfaceLanguage: appState.currentLanguage)
     }
 
     // MARK: Latest take
@@ -419,7 +426,7 @@ struct RecordingPanel: View {
                 Text(appState.localized("recording.takes.title"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.secondaryText)
-                Text(String(format: appState.localized("recording.takes.count"), entries.count))
+                Text(L10n.plural("recording.takes.count", count: entries.count, language: appState.currentLanguage))
                     .font(.system(size: 10))
                     .foregroundStyle(theme.tertiaryText)
                 Spacer()
@@ -443,9 +450,14 @@ struct RecordingPanel: View {
             } else {
                 VStack(spacing: 6) {
                     ForEach(entries) { entry in
-                        RecordingTakeRow(entry: entry, sceneID: scene.id) { pending in
-                            pendingDeletion = pending
-                        }
+                        RecordingTakeRow(
+                            entry: entry,
+                            sceneID: scene.id,
+                            onDelete: { pending in pendingDeletion = pending },
+                            onFileAccessResult: { succeeded in
+                                fileIssue = succeeded ? nil : .fileUnavailable
+                            }
+                        )
                     }
                 }
             }
@@ -494,7 +506,7 @@ struct RecordingPanel: View {
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(appState.hasNextScene ? theme.accent.color : theme.tertiaryText)
+                    .foregroundStyle(appState.hasNextScene ? theme.accentText : theme.tertiaryText)
                     .disabled(!appState.hasNextScene)
                 }
             } else if recording.phase.isActive {
@@ -510,7 +522,8 @@ struct RecordingPanel: View {
     }
 
     private func stopOnlyButton(_ recording: RecordingController) -> some View {
-        Button {
+        let fill = theme.destructive
+        return Button {
             Task { await recording.stopTake() }
         } label: {
             HStack(spacing: 8) {
@@ -527,16 +540,21 @@ struct RecordingPanel: View {
             .frame(height: 42)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(theme.destructive)
+                    .fill(fill)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(FrameTheme.textColor(onFill: fill))
         }
         .buttonStyle(.plain)
         .disabled(recording.phase == .stopping)
     }
 
     private func recordButton(_ scene: Scene, recording: RecordingController) -> some View {
-        Button {
+        let palette = RecordingButtonPalette.colors(
+            phase: recording.phase,
+            connected: recording.connectionState.isConnected,
+            theme: theme
+        )
+        return Button {
             let language = recording.effectiveLanguage(for: scene)
             switch recording.phase {
             case .countdown:
@@ -586,9 +604,9 @@ struct RecordingPanel: View {
             .padding(.horizontal, 12)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(buttonFill(recording))
+                    .fill(palette.fill)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(palette.foreground)
         }
         .buttonStyle(.plain)
         .disabled(
@@ -597,17 +615,27 @@ struct RecordingPanel: View {
                 || recording.externalRecordingActive
         )
     }
+}
 
-    private func buttonFill(_ recording: RecordingController) -> Color {
-        switch recording.phase {
+/// Colours for the record/stop button. The disconnected state uses the
+/// translucent `hover` fill, which must keep the primary text colour; the
+/// opaque accent/warning/destructive fills pick white or ink by contrast.
+enum RecordingButtonPalette {
+    static func colors(
+        phase: RecordingPhase,
+        connected: Bool,
+        theme: FrameTheme
+    ) -> (fill: Color, foreground: Color) {
+        switch phase {
         case .recording, .stopping:
-            return theme.destructive
+            return (theme.destructive, FrameTheme.textColor(onFill: theme.destructive))
         case .countdown:
-            return theme.warning
+            return (theme.warning, FrameTheme.textColor(onFill: theme.warning))
         case .idle, .starting:
-            return recording.connectionState.isConnected
-                ? theme.accent.color
-                : theme.accent.color.opacity(0.45)
+            if connected {
+                return (theme.accentStrong, FrameTheme.textColor(onFill: theme.accentStrong))
+            }
+            return (theme.hover, theme.primaryText)
         }
     }
 }
@@ -620,6 +648,29 @@ private struct PendingTakeDeletion: Identifiable {
 }
 
 // MARK: - Rating presentation
+
+/// Language names for the recording panel's language picker, written in the
+/// interface language instead of the Mac's current locale.
+enum RecordingLanguageNames {
+    static func name(for code: String, interfaceLanguage: AppLanguage) -> String {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let locale = Locale(identifier: localeIdentifier(for: L10n.resolve(interfaceLanguage)))
+        if let name = locale.localizedString(forLanguageCode: trimmed) {
+            return name.capitalized(with: locale)
+        }
+        return trimmed.uppercased()
+    }
+
+    static func localeIdentifier(for language: AppLanguage) -> String {
+        switch language {
+        case .english: "en"
+        case .spanish: "es"
+        case .russian: "ru"
+        case .system: "en"
+        }
+    }
+}
 
 enum TakeRatingPresentation {
     static func label(_ rating: TakeRating, language: AppLanguage) -> String {
@@ -651,6 +702,8 @@ private struct RecordingTakeRow: View {
     let entry: SceneTake
     let sceneID: UUID
     let onDelete: (PendingTakeDeletion) -> Void
+    /// `true` when the file opened; `false` when it is missing or unreadable.
+    let onFileAccessResult: (Bool) -> Void
 
     private var take: Take { entry.take }
 
@@ -719,10 +772,10 @@ private struct RecordingTakeRow: View {
                 Spacer()
 
                 rowButton("play.fill", help: appState.localized("recording.take.play"), enabled: hasFile) {
-                    TakeFileAccess.play(take)
+                    onFileAccessResult(TakeFileAccess.play(take))
                 }
                 rowButton("folder", help: appState.localized("recording.take.reveal"), enabled: hasFile) {
-                    TakeFileAccess.reveal(take)
+                    onFileAccessResult(TakeFileAccess.reveal(take))
                 }
                 rowButton("trash", help: appState.localized("recording.take.delete"), color: theme.destructive) {
                     onDelete(PendingTakeDeletion(take: take, sceneID: sceneID))
@@ -747,8 +800,8 @@ private struct RecordingTakeRow: View {
                 }
             }
             Divider()
-            Button(appState.localized("recording.take.play")) { TakeFileAccess.play(take) }
-            Button(appState.localized("recording.take.reveal")) { TakeFileAccess.reveal(take) }
+            Button(appState.localized("recording.take.play")) { onFileAccessResult(TakeFileAccess.play(take)) }
+            Button(appState.localized("recording.take.reveal")) { onFileAccessResult(TakeFileAccess.reveal(take)) }
             Divider()
             Button(appState.localized("recording.take.delete"), role: .destructive) {
                 onDelete(PendingTakeDeletion(take: take, sceneID: sceneID))

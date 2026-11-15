@@ -95,12 +95,20 @@ struct FrameTheme {
         colorScheme == .dark ? Color(hex: 0xF4F4F5) : Color(hex: 0x1D1D1F)
     }
 
+    /// 4.5:1 or better against every surface in `FrameTheme.textSurfaces`.
     var secondaryText: Color {
-        colorScheme == .dark ? Color(hex: 0xA1A1AA) : Color(hex: 0x6F6F74)
+        colorScheme == .dark ? Color(hex: 0xA1A1AA) : Color(hex: 0x5F5F64)
     }
 
+    /// 4.5:1 or better against every surface in `FrameTheme.textSurfaces`.
     var tertiaryText: Color {
-        colorScheme == .dark ? Color(hex: 0x71717A) : Color(hex: 0x8A8882)
+        colorScheme == .dark ? Color(hex: 0x8A8A93) : Color(hex: 0x6E6C66)
+    }
+
+    /// Every background text is drawn on. `WP6VisualTests` checks the text
+    /// tokens against all of them in light and dark mode.
+    var textSurfaces: [Color] {
+        [appBackground, windowBackground, sidebarBackground, panelBackground, cardBackground, editorSurface]
     }
 
     var divider: Color {
@@ -119,6 +127,20 @@ struct FrameTheme {
     /// Accent usable as text: at least 4.5:1 against `appBackground` in light and dark.
     var accentText: Color {
         Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: NSColor(appBackground), minimum: 4.5))
+    }
+
+    /// Foreground for a filled control (record/stop buttons). Picks white or
+    /// near-black by contrast so the label never drops below 4.5:1 on the
+    /// pastel accent fills, the light `warning` fill in light mode or the light
+    /// `destructive` fill in dark mode. `fill` must be opaque: a translucent
+    /// tint has no single contrast ratio, so use an explicit text token there.
+    static func textColor(onFill fill: Color) -> Color {
+        let surface = MarkupEditorPalette.opaque(NSColor(fill))
+        assert(surface.alphaComponent >= 0.99, "textColor(onFill:) needs an opaque fill")
+        let white = MarkupEditorPalette.contrastRatio(.white, surface)
+        let ink = Color(hex: 0x141414)
+        let inkRatio = MarkupEditorPalette.contrastRatio(NSColor(ink), surface)
+        return white >= inkRatio ? .white : ink
     }
 
     var softAccent: Color {
@@ -170,16 +192,12 @@ final class ResolvedThemeManager {
     var resolvedColorScheme: ColorScheme = .light
     var accentColor: AccentPalette = .sage
 
-    private var appearanceObserver: NSObjectProtocol?
+    private var appearanceObserver: DistributedAppearanceObserver?
 
     init() {
         systemColorScheme = Self.currentSystemColorScheme()
         resolvedColorScheme = systemColorScheme
-        appearanceObserver = DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
+        appearanceObserver = DistributedAppearanceObserver { [weak self] in
             Task { @MainActor in
                 self?.refreshSystemAppearance()
             }
@@ -248,6 +266,28 @@ private struct FrameThemeKey: EnvironmentKey {
     static let defaultValue = FrameTheme(colorScheme: .light, accent: .lavender)
 }
 
+/// Keeps the distributed-appearance observer alive and removes it when the
+/// manager goes away, without the manager needing a (nonisolated) `deinit`.
+private final class DistributedAppearanceObserver {
+    private var token: NSObjectProtocol?
+
+    init(handler: @escaping () -> Void) {
+        token = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            handler()
+        }
+    }
+
+    deinit {
+        if let token {
+            DistributedNotificationCenter.default().removeObserver(token)
+        }
+    }
+}
+
 extension EnvironmentValues {
     var frameTheme: FrameTheme {
         get { self[FrameThemeKey.self] }
@@ -290,7 +330,7 @@ struct CursorPlainButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .opacity(configuration.isPressed ? 0.75 : 1)
+            .opacity(!isEnabled ? 0.45 : (configuration.isPressed ? 0.75 : 1))
             .clickableCursor(enabled: isEnabled)
     }
 }

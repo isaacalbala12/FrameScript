@@ -260,12 +260,12 @@ final class MarkupEditorStyler {
     }
 }
 
-/// Text view that draws rhythm warnings as a wavy underline and exposes a
-/// tooltip per warning range.
+/// Text view that draws rhythm warnings as a discreet dotted underline and
+/// exposes a tooltip per warning range.
 ///
-/// The wave is drawn in `draw(_:)` instead of using
-/// `NSUnderlineStyle.patternDot`, so it stays visibly different from the
-/// system's red dotted spelling underline and never touches the text storage.
+/// The mark is drawn in `draw(_:)` instead of using a text attribute, so it
+/// never touches the text storage, the undo stack or the typing attributes, and
+/// it stays visibly different from the system's red dotted spelling underline.
 final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
     var rhythmUnderlines: [RhythmEditorUnderline] = [] {
         didSet {
@@ -298,22 +298,40 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
     func refreshRhythmToolTips() {
         removeAllToolTips()
         tooltipMessages.removeAll()
+        for entry in rhythmToolTipEntries() {
+            let tag = addToolTip(entry.rect, owner: self, userData: nil)
+            tooltipMessages[tag] = entry.message
+        }
+    }
+
+    /// Tooltip rectangles this view would register, in view coordinates.
+    /// Exposed so the regression test can assert blank lines get no tooltip.
+    func rhythmToolTipRects() -> [NSRect] {
+        rhythmToolTipEntries().map(\.rect)
+    }
+
+    private func rhythmToolTipEntries() -> [(rect: NSRect, message: String)] {
         guard !rhythmUnderlines.isEmpty,
               let layoutManager,
               let textContainer,
-              let storageLength = textStorage?.length,
-              storageLength > 0 else { return }
+              let textStorage,
+              textStorage.length > 0 else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        let storageLength = textStorage.length
+        var entries: [(rect: NSRect, message: String)] = []
 
         for underline in rhythmUnderlines {
+            guard underline.kind != .sceneLengthOutlier else { continue }
             let range = MarkupHighlightPlanner.clamp(underline.range, toLength: storageLength)
             guard range.length > 0 else { continue }
             var actual = NSRange()
             let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: &actual)
             guard glyphRange.length > 0 else { continue }
-            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, _, lineGlyphRange, _ in
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
                 let characterLineRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
                 let intersection = NSIntersectionRange(characterLineRange, actual)
                 guard intersection.length > 0 else { return }
+                guard Self.hasVisibleContent(intersection, in: textStorage) else { return }
                 let intersectionGlyphs = layoutManager.glyphRange(
                     forCharacterRange: intersection,
                     actualCharacterRange: nil
@@ -321,13 +339,23 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
                 var rect = layoutManager.boundingRect(forGlyphRange: intersectionGlyphs, in: textContainer)
                 rect.origin.x += self.textContainerOrigin.x
                 rect.origin.y += self.textContainerOrigin.y
+                let used = usedRect.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                rect = rect.intersection(used)
+                guard !rect.isNull, rect.width > 0.5 else { return }
                 if rect.height < 6 { rect.size.height = 6 }
                 rect = rect.insetBy(dx: -1, dy: -3)
-                let tag = self.addToolTip(rect, owner: self, userData: nil)
-                self.tooltipMessages[tag] = underline.message
-                _ = lineRect
+                entries.append((rect, underline.message))
             }
         }
+        return entries
+    }
+
+    /// Paragraph breaks inside a warning range would otherwise get a mark and a
+    /// tooltip over empty space.
+    static func hasVisibleContent(_ range: NSRange, in storage: NSTextStorage) -> Bool {
+        guard range.location >= 0, NSMaxRange(range) <= storage.length else { return false }
+        let fragment = storage.attributedSubstring(from: range).string
+        return !fragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func view(
@@ -339,24 +367,33 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
         tooltipMessages[tag] ?? ""
     }
 
-    private func drawRhythmUnderlines(in dirtyRect: NSRect) {
+    /// The dotted marks this view paints, in view coordinates. Exposed so the
+    /// regression test can assert that blank lines inside a warning range get
+    /// no mark and that no mark is wider than its line's used rect.
+    func rhythmMarkRects() -> [NSRect] {
         guard !rhythmUnderlines.isEmpty,
               let layoutManager,
               let textContainer,
-              let storageLength = textStorage?.length,
-              storageLength > 0 else { return }
+              let textStorage,
+              textStorage.length > 0 else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        let storageLength = textStorage.length
+        var marks: [NSRect] = []
 
-        rhythmUnderlineColor.setStroke()
         for underline in rhythmUnderlines {
+            // A whole-scene length outlier has no single range to mark; the
+            // sidebar badge and the AI panel still report it.
+            guard underline.kind != .sceneLengthOutlier else { continue }
             let range = MarkupHighlightPlanner.clamp(underline.range, toLength: storageLength)
             guard range.length > 0 else { continue }
             var actual = NSRange()
             let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: &actual)
             guard glyphRange.length > 0 else { continue }
-            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineRect, _, _, lineGlyphRange, _ in
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
                 let characterLineRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
                 let intersection = NSIntersectionRange(characterLineRange, actual)
                 guard intersection.length > 0 else { return }
+                guard Self.hasVisibleContent(intersection, in: textStorage) else { return }
                 let intersectionGlyphs = layoutManager.glyphRange(
                     forCharacterRange: intersection,
                     actualCharacterRange: nil
@@ -364,31 +401,39 @@ final class MarkupEditorTextView: PlaceholderTextView, NSViewToolTipOwner {
                 var rect = layoutManager.boundingRect(forGlyphRange: intersectionGlyphs, in: textContainer)
                 rect.origin.x += self.textContainerOrigin.x
                 rect.origin.y += self.textContainerOrigin.y
-                let squiggleRect = NSRect(
+                // Never spill past the used part of the line, so a warning that
+                // ends at a line break does not paint the trailing margin.
+                let used = usedRect.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                rect = rect.intersection(used)
+                guard !rect.isNull, rect.width > 0.5 else { return }
+                marks.append(NSRect(
                     x: rect.minX,
-                    y: lineRect.maxY + self.textContainerOrigin.y - 2.5,
-                    width: max(1, rect.width),
-                    height: 3
-                )
-                guard squiggleRect.intersects(dirtyRect) else { return }
-                self.drawSquiggle(in: squiggleRect)
+                    y: used.maxY - 1.5,
+                    width: rect.width,
+                    height: 1
+                ))
             }
+        }
+        return marks
+    }
+
+    private func drawRhythmUnderlines(in dirtyRect: NSRect) {
+        let color = (rhythmUnderlineColor.usingColorSpace(.sRGB) ?? rhythmUnderlineColor)
+            .withAlphaComponent(0.6)
+        for mark in rhythmMarkRects() where mark.intersects(dirtyRect) {
+            drawDottedLine(in: mark, color: color)
         }
     }
 
-    private func drawSquiggle(in rect: NSRect) {
+    private func drawDottedLine(in rect: NSRect, color: NSColor) {
+        color.setStroke()
         let path = NSBezierPath()
-        path.lineWidth = 1.2
+        path.lineWidth = 1
         path.lineCapStyle = .round
-        let wavelength: CGFloat = 5
-        var x = rect.minX
-        path.move(to: NSPoint(x: x, y: rect.midY))
-        var up = false
-        while x < rect.maxX {
-            x = min(x + wavelength / 2, rect.maxX)
-            up.toggle()
-            path.line(to: NSPoint(x: x, y: rect.midY + (up ? 1.1 : -1.1)))
-        }
+        path.setLineDash([1.5, 2.5], count: 2, phase: 0)
+        let y = rect.midY
+        path.move(to: NSPoint(x: rect.minX, y: y))
+        path.line(to: NSPoint(x: rect.maxX, y: y))
         path.stroke()
     }
 }

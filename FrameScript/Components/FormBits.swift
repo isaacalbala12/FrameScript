@@ -21,7 +21,7 @@ struct QuietField<Content: View>: View {
                 if let detail {
                     Text(detail)
                         .font(.system(size: 12))
-                        .foregroundStyle(theme.secondaryText.opacity(0.75))
+                        .foregroundStyle(theme.tertiaryText)
                 }
             }
             content
@@ -60,15 +60,17 @@ struct MultilineField: View {
             if text.isEmpty {
                 Text(placeholder)
                     .font(.system(size: 14))
-                    .foregroundStyle(theme.secondaryText.opacity(0.72))
+                    .foregroundStyle(theme.tertiaryText)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 9)
+                    .accessibilityHidden(true)
             }
 
             TextEditor(text: $text)
                 .font(.system(size: 14))
                 .scrollContentBackground(.hidden)
                 .padding(5)
+                .accessibilityLabel(placeholder)
         }
         .frame(minHeight: minHeight)
         .textCursor()

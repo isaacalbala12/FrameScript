@@ -23,16 +23,20 @@ struct TopToolbar: View {
                         Text(appState.project.title)
                             .font(.system(size: 14, weight: .medium))
                             .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(appState.project.title)
                         Text(appState.displayName(appState.saveState))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.secondaryText)
+                            .lineLimit(1)
                     }
                 }
                 .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
-            .frame(width: 210, alignment: .leading)
+            .frame(minWidth: 160, idealWidth: 260, maxWidth: 360, alignment: .leading)
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -44,17 +48,27 @@ struct TopToolbar: View {
             Spacer(minLength: 8)
 
             ProjectDurationControl()
+                .fixedSize()
+                .layoutPriority(1)
 
             Button {
                 appState.recording.isPanelVisible.toggle()
             } label: {
                 HStack(spacing: 5) {
-                    Circle()
-                        .fill(recordingStatusColor)
-                        .frame(width: 6, height: 6)
-                    Text(recordingStatusText)
-                        .font(.system(size: 10, weight: .medium))
-                        .lineLimit(1)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(recordingStatusColor)
+                                .frame(width: 6, height: 6)
+                            Text(recordingStatusText)
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                        Circle()
+                            .fill(recordingStatusColor)
+                            .frame(width: 7, height: 7)
+                    }
                 }
                 .frame(height: 30)
                 .padding(.horizontal, 5)
@@ -65,6 +79,7 @@ struct TopToolbar: View {
             }
             .buttonStyle(.cursorPlain)
             .foregroundStyle(theme.secondaryText)
+            .accessibilityLabel("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
             HStack(spacing: 5) {
@@ -94,7 +109,7 @@ struct TopToolbar: View {
                         }
                 }
                 .buttonStyle(.cursorPlain)
-                .foregroundStyle(appState.isFocusModeEnabled ? theme.accent.color : theme.secondaryText)
+                .foregroundStyle(appState.isFocusModeEnabled ? theme.accentText : theme.secondaryText)
                 .help(appState.localized("toolbar.focusMode"))
 
                 toolbarDivider
@@ -108,6 +123,8 @@ struct TopToolbar: View {
                         Text(appState.shortcutDisplay(for: .commandPalette))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundStyle(theme.tertiaryText)
+                            .fixedSize()
+                            .layoutPriority(2)
                             .padding(.horizontal, 4)
                             .frame(height: 17)
                             .background {

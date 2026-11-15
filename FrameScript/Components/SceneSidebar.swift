@@ -1,8 +1,39 @@
 import SwiftUI
 
+/// Keyboard navigation for the scene list. Arrow keys move the selection only
+/// while a scene row (or the list) owns focus, so the script editor keeps its
+/// own arrow-key behaviour.
+enum SceneListNavigation {
+    /// The scene that an arrow key should select, or `nil` at the ends.
+    static func destination(
+        in sceneIDs: [UUID],
+        current: UUID?,
+        direction: MoveCommandDirection
+    ) -> UUID? {
+        guard !sceneIDs.isEmpty else { return nil }
+        guard let current, let index = sceneIDs.firstIndex(of: current) else {
+            return direction == .down || direction == .right ? sceneIDs.first : sceneIDs.last
+        }
+        let step = direction == .down || direction == .right ? 1 : -1
+        let next = index + step
+        guard sceneIDs.indices.contains(next) else { return nil }
+        return sceneIDs[next]
+    }
+}
+
 struct SceneSidebar: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+
+    private var orderedSceneIDs: [UUID] {
+        appState.project.scenes.sortedByOrder.map(\.id)
+    }
+
+    private var deleteDisabled: Bool {
+        guard appState.selectedScene != nil else { return true }
+        return appState.recording.hasActiveTake
+            && appState.recording.activeSceneID == appState.selectedScene?.id
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,14 +57,36 @@ struct SceneSidebar: View {
                 .padding(.horizontal, 10)
                 .padding(.top, 12)
             }
+            .onMoveCommand { direction in
+                guard let destination = SceneListNavigation.destination(
+                    in: orderedSceneIDs,
+                    current: appState.selectedScene?.id,
+                    direction: direction
+                ) else { return }
+                appState.selectScene(destination)
+            }
 
             Divider()
                 .overlay(theme.divider)
 
             VStack(spacing: 6) {
-                SidebarAction(title: appState.localized("scene.add"), shortcut: appState.shortcutDisplay(for: .addScene), action: appState.addScene)
-                SidebarAction(title: appState.localized("scene.duplicate"), shortcut: appState.shortcutDisplay(for: .duplicateScene), action: appState.duplicateSelectedScene)
-                SidebarAction(title: appState.localized("scene.delete"), shortcut: appState.shortcutDisplay(for: .deleteScene), action: appState.deleteSelectedScene)
+                SidebarAction(
+                    title: appState.localized("scene.add"),
+                    shortcut: appState.shortcutDisplay(for: .addScene),
+                    action: appState.addScene
+                )
+                SidebarAction(
+                    title: appState.localized("scene.duplicate"),
+                    shortcut: appState.shortcutDisplay(for: .duplicateScene),
+                    enabled: appState.selectedScene != nil,
+                    action: appState.duplicateSelectedScene
+                )
+                SidebarAction(
+                    title: appState.localized("scene.delete"),
+                    shortcut: appState.shortcutDisplay(for: .deleteScene),
+                    enabled: !deleteDisabled,
+                    action: appState.deleteSelectedScene
+                )
             }
             .padding(10)
         }
@@ -76,9 +129,9 @@ struct SidebarRow: View {
                     SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
                 }
 
-                RhythmSidebarBadge(sceneID: scene.id)
-
                 Spacer(minLength: 0)
+
+                RhythmSidebarBadge(sceneID: scene.id)
             }
             .padding(.vertical, 8)
             .padding(.trailing, 8)
@@ -90,6 +143,9 @@ struct SidebarRow: View {
         }
         .buttonStyle(.cursorPlain)
         .onHover { isHovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .help(scene.title)
         .contextMenu {
             Button(appState.localized("scene.rename")) {
                 action()
@@ -117,6 +173,7 @@ struct SidebarRow: View {
                 action()
                 deleteAction()
             }
+            .disabled(appState.recording.hasActiveTake && appState.recording.activeSceneID == scene.id)
         }
     }
 
@@ -135,6 +192,7 @@ private struct SidebarAction: View {
     @Environment(\.frameTheme) private var theme
     let title: String
     let shortcut: String
+    var enabled: Bool = true
     let action: () -> Void
 
     var body: some View {
@@ -152,5 +210,6 @@ private struct SidebarAction: View {
             .frame(height: 28)
         }
         .buttonStyle(.cursorPlain)
+        .disabled(!enabled)
     }
 }
