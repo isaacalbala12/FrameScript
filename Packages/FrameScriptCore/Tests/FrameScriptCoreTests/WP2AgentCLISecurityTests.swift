@@ -75,8 +75,8 @@ struct WP2AgentCLISecurityTests {
 
     // MARK: Claude restrictions
 
-    @Test("claude runs in plan mode with every tool denied")
-    func claudePinsPlanModeAndDeniesTools() async throws {
+    @Test("claude runs without prompts and with its dangerous tools denied")
+    func claudePinsNonInteractiveModeAndDeniesTools() async throws {
         let launcher = FakeProcessLauncher([.json(try AgentCLIFixtures.text("claude-result.json"))])
         let runner = ClaudeCLIRunner(executable: fakeClaudeExecutable, launcher: launcher)
 
@@ -85,10 +85,11 @@ struct WP2AgentCLISecurityTests {
         let recorded = await launcher.recordedRequests()
         let arguments = try #require(recorded.first?.arguments)
         let mode = try #require(arguments.firstIndex(of: "--permission-mode"))
-        #expect(arguments[mode + 1] == "plan")
+        #expect(arguments[mode + 1] == "dontAsk")
+        #expect(arguments.contains("--strict-mcp-config"))
         let denied = try #require(arguments.firstIndex(of: "--disallowedTools"))
         let deniedList = try #require(arguments[safe: denied + 1])
-        for tool in ["Bash", "Write", "Edit", "Read", "WebFetch", "WebSearch"] {
+        for tool in ["Bash", "Write", "Edit", "Read", "WebFetch", "WebSearch", "Agent", "ExitPlanMode"] {
             #expect(deniedList.contains(tool), "\(tool) must be denied")
         }
     }

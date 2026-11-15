@@ -19,10 +19,12 @@ struct ClaudeCLIRunnerTests {
 
         let recorded = await launcher.recordedRequests()
         let processRequest = try #require(recorded.first)
-        // The run is pinned to plan mode with every tool denied; see WP2.
+        // The run never prompts, loads no MCP servers and denies every tool; see WP2/FU2.
         #expect(processRequest.arguments == [
             "-p", "--output-format", "json", "--no-session-persistence",
-            "--permission-mode", "plan",
+            "--permission-mode", "dontAsk",
+            "--permission-prompts", "none",
+            "--strict-mcp-config", "--mcp-config", ClaudeCLIRunner.emptyMCPConfig,
             "--disallowedTools", ClaudeCLIRunner.deniedTools,
             "--model", "sonnet"
         ])

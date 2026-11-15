@@ -2,25 +2,43 @@ import Foundation
 
 /// Fallback runner for a Claude subscription: `claude -p --output-format json`.
 ///
-/// Verified against Claude Code 2.1.322:
+/// Verified against Claude Code 2.1.325 (`claude --help`):
 ///
 ///     --print, -p              Print response and exit
 ///     --output-format          "text" (default), "json" (single result), or "stream-json"
+///     --permission-mode        choices: acceptEdits, auto, bypassPermissions,
+///                              manual, dontAsk, plan
+///     --permission-prompts     "none": anything that would prompt is denied
+///     --strict-mcp-config      only servers from --mcp-config
+///     --mcp-config             JSON files or strings
+///     --disallowedTools        comma or space separated tool names
 ///     --model <model>          Alias ('fable', 'opus', 'sonnet') or full name
 ///
 /// The prompt goes on stdin; the JSON result carries `result`, `is_error`,
 /// `session_id` and `subtype`.
 ///
-/// The run is pinned to plan mode with every file/command/network tool denied,
-/// so the user's global Claude Code permissions cannot turn a script (which may
-/// come from an imported or shared file) into file access. FrameScript only
-/// needs the model's text, never a tool call.
+/// The run is pinned to `dontAsk` (never prompts: anything that would ask is
+/// denied) with every file/command/network/subagent tool denied and an empty,
+/// strict MCP configuration, so the user's global Claude Code settings cannot
+/// turn a script (which may come from an imported or shared file) into file
+/// access. FrameScript only needs the model's text, never a tool call.
+///
+/// Plan mode is deliberately not used: it tells the model to investigate and
+/// answer with a plan (or through `ExitPlanMode`) instead of producing the
+/// requested JSON or text, which breaks every FrameScript AI action.
 public struct ClaudeCLIRunner: AgentCLIRunner {
-    /// Denied tools: no shell, no file writes, no reads, no web, no subagents.
+    /// Denied tools: no shell, no file reads or writes, no web, no subagents,
+    /// no skills or slash commands, and no plan-mode escape hatch.
     static let deniedTools = [
-        "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
-        "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Task"
+        "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit",
+        "Read", "Glob", "Grep", "WebFetch", "WebSearch",
+        "Agent", "Task", "Skill", "SlashCommand",
+        "TodoWrite", "BashOutput", "KillShell", "ExitPlanMode"
     ].joined(separator: ",")
+
+    /// With `--strict-mcp-config`, only the servers named by `--mcp-config`
+    /// load: an empty object means none of the user's MCP servers start.
+    static let emptyMCPConfig = #"{"mcpServers":{}}"#
 
     public let kind: AgentCLIKind = .claude
     public var executable: URL
@@ -43,9 +61,13 @@ public struct ClaudeCLIRunner: AgentCLIRunner {
 
         var arguments = [
             "-p", "--output-format", "json", "--no-session-persistence",
-            // Plan mode is read-only; the deny-list removes the tools that
-            // could still read local files or reach the network.
-            "--permission-mode", "plan",
+            // `dontAsk` never prompts and denies anything that would ask;
+            // `none` guarantees nothing ever waits for a permission answer.
+            "--permission-mode", "dontAsk",
+            "--permission-prompts", "none",
+            // Never load the user's MCP servers: strict config plus an empty
+            // inline configuration means the MCP surface is empty.
+            "--strict-mcp-config", "--mcp-config", Self.emptyMCPConfig,
             "--disallowedTools", Self.deniedTools
         ]
         if let model = request.model.modelSlug?.nilIfBlank {
