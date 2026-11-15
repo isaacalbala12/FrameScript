@@ -4,21 +4,32 @@ import OSLog
 
 /// Last automatic-backup failure, shown in the backups sheet so a broken
 /// folder does not leave the user with zero backups and only a log entry.
+/// Failures are keyed by project so switching documents does not show one
+/// project's problem in another project's sheet.
 @MainActor
 @Observable
 final class BackupHealth {
     static let shared = BackupHealth()
 
     private(set) var lastFailure: BackupFailure?
+    private(set) var lastFailureProjectID: String?
 
     private init() {}
 
-    func record(_ failure: BackupFailure) {
+    func record(_ failure: BackupFailure, projectID: String) {
         lastFailure = failure
+        lastFailureProjectID = projectID
     }
 
-    func clear() {
+    func clear(projectID: String) {
+        guard lastFailureProjectID == projectID else { return }
         lastFailure = nil
+        lastFailureProjectID = nil
+    }
+
+    func failure(for projectID: String?) -> BackupFailure? {
+        guard let projectID, projectID == lastFailureProjectID else { return nil }
+        return lastFailure
     }
 }
 
@@ -58,6 +69,12 @@ enum BackupsCenter {
         BackupProjectIdentity.identifier(projectUUID: project.id, fileURL: fileURL)
     }
 
+    /// Drops the throttle entry when a project closes so a reopened document
+    /// starts with a clean interval.
+    static func forget(projectID: String) {
+        lastAttempt[projectID] = nil
+    }
+
     /// Copies the current project file before it is overwritten. Failures are
     /// logged and surfaced in the backups sheet, never interrupting saving.
     static func backUpBeforeOverwrite(project: FrameProject, fileURL: URL) {
@@ -69,22 +86,60 @@ enum BackupsCenter {
            now.timeIntervalSince(last) < max(0, store.policy.minimumInterval) {
             return
         }
-        lastAttempt[identity] = now
 
         // Shared Core helper so future CLI/MCP writes use the same rules.
-        switch store.backUpBeforeOverwrite(projectUUID: project.id, fileURL: fileURL) {
+        let outcome = store.backUpBeforeOverwrite(projectUUID: project.id, fileURL: fileURL)
+        handle(outcome, projectID: identity)
+        // Only a created backup starts the interval. A transient failure must
+        // not silence backups for the next ten minutes.
+        if case .created = outcome {
+            lastAttempt[identity] = now
+        }
+    }
+
+    /// Saves the in-memory project as a forced safety copy before a reload
+    /// replaces it. The bytes written here are the user's edits, not the
+    /// external file, so a wrong "Reload" is always recoverable.
+    static func backUpInMemoryProject(_ project: FrameProject, fileURL: URL) {        let identity = projectID(for: project, fileURL: fileURL)
+        let data: Data
+        do {
+            data = try FrameScriptFileStore.encode(project: project)
+        } catch {
+            logger.error("In-memory backup encode failed: \(error.localizedDescription, privacy: .private)")
+            return
+        }
+        let outcome = store.backUpData(
+            data,
+            originalFileName: fileURL.lastPathComponent,
+            originalPath: fileURL.path,
+            projectID: identity
+        )
+        handle(outcome, projectID: identity)
+    }
+
+    /// A Save As may target an existing file that belongs to another project.
+    /// Back that file up under its own path identity before replacing it.
+    static func backUpBeforeSaveAs(to url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let identity = BackupProjectIdentity.identifier(projectUUID: nil, fileURL: url)
+        let outcome = store.backUpBeforeOverwrite(projectUUID: nil, fileURL: url, force: true)
+        handle(outcome, projectID: identity)
+    }
+
+    private static func handle(_ outcome: BackupOutcome, projectID: String) {
+        switch outcome {
         case let .created(_, warning):
-            BackupHealth.shared.clear()
+            BackupHealth.shared.clear(projectID: projectID)
             if let warning {
                 logger.warning(
-                    "Backup warning (\(warning.operation.rawValue, privacy: .public)): \(warning.reason, privacy: .public)"
+                    "Backup warning (\(warning.operation.rawValue, privacy: .public)): \(warning.reason, privacy: .private)"
                 )
             }
         case let .failed(failure):
             logger.error(
-                "Backup failed (\(failure.operation.rawValue, privacy: .public)): \(failure.reason, privacy: .public)"
+                "Backup failed (\(failure.operation.rawValue, privacy: .public)): \(failure.reason, privacy: .private)"
             )
-            BackupHealth.shared.record(failure)
+            BackupHealth.shared.record(failure, projectID: projectID)
         case .skipped:
             break
         }

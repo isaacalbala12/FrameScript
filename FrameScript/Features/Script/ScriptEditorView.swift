@@ -171,7 +171,9 @@ struct ScriptEditorView: View {
                     SceneDurationControl(scene: scene)
                 }
                 if appState.settings.editorPreferences.showSceneDuration && appState.settings.editorPreferences.showWordCount { Text("·") }
-                if appState.settings.editorPreferences.showWordCount { Text("\(wordCount) \(appState.localized("script.words"))") }
+                if appState.settings.editorPreferences.showWordCount {
+                    Text("\(wordCount) \(L10n.plural("script.words", count: wordCount, language: appState.currentLanguage))")
+                }
                 if let issue = activeAutocompleteIssue {
                     if appState.settings.editorPreferences.showSceneDuration || appState.settings.editorPreferences.showWordCount { Text("·") }
                     Button {
@@ -548,12 +550,14 @@ struct LinkedScriptTextView: NSViewRepresentable {
         /// pastes, undo and typing while `NSTextStorage.editedRange` can be a
         /// stale attribute range from the styler.
         private var pendingEditRange: NSRange?
+        private var boundSceneID: UUID
         private var observedAutocompleteProvider: AIProviderKind
         private var observedAutocompleteConfigurationVersion: Int
         private var observedAutocompleteConfigurationEligibility: AutocompleteConfigurationEligibility
         init(parent: LinkedScriptTextView) {
             self.parent = parent
             self.lastObservedModelValue = parent.text
+            self.boundSceneID = parent.sceneID
             self.observedAutocompleteProvider = parent.autocompleteProvider
             self.observedAutocompleteConfigurationVersion = parent.autocompleteConfigurationVersion
             self.observedAutocompleteConfigurationEligibility = parent.autocompleteConfigurationEligibility
@@ -586,8 +590,27 @@ struct LinkedScriptTextView: NSViewRepresentable {
             return changed
         }
 
-        func captureRestorationState(force: Bool = false) {
-            guard let view, force || pendingInitialRestorationState == nil else { return }
+        /// Removes undo actions recorded for another scene. The text view is
+        /// reused across scenes by SwiftUI, so without this Cmd-Z in scene B
+        /// would reapply an edit made in scene A.
+        private func clearUndoHistoryIfSceneChanged() {
+            guard boundSceneID != parent.sceneID else { return }
+            boundSceneID = parent.sceneID
+            guard let textView = view?.textView, let undoManager = textView.undoManager else { return }
+            undoManager.removeAllActions(withTarget: textView)
+            if let textStorage = textView.textStorage {
+                undoManager.removeAllActions(withTarget: textStorage)
+            }
+            // NSTextView's own typing undo is registered through a private
+            // target, so the target-scoped calls above do not cover it. Clearing
+            // the manager is the only reliable way to guarantee that Cmd-Z can
+            // never write scene A's text into scene B. The window's other
+            // editors belong to the same scene switch, so losing their undo
+            // history is correct too.
+            undoManager.removeAllActions()
+        }
+
+        func captureRestorationState(force: Bool = false) {            guard let view, force || pendingInitialRestorationState == nil else { return }
             view.layoutSubtreeIfNeeded()
             let visibleOrigin = clampedVisibleOrigin(view.scrollView.contentView.bounds.origin, in: view)
             view.scrollView.contentView.scroll(to: visibleOrigin)
@@ -610,6 +633,11 @@ struct LinkedScriptTextView: NSViewRepresentable {
 
         func applyModelTextIfNeeded() {
             guard let view else { return }
+            // SwiftUI reuses the NSView when the selected scene changes. The
+            // text view's undo stack belongs to the previous scene; leaving it
+            // in place let Cmd-Z apply scene A's edits to scene B, which was
+            // then autosaved.
+            clearUndoHistoryIfSceneChanged()
             if observedAutocompleteProvider != parent.autocompleteProvider
                 || observedAutocompleteConfigurationVersion != parent.autocompleteConfigurationVersion
                 || observedAutocompleteConfigurationEligibility != parent.autocompleteConfigurationEligibility {
@@ -808,7 +836,9 @@ struct LinkedScriptTextView: NSViewRepresentable {
                 prefix: contextPrefix,
                 suffix: String(suffix.prefix(300)),
                 sceneTitle: parent.sceneTitle,
-                language: PromptBuilder().responseLanguage(for: prefix, fallback: parent.autocompleteFallbackLanguage)
+                // Bound the language detector: the whole text before the caret
+                // can be a full script, and this runs on the main actor.
+                language: PromptBuilder().responseLanguage(for: contextPrefix, fallback: parent.autocompleteFallbackLanguage)
             )
             let snapshot = AutocompleteRequestSnapshot(
                 sceneID: parent.sceneID,
@@ -1105,19 +1135,22 @@ final class ActiveScriptEditorSession {
             return liveEditors.first { $0.owningWindow === keyWindow }
         }()
         guard let editor else { return false }
-        _ = editor.commitMarkedTextAndFlush()
-        return true
+        // Report whether the editor actually changed. Returning `true` for a
+        // no-op flush made every quit mark the project dirty and prompt.
+        return editor.commitMarkedTextAndFlush()
     }
 
     @discardableResult
     func flushAllForAppResignation() -> Bool {
         editors.removeAll { $0.value == nil }
         let liveEditors = editors.compactMap(\.value)
+        var changed = false
         for editor in liveEditors {
-            _ = editor.commitMarkedTextAndFlush()
+            // The commit runs first so `||` cannot short-circuit it away.
+            changed = editor.commitMarkedTextAndFlush() || changed
             editor.cancelAutocomplete(clearStatus: true)
         }
-        return !liveEditors.isEmpty
+        return changed
     }
 
     func cancelAllAutocomplete() {
@@ -1646,6 +1679,12 @@ final class MarkerTextContainerView: NSView {
         markerHitRects().first { $0.rect.contains(point) }
     }
 
+    /// Tooltip for the marker column at `point` (in this view's coordinates).
+    func markerTooltip(at point: NSPoint) -> String? {
+        guard let marker = markerHitTest(at: point), !marker.itemIDs.isEmpty else { return nil }
+        return marker.mode == .bRoll ? addBRollLabel : addEditingLabel
+    }
+
     func documentMarkerGeometry() -> MarkerGeometry {
         rebuildMarkerGeometryIfNeeded()
         return cachedMarkerGeometry
@@ -1937,6 +1976,7 @@ enum TextAnchorGeometry {
 
 private final class TextRangeMarkerView: NSView {
     weak var container: MarkerTextContainerView?
+    private var toolTipTag: NSView.ToolTipTag?
     override var isFlipped: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1960,5 +2000,20 @@ private final class TextRangeMarkerView: NSView {
         }
     }
 
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+        if let toolTipTag {
+            removeToolTip(toolTipTag)
+        }
+        toolTipTag = addToolTip(bounds, owner: self, userData: nil)
+    }
+
+    func view(
+        _ view: NSView,
+        stringForToolTip tag: NSView.ToolTipTag,
+        point: NSPoint,
+        userData data: UnsafeMutableRawPointer?
+    ) -> String {
+        container?.markerTooltip(at: point) ?? ""
+    }
 }

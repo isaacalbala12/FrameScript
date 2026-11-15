@@ -8,6 +8,9 @@ import SwiftUI
 final class BackupsPresentation {
     static let shared = BackupsPresentation()
     var isPresented = false
+    /// Set when the sheet was opened from an error for a file that could not be
+    /// opened, so it lists that file's backups instead of the open project's.
+    var targetFileURLOverride: URL?
     private init() {}
 }
 
@@ -47,12 +50,12 @@ struct BackupsWindowView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            if let failure = health.lastFailure {
+            if let failure = health.failure(for: appState.currentBackupProjectID) {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text(appState.localized("backups.warning.lastFailure"))
                     Spacer()
-                    Text(failure.operation.rawValue)
+                    Text(appState.localized("backups.operation.\(failure.operation.rawValue)"))
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(theme.tertiaryText)
                 }
@@ -67,7 +70,7 @@ struct BackupsWindowView: View {
             }
 
             Group {
-                if appState.currentProjectFileURL == nil {
+                if appState.currentBackupProjectID == nil {
                     untitledState
                 } else if entries.isEmpty {
                     emptyState
@@ -90,6 +93,9 @@ struct BackupsWindowView: View {
         .background(theme.windowBackground)
         .foregroundStyle(theme.primaryText)
         .onAppear(perform: reload)
+        .onDisappear {
+            BackupsPresentation.shared.targetFileURLOverride = nil
+        }
         .alert(
             appState.localized("backups.restore.title"),
             isPresented: Binding(
@@ -117,7 +123,7 @@ struct BackupsWindowView: View {
                 Text(appState.localized("backups.subtitle"))
                     .font(.system(size: 12))
                     .foregroundStyle(theme.secondaryText)
-                if let url = appState.currentProjectFileURL {
+                if let url = appState.backupsProjectFileURL {
                     Text(url.path)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(theme.tertiaryText)
@@ -223,11 +229,13 @@ struct BackupsWindowView: View {
             .help(appState.localized("backups.openAsCopy.help"))
             .clickableCursor()
 
-            Button(appState.localized("backups.restore")) {
-                pendingRestore = entry
+            if appState.canRestoreBackup {
+                Button(appState.localized("backups.restore")) {
+                    pendingRestore = entry
+                }
+                .help(appState.localized("backups.restore.help"))
+                .clickableCursor()
             }
-            .help(appState.localized("backups.restore.help"))
-            .clickableCursor()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -272,11 +280,16 @@ struct BackupsWindowView: View {
 
     private func restore(_ entry: BackupEntry) {
         pendingRestore = nil
-        if appState.restoreBackup(entry) {
+        switch appState.restoreBackup(entry) {
+        case .restored:
             statusMessage = appState.localized("backups.restore.done")
             reload()
-        } else {
-            statusMessage = appState.localized("backups.restore.failed")
+        case .cancelled:
+            statusMessage = nil
+        case let .failed(failure):
+            statusMessage = failure.reason.isEmpty
+                ? appState.localized("backups.restore.failed")
+                : "\(appState.localized("backups.restore.failed")): \(failure.reason)"
         }
     }
 

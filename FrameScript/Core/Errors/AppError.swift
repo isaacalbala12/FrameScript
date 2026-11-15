@@ -26,7 +26,8 @@ enum AppErrorKind: String, Equatable, Sendable {
     case aiNetwork
     case aiProvider
     case aiMalformedResponse
-    case unexpected
+    /// A project change was refused because a take is still being recorded.
+    case recordingActive
 }
 
 struct AppErrorContext: Equatable, Sendable {
@@ -57,11 +58,12 @@ struct AppErrorContext: Equatable, Sendable {
 }
 
 enum AppRecoveryAction: Equatable, Sendable {
-    case retry
     case saveAs
     case chooseExportFolder
     case openAISettings
     case removeRecent(UUID)
+    /// Opens the backups sheet for a file that could not be opened.
+    case openBackups(URL)
 }
 
 struct AppErrorPresentation: Equatable, Sendable {
@@ -130,11 +132,11 @@ struct AppError: Identifiable, LocalizedError, Equatable, Sendable {
 extension AppRecoveryAction {
     var localizationKey: String {
         switch self {
-        case .retry: "retry"
         case .saveAs: "saveAs"
         case .chooseExportFolder: "chooseExportFolder"
         case .openAISettings: "openAISettings"
         case .removeRecent: "removeRecent"
+        case .openBackups: "openBackups"
         }
     }
 }
@@ -149,6 +151,9 @@ enum AppNoticeKind: String, Equatable, Sendable {
     case exportFolderPermissionLost
     case apiKeySaved
     case apiKeyDeleted
+    case customTemplatesUnreadable
+    case overwroteNewerFileVersion
+    case sandboxMigrationReadFailed
 }
 
 struct AppNotice: Identifiable, Equatable, Sendable {
@@ -242,18 +247,32 @@ extension AppError {
     static func project(_ error: Error, fileURL: URL?, operation: ProjectOperation) -> AppError? {
         if error is CancellationError { return nil }
         let fileName = fileURL?.lastPathComponent
-        let context = AppErrorContext(fileName: fileName, diagnosticCode: diagnosticCode(for: error))
+        let context = AppErrorContext(
+            fileName: fileName,
+            diagnosticCode: diagnosticCode(for: error),
+            reasonKey: localizedReasonKey(for: error)
+        )
+        let backupRecovery = fileURL.map(AppRecoveryAction.openBackups)
 
         if let fileError = error as? FrameScriptFileError {
             switch fileError {
-            case .unsupportedVersion:
-                return AppError(kind: .unsupportedProjectVersion, context: context)
+            case .unsupportedVersion(let version):
+                return AppError(
+                    kind: .unsupportedProjectVersion,
+                    context: AppErrorContext(
+                        fileName: fileName,
+                        diagnosticCode: context.diagnosticCode,
+                        reasonKey: "error.unsupportedVersion.reason",
+                        reasonArguments: [String(version)]
+                    ),
+                    recoveryAction: backupRecovery
+                )
             case .duplicateSceneID, .invalidAnchor:
-                return AppError(kind: .invalidProjectData, context: context)
+                return AppError(kind: .invalidProjectData, context: context, recoveryAction: backupRecovery)
             }
         }
         if error is DecodingError {
-            return AppError(kind: .corruptedProject, context: context)
+            return AppError(kind: .corruptedProject, context: context, recoveryAction: backupRecovery)
         }
         let nsError = error as NSError
         if nsError.domain == NSCocoaErrorDomain,
@@ -277,6 +296,49 @@ extension AppError {
         }
     }
 
+    /// Localised explanation for the file-system errors users actually hit. The
+    /// raw Cocoa/POSIX code stays in `diagnosticCode` for logs.
+    private static func localizedReasonKey(for error: Error) -> String? {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain {
+            switch nsError.code {
+            case NSFileNoSuchFileError, NSFileReadNoSuchFileError:
+                return "error.reason.fileNotFound"
+            case NSFileReadNoPermissionError, NSFileWriteNoPermissionError:
+                return "error.reason.noPermission"
+            case NSFileWriteOutOfSpaceError:
+                return "error.reason.diskFull"
+            case NSFileWriteFileExistsError:
+                return "error.reason.fileExists"
+            case NSFileLockingError, NSFileReadUnknownError:
+                return "error.reason.fileBusy"
+            case NSFileWriteVolumeReadOnlyError:
+                return "error.reason.readOnly"
+            default:
+                break
+            }
+        }
+        if nsError.domain == NSPOSIXErrorDomain {
+            switch nsError.code {
+            case Int(ENOENT):
+                return "error.reason.fileNotFound"
+            case Int(EACCES), Int(EPERM):
+                return "error.reason.noPermission"
+            case Int(ENOSPC):
+                return "error.reason.diskFull"
+            case Int(EIO):
+                return "error.reason.fileBusy"
+            case Int(EROFS):
+                return "error.reason.readOnly"
+            case Int(ENXIO), Int(ENODEV):
+                return "error.reason.volumeUnavailable"
+            default:
+                break
+            }
+        }
+        return nil
+    }
+
     static func recent(_ error: Error, recentID: UUID? = nil) -> AppError {
         guard let error = error as? RecentProjectStoreError else {
             return AppError(kind: .recentStorage, context: AppErrorContext(diagnosticCode: diagnosticCode(for: error)))
@@ -289,9 +351,23 @@ extension AppError {
                 recoveryAction: recentID.map(AppRecoveryAction.removeRecent)
             )
         case .unreadableFile(let url):
-            return AppError(kind: .projectRead, context: AppErrorContext(fileName: url.lastPathComponent))
+            // A readable recent entry that cannot be read is either a permission
+            // problem or a vanished file; offer to drop the stale entry and open
+            // its backups.
+            return AppError(
+                kind: .projectRead,
+                context: AppErrorContext(
+                    fileName: url.lastPathComponent,
+                    reasonKey: "error.reason.noPermission"
+                ),
+                recoveryAction: recentID.map(AppRecoveryAction.removeRecent) ?? .openBackups(url)
+            )
         case .invalidBookmark:
-            return AppError(kind: .bookmark)
+            return AppError(
+                kind: .bookmark,
+                context: AppErrorContext(reasonKey: "error.reason.invalidBookmark"),
+                recoveryAction: recentID.map(AppRecoveryAction.removeRecent)
+            )
         case .corruptedStorage, .persistenceFailed:
             return AppError(kind: .recentStorage)
         }

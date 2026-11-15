@@ -139,10 +139,21 @@ final class AppState {
 
     var templates: [FrameTemplate]
     private let builtInTemplates: [FrameTemplate]
+    /// True when the persisted custom templates blob could not be decoded. The
+    /// blob is preserved under `<key>.unreadable-backup` and saving stays
+    /// disabled until the user makes an explicit template change.
+    private var didFailToLoadCustomTemplates = false
+    private static var customTemplatesSavingIsBlocked = false
     private var autosaveTask: Task<Void, Never>?
     var trackedProjectFileURL: URL?
     var trackedProjectFileSnapshot: ProjectFileSnapshot?
     var declinedExternalProjectSnapshot: ProjectFileSnapshot?
+    /// URL of a file whose "missing" error was already shown, so the one-shot
+    /// notice is not repeated on every autosave.
+    var reportedMissingProjectFileURL: URL?
+    /// Last project file that failed to open. The backups window lists its
+    /// backups even when no project is open.
+    var failedOpenProjectFileURL: URL?
     var projectFileMonitor: ProjectFileMonitor?
     var externalChangePromptIsActive = false
     var isConfirmingTermination = false
@@ -161,7 +172,6 @@ final class AppState {
     /// test never rewrites the user's persisted app language.
     private var uiTestLanguageOverride: AppLanguage?
 #endif
-    private var appActivationObserver: NSObjectProtocol?
     private var appResignationObserver: NSObjectProtocol?
 
     init(
@@ -208,7 +218,9 @@ final class AppState {
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
-        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: Self.loadCustomTemplates())
+        let loadedCustomTemplates = Self.loadCustomTemplates()
+        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: loadedCustomTemplates.templates)
+        self.didFailToLoadCustomTemplates = loadedCustomTemplates.failed
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
@@ -229,6 +241,13 @@ final class AppState {
     func configure() {
         let arguments = ProcessInfo.processInfo.arguments
         recentProjectStore.load()
+        if didFailToLoadCustomTemplates {
+            showNotice(.customTemplatesUnreadable)
+            didFailToLoadCustomTemplates = false
+        }
+        if SandboxDataMigration.consumePendingReadFailureNotice() {
+            showNotice(.sandboxMigrationReadFailed)
+        }
 #if DEBUG
         if let flagIndex = arguments.firstIndex(of: "--framescript-ui-test-recent-path"),
            arguments.indices.contains(flagIndex + 1) {
@@ -268,7 +287,7 @@ final class AppState {
                hasOpenProject: hasOpenProject,
                hasRecentProject: true
            ) {
-            openRecentProject(entry, reportsMissingNotice: false, presentsErrors: false)
+            openRecentProject(entry, reportsMissingNotice: false, presentsErrors: true)
         }
 #if DEBUG
         if !didApplyUITestLaunchArguments,
@@ -332,11 +351,6 @@ final class AppState {
         set { windowState.isCommandPalettePresented = newValue }
     }
 
-    var isSettingsPresented: Bool {
-        get { windowState.isSettingsPresented }
-        set { windowState.isSettingsPresented = newValue }
-    }
-
     var isShortcutsPresented: Bool {
         get { windowState.isShortcutsPresented }
         set { windowState.isShortcutsPresented = newValue }
@@ -351,6 +365,12 @@ final class AppState {
         if let uiTestLanguageOverride { return uiTestLanguageOverride }
 #endif
         return settings.generalPreferences.language
+    }
+
+    /// `.system` resolved to a concrete language. Use this for content, prompts
+    /// and durations; a raw `.system` value must never leak into them.
+    var resolvedCurrentLanguage: AppLanguage {
+        L10n.resolve(currentLanguage)
     }
 
     var autocompleteConfigurationEligibility: AutocompleteConfigurationEligibility {
@@ -422,10 +442,10 @@ final class AppState {
             blankProjectStart: settings.generalPreferences.blankProjectStart,
             defaultSceneName: localized("templates.defaultScene"),
             exportPresetName: localized("export.editorHandoff"),
-            language: currentLanguage,
+            language: resolvedCurrentLanguage,
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
-        projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true)
+        projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true, recalculateDurations: false)
         resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
@@ -435,13 +455,14 @@ final class AppState {
 
     func openDemoProject() {
         guard prepareForProjectReplacement() else { return }
-        let project = SampleData.demoProject(language: currentLanguage)
+        let project = SampleData.demoProject(language: resolvedCurrentLanguage)
         projectStore.openProject(
             project,
             fileURL: nil,
             wordsPerMinute: durationWordsPerMinute(for: project),
             markUnsaved: false,
-            origin: .builtInDemo
+            origin: .builtInDemo,
+            recalculateDurations: false
         )
         resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
@@ -463,16 +484,25 @@ final class AppState {
     func openProject(at url: URL) {
         guard prepareForProjectReplacement() else { return }
         do {
-            let project = try securityScope.withAccess(to: url) {
-                try FrameScriptFileStore.read(from: url)
+            let opened = try securityScope.withAccess(to: url) {
+                try FrameScriptFileStore.readWithData(from: url)
             }
-            projectStore.openProject(project, fileURL: url, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: false)
+            let project = opened.project
+            projectStore.openProject(
+                project,
+                fileURL: url,
+                wordsPerMinute: durationWordsPerMinute(for: project),
+                markUnsaved: false,
+                recalculateDurations: false
+            )
             rememberRecentProject(url)
             projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute, markUnsaved: false)
             setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
-            startTrackingProjectFile(at: url)
+            startTrackingProjectFile(at: url, data: opened.data)
+            failedOpenProjectFileURL = nil
         } catch {
             Self.projectFilesLogger.error("Operation project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+            failedOpenProjectFileURL = url
             errorCenter.present(AppError.project(error, fileURL: url, operation: .read))
         }
     }
@@ -492,20 +522,33 @@ final class AppState {
         do {
             let url = try recentProjectStore.validatedURL(for: entry)
             try securityScope.withAccess(to: url) {
-                let project = try FrameScriptFileStore.read(from: url)
-                projectStore.openProject(project, fileURL: url, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: false)
+                let opened = try FrameScriptFileStore.readWithData(from: url)
+                let project = opened.project
+                projectStore.openProject(
+                    project,
+                    fileURL: url,
+                    wordsPerMinute: durationWordsPerMinute(for: project),
+                    markUnsaved: false,
+                    recalculateDurations: false
+                )
                 rememberRecentProject(url)
                 projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute, markUnsaved: false)
                 setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
-                startTrackingProjectFile(at: url)
+                startTrackingProjectFile(at: url, data: opened.data)
+                failedOpenProjectFileURL = nil
             }
         } catch RecentProjectStoreError.missingFile {
+            Self.projectFilesLogger.notice("Recent project file is missing; removing the entry.")
             recentProjectStore.remove(id: entry.id)
             consumeRecentProjectStoreError()
             if reportsMissingNotice { showNotice(.recentMissingRemoved) }
         } catch let error as RecentProjectStoreError {
+            Self.projectFilesLogger.error("Operation recent-project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+            failedOpenProjectFileURL = URL(fileURLWithPath: entry.lastKnownPath)
             if presentsErrors { errorCenter.present(AppError.recent(error, recentID: entry.id)) }
         } catch {
+            Self.projectFilesLogger.error("Operation project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+            failedOpenProjectFileURL = URL(fileURLWithPath: entry.lastKnownPath)
             if presentsErrors {
                 errorCenter.present(AppError.project(error, fileURL: URL(fileURLWithPath: entry.lastKnownPath), operation: .read))
             }
@@ -533,7 +576,7 @@ final class AppState {
             try securityScope.withAccess(to: url) {
                 try projectStore.saveCurrentProject(wordsPerMinute: currentDurationWordsPerMinute)
             }
-            recordProjectFileSnapshot(at: url)
+            recordProjectFileSnapshotAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
             return true
@@ -563,7 +606,7 @@ final class AppState {
         }
         do {
             try projectStore.saveCurrentProject(to: url, wordsPerMinute: currentDurationWordsPerMinute)
-            startTrackingProjectFile(at: url)
+            startTrackingProjectFileAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
             return true
@@ -579,14 +622,19 @@ final class AppState {
         windowState.isExportPresented = true
     }
 
-    func saveExport(format: ExportFormat, preferences: ExportPreferences, to url: URL) {
-        guard hasOpenProject else { return }
+    @discardableResult
+    func saveExport(format: ExportFormat, preferences: ExportPreferences, to url: URL) -> Bool {
+        guard hasOpenProject else { return false }
+        // The export reads the project's text, so commit the editor's pending
+        // characters first without triggering a disk save.
+        flushActiveEditorBoundary(saveImmediately: false)
         // Exports read `scene.estimatedDuration`; refresh it with the learned
         // pace and pause defaults so a recent edit cannot export a stale number.
         refreshDurationEstimates()
         do {
-            let rendered = dependencies.exportService.render(project: project, format: format, preferences: preferences, language: currentLanguage)
+            let rendered = dependencies.exportService.render(project: project, format: format, preferences: preferences, language: resolvedCurrentLanguage)
             try rendered.write(to: url, atomically: true, encoding: .utf8)
+            return true
         } catch {
             Self.exportLogger.error("Operation export-write failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             errorCenter.present(AppError(
@@ -594,21 +642,36 @@ final class AppState {
                 context: AppErrorContext(fileName: url.lastPathComponent, diagnosticCode: diagnosticCode(for: error)),
                 recoveryAction: .chooseExportFolder
             ))
+            return false
         }
     }
 
-    func copyExportToClipboard(format: ExportFormat, preferences: ExportPreferences) {
-        guard hasOpenProject else { return }
+    @discardableResult
+    func copyExportToClipboard(format: ExportFormat, preferences: ExportPreferences) -> Bool {
+        guard hasOpenProject else { return false }
+        flushActiveEditorBoundary(saveImmediately: false)
         // Same guarantee as `saveExport`: the copied text uses the same
         // fresh, learned-pace estimate the UI shows.
         refreshDurationEstimates()
-        let rendered = dependencies.exportService.render(project: project, format: format, preferences: preferences, language: currentLanguage)
+        let rendered = dependencies.exportService.render(project: project, format: format, preferences: preferences, language: resolvedCurrentLanguage)
         NSPasteboard.general.clearContents()
         guard NSPasteboard.general.setString(rendered, forType: .string) else {
             Self.exportLogger.error("Operation export-clipboard-write failed. Code: clipboard-write")
             errorCenter.present(AppError(kind: .export, context: AppErrorContext(diagnosticCode: "clipboard-write")))
-            return
+            return false
         }
+        return true
+    }
+
+    /// Discards local edits after confirmation and re-reads the file from disk.
+    @discardableResult
+    func revertToSaved() -> Bool {
+        guard hasOpenProject else { return false }
+        flushActiveEditorBoundary(saveImmediately: false)
+        guard confirm(title: localized("dialog.revertToSaved.title"), message: localized("dialog.revertToSaved.message")) else {
+            return false
+        }
+        return reloadProjectFromDisk()
     }
 
     func duplicateProject() {
@@ -617,16 +680,29 @@ final class AppState {
         transitionEditorContext {
             copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
         }
+        editorState.resetScriptEditorStates()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(copy?.scenes.sortedByOrder.first?.id))
+    }
+
+    func selectPreviousScene() {
+        let ordered = project.scenes.sortedByOrder
+        guard let index = selectedSceneIndex, ordered.indices.contains(index - 1) else { return }
+        selectScene(ordered[index - 1].id)
     }
 
     @discardableResult
     func closeProject() -> Bool {
         guard hasOpenProject else { return true }
+        guard !refuseProjectChangeWhileRecording() else { return false }
         flushActiveEditorBoundary()
         guard confirmCloseProjectIfNeeded() else { return false }
+        NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
+        if let url = projectStore.currentFileURL {
+            BackupsCenter.forget(projectID: BackupsCenter.projectID(for: projectStore.project, fileURL: url))
+        }
         projectStore.closeProject()
+        editorState.resetScriptEditorStates()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(nil))
         return true
@@ -668,13 +744,25 @@ final class AppState {
 
     func deleteProject() {
         guard hasOpenProject else { return }
-        if settings.generalPreferences.confirmBeforeDeleting,
-           !confirm(title: localized("dialog.deleteProject.title"), message: localized("dialog.deleteProject.message")) {
+        guard !refuseProjectChangeWhileRecording() else { return }
+        flushActiveEditorBoundary()
+        if projectStore.needsCloseConfirmation {
+            // Delete discards the open project, so unsaved edits need the same
+            // Save / Don't Save / Cancel decision as closing it, even when the
+            // delete-confirmation preference is off.
+            guard confirmCloseProjectIfNeeded() else { return }
+        } else if settings.generalPreferences.confirmBeforeDeleting,
+                  !confirm(title: localized("dialog.deleteProject.title"), message: localized("dialog.deleteProject.message")) {
             return
+        }
+        NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
+        if let url = projectStore.currentFileURL {
+            BackupsCenter.forget(projectID: BackupsCenter.projectID(for: projectStore.project, fileURL: url))
         }
         transitionEditorContext(sceneID: .some(nil)) {
             projectStore.deleteCurrentProject()
         }
+        editorState.resetScriptEditorStates()
         resetProjectFileTracking()
     }
 
@@ -709,13 +797,31 @@ final class AppState {
     }
 
     private func prepareForProjectReplacement() -> Bool {
+        guard !refuseProjectChangeWhileRecording() else { return false }
         flushActiveEditorBoundary()
-        return !hasOpenProject || confirmCloseProjectIfNeeded()
+        guard !hasOpenProject || confirmCloseProjectIfNeeded() else { return false }
+        // The open project is about to be replaced: drop per-project runtime
+        // state (AI run, editor restoration, teleprompter) before the new
+        // document lands.
+        aiState.isAnalyzing = false
+        editorState.resetScriptEditorStates()
+        NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
+        return true
     }
 
     func touchProject() {
         projectStore.markProjectDirty()
         scheduleAutosaveIfNeeded()
+    }
+
+    /// Refuses to close, replace or delete a project while a take is being
+    /// recorded: finalising the take would write it into the wrong project.
+    /// Returns true when the change must be refused.
+    @discardableResult
+    func refuseProjectChangeWhileRecording() -> Bool {
+        guard recording.hasActiveTake else { return false }
+        errorCenter.present(AppError(kind: .recordingActive))
+        return true
     }
 
     func touchCurrentSceneText() {
@@ -1100,6 +1206,10 @@ final class AppState {
     }
 
     func deleteSelectedScene() {
+        if recording.activeSceneID == selectedScene?.id,
+           refuseProjectChangeWhileRecording() {
+            return
+        }
         if settings.generalPreferences.confirmBeforeDeleting,
            !confirm(title: localized("dialog.deleteScene.title"), message: localized("dialog.deleteScene.message")) {
             return
@@ -1158,17 +1268,22 @@ final class AppState {
             return
         }
         guard let scene = selectedScene else { return }
+        let projectID = project.id
+        let sceneID = scene.id
         guard let target = productionSuggestionTarget(in: scene) else {
             errorCenter.present(AppError(kind: .invalidProjectData))
             return
         }
+        // The suggestion is appended to the scene that was current when the
+        // request started; a project switch or a text edit invalidates it.
+        let sourceText = scene.scriptText
 
         let schema = kind == .bRollGeneration
             ? "Return only one JSON object with string fields: source, description, notes. Source must be one of: \(BRollSourceType.allCases.map(\.rawValue).joined(separator: ", "))."
             : "Return only one JSON object with string fields: description, notes."
         let context = settings.aiPreferences.privacyMode
             ? target.selectedText
-            : "Scene: \(scene.title)\nFull scene: \(scene.scriptText)\nTarget anchor: \(target.selectedText)"
+            : "Scene: \(scene.title)\nFull scene: \(sourceText)\nTarget anchor: \(target.selectedText)"
         do {
             let provider = settings.aiPreferences.provider
             let apiKey = provider.isSubscriptionBacked
@@ -1178,24 +1293,33 @@ final class AppState {
                 task: kind,
                 provider: provider,
                 baseURL: settings.aiPreferences.baseURL,
-                systemPrompt: "\(PromptBuilder().systemPrompt(for: kind, language: PromptBuilder().responseLanguage(for: scene.scriptText, fallback: currentLanguage))) \(schema) Do not use Markdown fences.",
+                systemPrompt: "\(PromptBuilder().systemPrompt(for: kind, language: PromptBuilder().responseLanguage(for: sourceText, fallback: resolvedCurrentLanguage))) \(schema) Do not use Markdown fences.",
                 userPrompt: context,
                 model: settings.aiPreferences.model,
                 temperature: settings.aiPreferences.temperature,
                 maxTokens: settings.aiPreferences.maxTokens
             ), apiKey: apiKey)
             let data = try Self.structuredJSONData(from: response.text)
+            guard project.id == projectID else { return }
+            guard let currentScene = project.scenes.first(where: { $0.id == sceneID }) else { return }
+            // The anchor was computed against the text that was sent. If the
+            // script changed meanwhile, appending it would point at the wrong
+            // words.
+            guard let currentAnchor = TextAnchorRepair.current(target, in: currentScene.scriptText) else {
+                errorCenter.present(AppError(kind: .invalidProjectData))
+                return
+            }
             switch kind {
             case .bRollGeneration:
                 let value = try JSONDecoder().decode(GeneratedBRollSuggestion.self, from: data)
                 guard !value.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw GenerationError.emptyDescription }
                 let source = BRollSourceType.allCases.first { $0.rawValue.caseInsensitiveCompare(value.source) == .orderedSame } ?? .custom
-                scene.bRollItems.append(BRollItem(textAnchor: target, linkedSegmentID: nil, templateType: "", sourceType: source, descriptionText: value.description, notes: value.notes))
+                currentScene.bRollItems.append(BRollItem(textAnchor: currentAnchor, linkedSegmentID: nil, templateType: "", sourceType: source, descriptionText: value.description, notes: value.notes))
                 selectMode(.bRoll)
             case .editingGeneration:
                 let value = try JSONDecoder().decode(GeneratedEditingSuggestion.self, from: data)
                 guard !value.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw GenerationError.emptyDescription }
-                scene.editingItems.append(EditingItem(textAnchor: target, linkedSegmentID: nil, templateType: "", cutStyle: value.description, transition: "", subtitleStyle: "", notes: value.notes))
+                currentScene.editingItems.append(EditingItem(textAnchor: currentAnchor, linkedSegmentID: nil, templateType: "", cutStyle: value.description, transition: "", subtitleStyle: "", notes: value.notes))
                 selectMode(.editing)
             default: return
             }
@@ -1222,6 +1346,8 @@ final class AppState {
     func analyzeSelectedScene() async {
         guard !aiState.isAnalyzing else { return }
         guard let scene = selectedScene else { return }
+        let projectID = project.id
+        let sceneID = scene.id
         aiState.isAnalyzing = true
         aiState.didFailMostRecentAnalysis = false
         defer { aiState.isAnalyzing = false }
@@ -1229,10 +1355,14 @@ final class AppState {
             let apiKey = try providerAPIKeyIfNeeded()
             let comments = settings.aiPreferences.provider == .disabled
                 ? disabledAIComments(for: scene)
-                : try await dependencies.analysisService.analyze(scene: scene, project: project, settings: settings.aiPreferences, interfaceLanguage: currentLanguage, apiKey: apiKey)
-            scene.aiComments = comments
+                : try await dependencies.analysisService.analyze(scene: scene, project: project, settings: settings.aiPreferences, interfaceLanguage: resolvedCurrentLanguage, apiKey: apiKey)
+            // The project may have been replaced while the request was running.
+            guard project.id == projectID,
+                  let currentScene = project.scenes.first(where: { $0.id == sceneID }) else { return }
+            currentScene.aiComments = comments
             touchProject()
         } catch {
+            guard project.id == projectID else { return }
             aiState.didFailMostRecentAnalysis = true
             errorCenter.present(AppError.ai(error))
         }
@@ -1240,18 +1370,29 @@ final class AppState {
 
     func analyzeFullScript() async {
         guard !aiState.isAnalyzing else { return }
+        let projectID = project.id
+        // Work on the snapshot that was sent, and never touch the open project
+        // after an await if it changed in the meantime.
+        let snapshot = project
         aiState.isAnalyzing = true
+        aiState.didFailMostRecentAnalysis = false
         defer { aiState.isAnalyzing = false }
         do {
             let apiKey = try providerAPIKeyIfNeeded()
-            for scene in project.scenes.sortedByOrder {
+            for scene in snapshot.scenes.sortedByOrder {
+                guard project.id == projectID else { return }
                 let comments = settings.aiPreferences.provider == .disabled
                     ? disabledAIComments(for: scene)
-                    : try await dependencies.analysisService.analyze(scene: scene, project: project, settings: settings.aiPreferences, interfaceLanguage: currentLanguage, apiKey: apiKey)
-                scene.aiComments = comments
+                    : try await dependencies.analysisService.analyze(scene: scene, project: snapshot, settings: settings.aiPreferences, interfaceLanguage: resolvedCurrentLanguage, apiKey: apiKey)
+                guard project.id == projectID,
+                      let currentScene = project.scenes.first(where: { $0.id == scene.id }) else { return }
+                currentScene.aiComments = comments
             }
+            guard project.id == projectID else { return }
             touchProject()
         } catch {
+            guard project.id == projectID else { return }
+            aiState.didFailMostRecentAnalysis = true
             errorCenter.present(AppError.ai(error))
         }
     }
@@ -1302,8 +1443,6 @@ final class AppState {
 
     func performRecovery(_ action: AppRecoveryAction) {
         switch action {
-        case .retry:
-            break // No retry is offered unless a future typed retry descriptor can execute safely.
         case .saveAs:
             _ = saveProjectAs()
         case .chooseExportFolder:
@@ -1313,6 +1452,8 @@ final class AppState {
             NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case .removeRecent(let id):
             removeRecentProject(id: id)
+        case .openBackups(let url):
+            showBackupsWindow(for: url)
         }
     }
 
@@ -1508,7 +1649,7 @@ final class AppState {
               projectStore.hasUnsavedFileChanges else {
             return
         }
-        switch prepareProjectFileForWrite(honoringDeclinedConflict: true) {
+        switch prepareProjectFileForWrite(honoringDeclinedConflict: true, reportsMissingFile: false) {
         case .proceed:
             break
         case .handled, .declined, .failed:
@@ -1518,7 +1659,7 @@ final class AppState {
             try securityScope.withAccess(to: url) {
                 try projectStore.saveCurrentProject(wordsPerMinute: currentDurationWordsPerMinute)
             }
-            recordProjectFileSnapshot(at: url)
+            recordProjectFileSnapshotAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
         } catch {
             Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -1526,7 +1667,7 @@ final class AppState {
         }
     }
 
-    private func showNotice(_ kind: AppNoticeKind, count: Int? = nil) {
+    func showNotice(_ kind: AppNoticeKind, count: Int? = nil) {
         errorCenter.showNotice(AppNotice(kind: kind, count: count))
     }
 
@@ -1540,21 +1681,10 @@ final class AppState {
     }
 
     private func installAppActivationObserverIfNeeded() {
-        if appActivationObserver == nil {
-            appActivationObserver = NotificationCenter.default.addObserver(
-                forName: NSApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let result = await self.recentProjectStore.validateEntries()
-                    self.presentAutomaticRecentRemovalNotice(count: result.removedMissingCount)
-                    self.consumeRecentProjectStoreError()
-                    self.checkForExternalProjectChanges()
-                }
-            }
-        }
+        // Recents and external changes are validated by the file monitor and by
+        // `prepareProjectFileForWrite` before every write. Polling them again on
+        // every activation re-resolved every bookmark synchronously on the main
+        // actor, which stalled the UI when a network volume disappeared.
         if appResignationObserver == nil {
             appResignationObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.willResignActiveNotification,
@@ -1627,6 +1757,11 @@ final class AppState {
     }
 
     private func diagnosticCode(for error: Error) -> String {
+        let value = error as NSError
+        return "\(value.domain):\(value.code)"
+    }
+
+    private static func diagnosticCode(_ error: Error) -> String {
         let value = error as NSError
         return "\(value.domain):\(value.code)"
     }
@@ -1863,6 +1998,9 @@ final class AppState {
     }
 
     private func persistCustomTemplates() {
+        // Every caller is a user-initiated template change; that is the explicit
+        // signal that may replace a previously unreadable blob.
+        Self.customTemplatesSavingIsBlocked = false
         Self.saveCustomTemplates(templates.filter { !$0.builtIn })
     }
 
@@ -1883,12 +2021,24 @@ final class AppState {
 
     private static let customTemplatesKey = "FrameScript.customTemplates.v1"
 
-    private static func loadCustomTemplates() -> [FrameTemplate] {
-        guard let data = AppEnvironment.defaults.data(forKey: customTemplatesKey) else { return [] }
-        return (try? JSONDecoder().decode([FrameTemplate].self, from: data)) ?? []
+    private static func loadCustomTemplates() -> (templates: [FrameTemplate], failed: Bool) {
+        guard let data = AppEnvironment.defaults.data(forKey: customTemplatesKey) else {
+            return ([], false)
+        }
+        do {
+            return (try JSONDecoder().decode([FrameTemplate].self, from: data), false)
+        } catch {
+            // Keep the unreadable blob so a later build or a manual rescue can
+            // recover the templates instead of losing them to an empty list.
+            AppEnvironment.defaults.set(data, forKey: customTemplatesKey + ".unreadable-backup")
+            customTemplatesSavingIsBlocked = true
+            projectFilesLogger.error("Custom templates could not be read; blob preserved. Code: \(Self.diagnosticCode(error), privacy: .private)")
+            return ([], true)
+        }
     }
 
     private static func saveCustomTemplates(_ templates: [FrameTemplate]) {
+        guard !customTemplatesSavingIsBlocked else { return }
         guard let data = try? JSONEncoder().encode(templates) else { return }
         AppEnvironment.defaults.set(data, forKey: customTemplatesKey)
     }
@@ -1913,8 +2063,15 @@ final class ProjectStore {
     private(set) var saveState: SaveState = .saved
     private(set) var hasUnsavedFileChanges = false
     private(set) var origin: ProjectStoreOrigin = .normal
+    /// Exact bytes the last successful save wrote. `AppState` records this as the
+    /// external-change baseline instead of re-reading a file an external writer
+    /// may already have replaced.
+    private(set) var lastSavedFileData: Data?
     private var segmentSplitMode: SegmentType = AppSettings.defaults.generalPreferences.defaultSplitMode
-    private let projectWriter: (FrameProject, URL) throws -> Void
+    /// Text hash per scene at the last full segmentation. Unchanged scenes keep
+    /// their segments, so a save does not re-split the whole script.
+    private var segmentedTextHashes: [UUID: String] = [:]
+    private let projectWriter: ((FrameProject, URL) throws -> Void)?
     /// Resolves the markup-aware duration configuration for a scene. Set by
     /// `AppState`; a closure keeps this store independent from settings.
     var durationConfigurationProvider: ((Scene) -> DurationConfiguration)?
@@ -1923,7 +2080,7 @@ final class ProjectStore {
 
     init(
         project: FrameProject = SampleData.defaultProject,
-        projectWriter: @escaping (FrameProject, URL) throws -> Void = FrameScriptFileStore.write
+        projectWriter: ((FrameProject, URL) throws -> Void)? = nil
     ) {
         self.project = project
         self.projectWriter = projectWriter
@@ -1946,14 +2103,19 @@ final class ProjectStore {
         fileURL: URL?,
         wordsPerMinute: Int,
         markUnsaved: Bool,
-        origin: ProjectStoreOrigin = .normal
+        origin: ProjectStoreOrigin = .normal,
+        recalculateDurations: Bool = true
     ) {
         self.project = project
         currentFileURL = fileURL
         self.origin = origin
         hasOpenProject = true
+        lastSavedFileData = nil
+        segmentedTextHashes.removeAll()
         EditorMarkupSessionCaches.reset()
-        recalculateDurations(wordsPerMinute: wordsPerMinute)
+        if recalculateDurations {
+            self.recalculateDurations(wordsPerMinute: wordsPerMinute)
+        }
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
     }
@@ -1964,6 +2126,9 @@ final class ProjectStore {
         hasUnsavedFileChanges = false
         saveState = .saved
         origin = .normal
+        project = SampleData.defaultProject
+        lastSavedFileData = nil
+        segmentedTextHashes.removeAll()
         EditorMarkupSessionCaches.reset()
     }
 
@@ -1984,10 +2149,25 @@ final class ProjectStore {
 
     func saveCurrentProject(to url: URL, wordsPerMinute: Int) throws {
         prepareForSave(wordsPerMinute: wordsPerMinute)
-        BackupsCenter.backUpBeforeOverwrite(project: project, fileURL: url)
+        if currentFileURL != url {
+            // Save As: the destination may belong to another project. Back it up
+            // under its own path identity, forcibly, before replacing it.
+            BackupsCenter.backUpBeforeSaveAs(to: url)
+        } else {
+            BackupsCenter.backUpBeforeOverwrite(project: project, fileURL: url)
+        }
         do {
-            try projectWriter(project, url)
+            if let projectWriter {
+                try projectWriter(project, url)
+                // A test/injected writer may write different bytes. Remember
+                // what we believe the file now holds so a mismatch is detected
+                // instead of being adopted as an external version.
+                lastSavedFileData = try? FrameScriptFileStore.encode(project: project)
+            } else {
+                lastSavedFileData = try FrameScriptFileStore.writeWithData(project: project, to: url)
+            }
         } catch {
+            lastSavedFileData = nil
             hasUnsavedFileChanges = true
             saveState = .edited
             throw error
@@ -2005,6 +2185,9 @@ final class ProjectStore {
         hasOpenProject = true
         hasUnsavedFileChanges = true
         saveState = .edited
+        lastSavedFileData = nil
+        segmentedTextHashes.removeAll()
+        EditorMarkupSessionCaches.reset()
         return copy
     }
 
@@ -2014,6 +2197,8 @@ final class ProjectStore {
         hasOpenProject = false
         hasUnsavedFileChanges = false
         saveState = .saved
+        lastSavedFileData = nil
+        segmentedTextHashes.removeAll()
         EditorMarkupSessionCaches.reset()
     }
 
@@ -2027,8 +2212,9 @@ final class ProjectStore {
     }
 
     func selectedSceneIndex(id: UUID?) -> Int? {
-        guard let id else { return nil }
-        return project.scenes.sortedByOrder.firstIndex(where: { $0.id == id })
+        let ordered = project.scenes.sortedByOrder
+        guard let id else { return ordered.isEmpty ? nil : 0 }
+        return ordered.firstIndex(where: { $0.id == id }) ?? (ordered.isEmpty ? nil : 0)
     }
 
     func makeScene(order: Int, title: String) -> Scene {
@@ -2076,6 +2262,7 @@ final class ProjectStore {
             return
         }
         project.scenes.remove(at: storageIndex)
+        segmentedTextHashes[scene.id] = nil
         EditorMarkupSessionCaches.removeScene(scene.id)
         normalizeSceneOrder()
         markProjectDirty()
@@ -2114,15 +2301,18 @@ final class ProjectStore {
 
     private func prepareForSave(wordsPerMinute: Int) {
         synchronizeTextSegments(splitMode: segmentSplitMode, wordsPerMinute: wordsPerMinute, markUnsaved: false)
-        recalculateDurations(wordsPerMinute: wordsPerMinute)
         project.updatedAt = Date()
         saveState = .autosaving
     }
 
     func synchronizeTextSegments(splitMode: SegmentType, wordsPerMinute: Int, markUnsaved: Bool = true) {
+        let splitModeChanged = segmentSplitMode != splitMode
         segmentSplitMode = splitMode
         for scene in project.scenes {
+            let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+            guard splitModeChanged || segmentedTextHashes[scene.id] != hash else { continue }
             synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
+            segmentedTextHashes[scene.id] = hash
         }
         recalculateDurations(wordsPerMinute: wordsPerMinute)
         project.updatedAt = Date()
@@ -2136,6 +2326,7 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
+        segmentedTextHashes[sceneID] = FrameScriptDocument.TextHash.hash(scene.scriptText)
         // The scene-level estimate is owned by `SceneMetricsDebouncer`: one
         // off-main parse per settled edit. Recomputing it here would parse the
         // same script a second time on the main actor, just before the debounced
@@ -2376,6 +2567,13 @@ final class EditorState {
     func setScriptEditorState(_ state: ScriptEditorRestorationState, sceneID: UUID, editorIdentity: UUID) {
         scriptEditorStates[ScriptEditorRestorationKey(sceneID: sceneID, editorIdentity: editorIdentity)] = state
     }
+
+    /// Drops every per-scene caret/scroll restoration entry. Called when the
+    /// project closes or is replaced so a new project cannot inherit stale
+    /// ranges from the previous one.
+    func resetScriptEditorStates() {
+        scriptEditorStates.removeAll()
+    }
 }
 
 struct ScriptEditorRestorationKey: Hashable {
@@ -2566,7 +2764,6 @@ final class AIState {
 final class WindowState {
     var isSidebarVisible = true
     var isCommandPalettePresented = false
-    var isSettingsPresented = false
     var isShortcutsPresented = false
     var requestedSettingsTab: SettingsTab = .general
     var requestedSettingsHighlightKey: String?

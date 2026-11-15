@@ -1,6 +1,12 @@
 import CryptoKit
 import Darwin
 import Foundation
+import OSLog
+
+private let projectFileMonitorLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
+    category: "ProjectFileMonitor"
+)
 
 /// Identity of the project file as FrameScript last read or wrote it. Comparing
 /// the hash catches content changes even when a writer preserves the
@@ -34,7 +40,9 @@ enum ProjectFileSnapshotReader {
 @MainActor
 final class ProjectFileMonitor {
     private let securityScope: SecurityScopedResourceAccess
-    private var source: DispatchSourceFileSystemObject?
+    /// `DispatchSource.cancel()` is thread-safe and also called from `deinit`,
+    /// which Swift 6 treats as nonisolated. Every other access is main-actor.
+    nonisolated(unsafe) private var source: DispatchSourceFileSystemObject?
     private var watchedURL: URL?
     private var changeHandler: (@MainActor () -> Void)?
     private var pendingCheck: Task<Void, Never>?
@@ -42,6 +50,12 @@ final class ProjectFileMonitor {
 
     init(securityScope: SecurityScopedResourceAccess = .live) {
         self.securityScope = securityScope
+    }
+
+    deinit {
+        // `stop()` normally runs when the project closes; this is the last
+        // resort so a deallocated app state cannot leak the watched descriptor.
+        source?.cancel()
     }
 
     func start(watching url: URL, onChange: @escaping @MainActor () -> Void) {
@@ -66,9 +80,15 @@ final class ProjectFileMonitor {
         source?.cancel()
         source = nil
         let descriptor = securityScope.withAccess(to: url) {
-            open(url.path, O_EVTONLY)
+            open(url.path, O_EVTONLY | O_CLOEXEC)
         }
-        guard descriptor >= 0 else { return }
+        guard descriptor >= 0 else {
+            let code = errno
+            projectFileMonitorLogger.notice(
+                "Project file monitor could not open the file. errno=\(code, privacy: .public)"
+            )
+            return
+        }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
             eventMask: [.write, .delete, .rename, .revoke, .attrib],

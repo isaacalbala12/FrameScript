@@ -62,6 +62,20 @@ typealias AppExportFormat = ExportFormat
 
 // MARK: - Project document <-> app model
 
+/// Durations read from a file are untrusted. Keep them finite and inside the
+/// range the duration UI can format, even when the document was built by a
+/// caller other than the codec.
+private let maximumMappedSeconds: TimeInterval = 86_400
+
+private func sanitizedSeconds(_ value: TimeInterval) -> TimeInterval {
+    guard value.isFinite else { return 0 }
+    return min(max(value, 0), maximumMappedSeconds)
+}
+
+private func sanitizedSeconds(_ value: TimeInterval?) -> TimeInterval? {
+    value.map(sanitizedSeconds)
+}
+
 extension FrameScriptDocument {
     init(project: FrameProject) {
         self.init(
@@ -116,22 +130,22 @@ extension FrameScriptDocument.Project {
     }
 
     func makeProject() -> FrameProject {
-        FrameProject(
-            id: id,
-            title: title,
-            createdAt: createdAt,
-            updatedAt: updatedAt,
-            templateID: templateID,
-            scenes: scenes.map { $0.makeScene() },
-            settingsOverride: settingsOverride.map { $0.makeOverride() },
-            exportPresets: exportPresets.map { $0.makePreset() },
-            primaryLanguage: primaryLanguage,
-            topic: topic,
-            videoType: videoType,
-            productionStatus: AppProductionStatus(rawValue: productionStatus.rawValue) ?? .idea,
-            targetDate: targetDate,
-            publishDate: publishDate,
-            targetDuration: targetDuration,
+            return FrameProject(
+                id: id,
+                title: title,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                templateID: templateID,
+                scenes: scenes.map { $0.makeScene() },
+                settingsOverride: settingsOverride.map { $0.makeOverride() },
+                exportPresets: exportPresets.map { $0.makePreset() },
+                primaryLanguage: primaryLanguage,
+                topic: topic,
+                videoType: videoType,
+                productionStatus: AppProductionStatus(rawValue: productionStatus.rawValue) ?? .idea,
+                targetDate: targetDate,
+                publishDate: publishDate,
+                targetDuration: sanitizedSeconds(targetDuration),
             learnedWordsPerMinuteByLanguage: learnedWordsPerMinuteByLanguage,
             learnedWordsPerMinuteResetAtByLanguage: learnedWordsPerMinuteResetAtByLanguage,
             assets: assets.map { $0.makeAsset() },
@@ -185,7 +199,7 @@ extension FrameScriptDocument.Scene {
             title: title,
             scriptText: scriptText,
             notes: notes,
-            estimatedDuration: estimatedDuration,
+            estimatedDuration: sanitizedSeconds(estimatedDuration),
             textSegments: textSegments.map { $0.makeSegment() },
             aiComments: aiComments.map { $0.makeComment() },
             bRollItems: bRollItems.map { $0.makeBRollItem() },
@@ -376,7 +390,7 @@ extension FrameScriptDocument.Take {
             id: id,
             number: number,
             startedAt: startedAt,
-            duration: duration,
+            duration: sanitizedSeconds(duration),
             filePath: filePath,
             bookmarkData: bookmarkData,
             rating: AppTakeRating(rawValue: rating.rawValue) ?? .unrated,
@@ -406,8 +420,8 @@ extension FrameScriptDocument.SceneLanguageVariant {
             text: text,
             sourceHash: sourceHash,
             takes: takes.map { $0.makeTake() },
-            estimatedDuration: estimatedDuration,
-            actualDuration: actualDuration
+            estimatedDuration: sanitizedSeconds(estimatedDuration),
+            actualDuration: sanitizedSeconds(actualDuration)
         )
     }
 }
@@ -444,7 +458,7 @@ extension FrameScriptDocument.ProjectAsset {
             linkedBRollItemIDs: linkedBRollItemIDs,
             linkedTakeIDs: linkedTakeIDs,
             isCopiedIntoProject: isCopiedIntoProject,
-            duration: duration,
+            duration: sanitizedSeconds(duration),
             fileSize: fileSize,
             modifiedAt: modifiedAt,
             isLastKnownMissing: isLastKnownMissing
@@ -468,7 +482,7 @@ extension FrameScriptDocument.ChapterOverride {
             id: id,
             sceneID: sceneID,
             title: title,
-            startSeconds: startSeconds,
+            startSeconds: sanitizedSeconds(startSeconds),
             isExcluded: isExcluded
         )
     }
@@ -637,7 +651,7 @@ extension FrameScriptDocument.ShortClip {
             anchor: anchor?.makeAnchor(),
             hook: hook,
             adaptedText: adaptedText,
-            targetSeconds: targetSeconds,
+            targetSeconds: sanitizedSeconds(targetSeconds),
             format: AppShortClipFormat(rawValue: format.rawValue) ?? .reel,
             onScreenText: onScreenText,
             description: description,
@@ -835,8 +849,24 @@ enum FrameScriptFileStore {
         try FrameScriptDocumentCodec.write(FrameScriptDocument(project: project), to: url)
     }
 
+    /// Writes the project and returns the exact bytes that were written, so the
+    /// caller can use them as its external-change fingerprint without a re-read.
+    @discardableResult
+    static func writeWithData(project: FrameProject, to url: URL) throws -> Data {
+        let data = try FrameScriptDocumentCodec.encode(FrameScriptDocument(project: project))
+        try FrameScriptDocumentCodec.writeEncoded(data, to: url)
+        return data
+    }
+
     static func read(from url: URL) throws -> FrameProject {
         try FrameScriptDocumentCodec.read(from: url).project.makeProject()
+    }
+
+    /// Reads once and returns both the app model and the bytes that produced it.
+    static func readWithData(from url: URL) throws -> (project: FrameProject, data: Data) {
+        let data = try Data(contentsOf: url)
+        let document = try FrameScriptDocumentCodec.decode(data)
+        return (document.project.makeProject(), data)
     }
 
     static func encode(project: FrameProject) throws -> Data {
@@ -845,5 +875,29 @@ enum FrameScriptFileStore {
 
     static func decodeProject(from data: Data) throws -> FrameProject {
         try FrameScriptDocumentCodec.decode(data).project.makeProject()
+    }
+
+    /// Best-effort `fileVersion` from a file that may be too new or corrupt to
+    /// decode. Used only to warn before overwriting a newer document.
+    static func fileVersionInFile(at url: URL) -> Int? {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let root = object as? [String: Any] else {
+            return nil
+        }
+        return root["fileVersion"] as? Int
+    }
+
+    /// Best-effort project id from a file that cannot be decoded. Backups of a
+    /// saved project are filed under this id.
+    static func projectIDInFile(at url: URL) -> UUID? {
+        guard let data = try? Data(contentsOf: url),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let root = object as? [String: Any],
+              let project = root["project"] as? [String: Any],
+              let rawID = project["id"] as? String else {
+            return nil
+        }
+        return UUID(uuidString: rawID)
     }
 }

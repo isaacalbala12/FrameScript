@@ -114,7 +114,9 @@ extension FrameProject {
             glossary: glossary.map { $0.copied() },
             clips: clips.map { $0.copied(context: context) },
             versionHistory: versionHistory.map { $0.copied() },
-            aiThreadMap: aiThreadMap,
+            // A copy is a new project: it must not reuse the original's AI
+            // conversation threads.
+            aiThreadMap: AIThreadMap(),
             unparsedSections: unparsedSections,
             publishedVideos: publishedVideos.mapValues { $0.copied(context: context) }
         )
@@ -122,13 +124,20 @@ extension FrameProject {
 }
 
 extension Scene {
+    /// A duplicated scene starts empty of takes: each take is a real recording
+    /// linked to the original scene's read text. Project duplication keeps them
+    /// (see `FrameProject.copied`).
     func copied(order: Int, title: String) -> Scene {
         var context = ModelCopyContext()
         context.prepare(scenes: [self])
-        return copied(order: order, title: title, context: &context)
+        return copied(order: order, title: title, copiesTakes: false, context: &context)
     }
 
     func copied(order: Int, title: String, context: inout ModelCopyContext) -> Scene {
+        copied(order: order, title: title, copiesTakes: true, context: &context)
+    }
+
+    func copied(order: Int, title: String, copiesTakes: Bool, context: inout ModelCopyContext) -> Scene {
         let newSceneID = context.sceneIDs[id] ?? UUID()
         let sortedSegments = textSegments.sortedByOrder
 
@@ -197,13 +206,13 @@ extension Scene {
                 )
             },
             targetDuration: targetDuration,
-            takes: takes.map { $0.copied(context: context) },
+            takes: copiesTakes ? takes.map { $0.copied(context: context) } : [],
             languageVariants: languageVariants.map {
                 SceneLanguageVariant(
                     languageCode: $0.languageCode,
                     text: $0.text,
                     sourceHash: $0.sourceHash,
-                    takes: $0.takes.map { take in take.copied(context: context) },
+                    takes: copiesTakes ? $0.takes.map { take in take.copied(context: context) } : [],
                     estimatedDuration: $0.estimatedDuration,
                     actualDuration: $0.actualDuration
                 )
