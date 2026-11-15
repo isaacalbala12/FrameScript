@@ -28,13 +28,20 @@ struct EscaletaImportPreviewSheet: View {
                     }
                     warnings
                 }
+                // The footer sits right below the scroll view, so the last
+                // section must keep its own air or it reads as clipped by the
+                // footer (V6).
                 .padding(22)
+                .padding(.bottom, 22)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             Divider().overlay(theme.divider)
             footer
         }
-        .frame(width: 720, height: 620)
+        // Tall enough that the ordinary preview (four scenes, no warnings) fits
+        // without scrolling, plus the extra bottom padding: the last section used
+        // to be cut by the footer (V6).
+        .frame(width: 720, height: 700)
         .background(theme.windowBackground)
         .foregroundStyle(theme.primaryText)
     }
@@ -274,6 +281,9 @@ struct EscaletaImportPreviewSheet: View {
                     coordinator.dismiss()
                 }
             }
+            // The primary action must read as the primary action: filled
+            // `accentStrong`, and Return triggers it (V5).
+            .buttonStyle(EscaletaPrimaryActionButtonStyle())
             .keyboardShortcut(.defaultAction)
             .disabled(!request.isConfirmEnabled)
             .clickableCursor()
@@ -338,6 +348,32 @@ struct EscaletaImportPreviewSheet: View {
         case .unsupported:
             appState.localized("escaleta.import.explanation.unsupported")
         }
+    }
+}
+
+/// Filled primary button for the sheet's footer.
+///
+/// `.borderedProminent` falls back to the neutral grey fill while the window is
+/// not key, which is exactly the look this action must not have (V5), and the
+/// snapshot renderer never makes its window key. Drawing the fill from
+/// `accentStrong` keeps the primary action primary in every window state.
+private struct EscaletaPrimaryActionButtonStyle: ButtonStyle {
+    @Environment(\.frameTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let fill = theme.accentStrong
+        return configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(FrameTheme.textColor(onFill: fill))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(fill.opacity(configuration.isPressed ? 0.82 : 1))
+            )
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 

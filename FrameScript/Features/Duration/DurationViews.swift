@@ -191,20 +191,19 @@ struct SceneDurationPopover: View {
 
                 Button(appState.localized("duration.set"), action: applyTarget)
                     .disabled(parsedTarget == nil)
-                    .buttonStyle(.borderless)
+                    .buttonStyle(DurationActionButtonStyle())
 
                 Spacer(minLength: 0)
 
                 if scene.targetDuration != nil {
                     Button(appState.localized("duration.clear"), action: clearTarget)
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(theme.secondaryText)
+                        .buttonStyle(DurationActionButtonStyle())
                 }
             }
 
             Text(appState.localized("duration.targetHelp"))
                 .font(.system(size: 10.5))
-                .foregroundStyle(theme.tertiaryText)
+                .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -324,7 +323,7 @@ struct ProjectDurationPopover: View {
                 Spacer(minLength: 0)
                 Text(appState.project.title)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.tertiaryText)
+                    .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -407,20 +406,19 @@ struct ProjectDurationPopover: View {
 
                 Button(appState.localized("duration.set"), action: applyTarget)
                     .disabled(parsedTarget == nil)
-                    .buttonStyle(.borderless)
+                    .buttonStyle(DurationActionButtonStyle())
 
                 Spacer(minLength: 0)
 
                 if appState.project.targetDuration != nil {
                     Button(appState.localized("duration.clear"), action: clearTarget)
-                        .buttonStyle(.borderless)
-                        .foregroundStyle(theme.secondaryText)
+                        .buttonStyle(DurationActionButtonStyle())
                 }
             }
 
             Text(appState.localized("duration.targetHelp"))
                 .font(.system(size: 10.5))
-                .foregroundStyle(theme.tertiaryText)
+                .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -432,7 +430,7 @@ struct ProjectDurationPopover: View {
 
             Text(appState.localized("duration.learnedWPMHelp"))
                 .font(.system(size: 10.5))
-                .foregroundStyle(theme.tertiaryText)
+                .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
             ForEach(SpeechLanguage.allCases, id: \.rawValue) { language in
@@ -464,17 +462,18 @@ struct ProjectDurationPopover: View {
                     .monospacedDigit()
                 Text(sampleDetail(accepted: accepted, minimum: minimum))
                     .font(.system(size: 10))
-                    .foregroundStyle(accepted >= minimum ? theme.success : theme.tertiaryText)
+                    .foregroundStyle(accepted >= minimum ? theme.success : theme.secondaryText)
             }
 
-            Button(appState.localized("duration.reset")) {
-                appState.resetLearnedWPM(language: language.rawValue)
+            // Nothing learned means nothing to reset: the button only exists
+            // when it would do something (V7).
+            if hasAnythingToReset {
+                Button(appState.localized("duration.reset")) {
+                    appState.resetLearnedWPM(language: language.rawValue)
+                }
+                .buttonStyle(DurationActionButtonStyle())
+                .help(appState.localized("duration.resetHelp"))
             }
-            .buttonStyle(.borderless)
-            .font(.system(size: 11))
-            .foregroundStyle(theme.secondaryText)
-            .disabled(!hasAnythingToReset)
-            .help(appState.localized("duration.resetHelp"))
         }
     }
 
@@ -511,6 +510,35 @@ struct ProjectDurationPopover: View {
 
 // MARK: - Shared rows
 
+/// Small bordered action that reads as a button, not as disabled text.
+///
+/// The system `.bordered` style greys its label while the window is not key, so
+/// "Fijar", "Borrar" and "Restablecer" looked like plain grey text (V7). This
+/// draws the border and the accent text colour itself, in every window state.
+private struct DurationActionButtonStyle: ButtonStyle {
+    @Environment(\.frameTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        let tint = isEnabled ? theme.accentText : theme.tertiaryText
+        return configuration.label
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(theme.cardBackground)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(tint.opacity(configuration.isPressed ? 0.9 : 0.55), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
 private struct DurationProgressBar: View {
     @Environment(\.frameTheme) private var theme
     let progress: Double
@@ -542,9 +570,10 @@ private func durationRow(label: String, value: String, detail: String?) -> some 
                 .font(.system(size: 13, weight: .medium))
                 .monospacedDigit()
             if let detail {
+                // `.tertiary` is too faint at 10 pt on the popover surface.
                 Text(detail)
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
     }

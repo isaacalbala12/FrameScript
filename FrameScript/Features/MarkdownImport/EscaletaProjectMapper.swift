@@ -600,7 +600,9 @@ enum EscaletaProjectMapper {
     /// Values from a document are untrusted; `Int(Double.infinity)` traps.
     static func clampedSeconds(_ value: Double) -> Int {
         guard value.isFinite else { return 0 }
-        return Int(min(max(value, 0), 86_400))
+        // Round, never truncate, so the preview matches the exporter (12.6 s is
+        // 0:13, not 0:12).
+        return Int(min(max(value, 0), 86_400).rounded())
     }
 
     static func guessVideoType(_ document: EscaletaDocument) -> String {
