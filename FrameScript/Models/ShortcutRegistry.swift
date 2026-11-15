@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A persisted, layout-independent description of an application shortcut.
@@ -54,16 +55,48 @@ struct ShortcutBinding: Codable, Hashable {
         ShortcutModifier.allCases.filter(modifiers.contains).map(\.symbol).joined() + (key == .character ? (character ?? "").uppercased() : key.display)
     }
 
+    /// A binding is only usable when it cannot hijack plain typing.
+    ///
+    /// - Letters, digits and punctuation need at least one of ⌘, ⌃ or ⌥.
+    ///   Shift alone is still a character key (⇧S types an `S`), so accepting it
+    ///   would swallow every capital letter.
+    /// - Delete and the arrow keys need ⌘. Without it the menu key equivalent
+    ///   fires on a bare Backspace or caret movement (AppKit matches
+    ///   modifier-less menu items through the normal event path).
     var isValid: Bool {
         if key == .character {
             guard let character, Self.canonicalCharacter(from: character) == character else { return false }
-            return !modifiers.isEmpty
+            return !modifiers.isDisjoint(with: ShortcutRegistry.typingSafeModifiers)
         }
-        return true
+        return modifiers.contains(.command)
     }
 
     var keyboardShortcut: KeyboardShortcut {
         KeyboardShortcut(keyEquivalent, modifiers: swiftUIModifiers)
+    }
+
+    /// The AppKit key equivalent the SwiftUI menu item carries. Kept next to
+    /// `keyboardShortcut` so the mirror built by `ApplicationMenuBuilder` cannot
+    /// drift from the production menu.
+    var appKitKeyEquivalent: String {
+        switch key {
+        case .character: character ?? ""
+        case .upArrow: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+        case .downArrow: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        case .leftArrow: String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+        case .rightArrow: String(UnicodeScalar(NSRightArrowFunctionKey)!)
+        case .delete: "\u{08}"
+        case .forwardDelete: String(UnicodeScalar(NSDeleteFunctionKey)!)
+        }
+    }
+
+    var appKitModifierMask: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains(.control) { flags.insert(.control) }
+        if modifiers.contains(.option) { flags.insert(.option) }
+        if modifiers.contains(.shift) { flags.insert(.shift) }
+        if modifiers.contains(.command) { flags.insert(.command) }
+        return flags
     }
 
     private var keyEquivalent: KeyEquivalent {
@@ -132,6 +165,15 @@ struct ShortcutBinding: Codable, Hashable {
     }
 }
 
+/// The missing modifier that makes a captured key combination unusable.
+enum ShortcutRejection: String, Equatable, Hashable {
+    /// A letter, digit or punctuation key without ⌘, ⌃ or ⌥ (⇧ alone types a
+    /// different character, so it would swallow normal typing).
+    case needsCommandControlOrOption
+    /// Delete or an arrow key without ⌘.
+    case needsCommand
+}
+
 /// The application’s canonical map from macOS virtual key codes to ANSI-US
 /// shortcut keys. It intentionally never asks the active input source to
 /// translate a key position.
@@ -196,6 +238,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
     case importEscaleta, exportEscaleta
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
+    case nextScene, previousScene
     case scriptMode, visualsMode, editingMode, commandPalette, toggleContentsPanel, toggleAIReview, toggleFocusMode, teleprompter
     case recordTake, toggleRecordingPanel
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
@@ -229,6 +272,10 @@ enum ShortcutDisplayFormatter {
 }
 
 enum ShortcutRegistry {
+    /// Modifiers that make a character key safe to intercept: the character it
+    /// would otherwise type is only produced with one of these held.
+    static let typingSafeModifiers: Set<ShortcutModifier> = [.command, .control, .option]
+
     /// Bindings owned by macOS, the application menu, or standard text editing.
     /// They are intentionally outside the configurable FrameScript command registry.
     /// Keeping them here leaves native menu handling authoritative.
@@ -243,11 +290,26 @@ enum ShortcutRegistry {
         .init("x", modifiers: [.command]),
         .init("c", modifiers: [.command]),
         .init("v", modifiers: [.command]),
-        .init("a", modifiers: [.command])
+        .init("a", modifiers: [.command]),
+        // Emacs-style caret and kill bindings every NSTextView implements.
+        .init("a", modifiers: [.control]),
+        .init("e", modifiers: [.control]),
+        .init("k", modifiers: [.control])
     ]
 
     static func isAssignable(_ binding: ShortcutBinding) -> Bool {
         binding.isValid && !nonAssignableBindings.contains(binding)
+    }
+
+    /// Why a captured modifier/key combination is unusable, or `nil` when it is
+    /// valid. The recorder shows a localized hint instead of silently ignoring
+    /// the keypress (commands P1-1).
+    static func rejection(for binding: ShortcutBinding) -> ShortcutRejection? {
+        if binding.key == .character {
+            guard let character = binding.character, !character.isEmpty else { return .needsCommandControlOrOption }
+            return binding.isValid ? nil : .needsCommandControlOrOption
+        }
+        return binding.isValid ? nil : .needsCommand
     }
 
     static let definitions: [ShortcutDefinition] = [
@@ -256,7 +318,10 @@ enum ShortcutRegistry {
         .init(command: .openProject, localizationKey: "menu.open", category: .project, factoryDefault: .init("o", modifiers: [.command]), order: 2),
         .init(command: .save, localizationKey: "project.save", category: .project, factoryDefault: .init("s", modifiers: [.command]), order: 3),
         .init(command: .saveAs, localizationKey: "project.saveAs", category: .project, factoryDefault: .init("s", modifiers: [.command, .shift]), order: 4),
-        .init(command: .import, localizationKey: "menu.import", category: .project, factoryDefault: .init("i", modifiers: [.command, .shift]), order: 5),
+        // Raw value kept as `import` so an existing custom binding survives.
+        // File > Import was the same panel as File > Open, so the command now
+        // opens the built-in demo project instead of a duplicate Open item.
+        .init(command: .import, localizationKey: "menu.openDemo", category: .project, factoryDefault: .init("i", modifiers: [.command, .shift]), order: 5),
         .init(command: .export, localizationKey: "project.export", category: .project, factoryDefault: .init("e", modifiers: [.command]), order: 6),
         // ⇧⌘I is already the project-import shortcut, so the escaleta keeps a
         // separate, conflict-free binding.
@@ -268,6 +333,10 @@ enum ShortcutRegistry {
         .init(command: .deleteScene, localizationKey: "scene.delete", category: .scenes, factoryDefault: .init(key: .delete, modifiers: [.command]), order: 2),
         .init(command: .moveSceneUp, localizationKey: "scene.moveUp", category: .scenes, factoryDefault: .init(key: .upArrow, modifiers: [.command, .option]), order: 3),
         .init(command: .moveSceneDown, localizationKey: "scene.moveDown", category: .scenes, factoryDefault: .init(key: .downArrow, modifiers: [.command, .option]), order: 4),
+        // ⌃⌘↑/↓ stay clear of text navigation (⌘↑/↓), the scene move commands
+        // (⌥⌘↑/↓) and Mission Control (⌃↑).
+        .init(command: .previousScene, localizationKey: "menu.previousScene", category: .scenes, factoryDefault: .init(key: .upArrow, modifiers: [.command, .control]), order: 5),
+        .init(command: .nextScene, localizationKey: "menu.nextScene", category: .scenes, factoryDefault: .init(key: .downArrow, modifiers: [.command, .control]), order: 6),
         .init(command: .scriptMode, localizationKey: "mode.script", category: .workspace, factoryDefault: .init("1", modifiers: [.command]), order: 0),
         .init(command: .visualsMode, localizationKey: "mode.bRoll", category: .workspace, factoryDefault: .init("2", modifiers: [.command]), order: 1),
         .init(command: .editingMode, localizationKey: "mode.editing", category: .workspace, factoryDefault: .init("3", modifiers: [.command]), order: 2),
@@ -390,6 +459,12 @@ extension AppSettings {
         if let conflict = resetConflict(for: command) { return conflict }
         shortcutOverrides.removeValue(forKey: command)
         return nil
+    }
+
+    /// Explicitly unassigns the command. The menu item stays visible without a
+    /// key equivalent, which is the documented meaning of `.unassigned`.
+    mutating func clearShortcut(_ command: ShortcutCommand) {
+        shortcutOverrides[command] = .unassigned
     }
 
     mutating func reassignFactoryDefault(to command: ShortcutCommand) -> ShortcutCommand? {

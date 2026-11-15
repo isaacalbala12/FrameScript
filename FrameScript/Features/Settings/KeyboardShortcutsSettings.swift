@@ -11,6 +11,7 @@ struct KeyboardShortcutsSettings: View {
     @State private var lifecycle = ShortcutRecordingLifecycle()
     @State private var showResetConfirmation = false
     @State private var reservedShortcutWarning: ShortcutBinding?
+    @State private var rejectionHint: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -125,11 +126,23 @@ struct KeyboardShortcutsSettings: View {
                             beginRecording(definition.command)
                         }
                     }
+                    if state.showsRemove {
+                        ShortcutSettingsActionButton(appState.localized("shortcuts.remove")) {
+                            remove(definition.command)
+                        }
+                    }
                     if state.showsReset {
                         ShortcutSettingsActionButton(appState.localized("shortcuts.reset")) {
                             reset(definition.command)
                         }
                     }
+                }
+                if state.isRecording, let rejectionHint {
+                    Text(rejectionHint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.secondaryText)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -191,6 +204,7 @@ struct KeyboardShortcutsSettings: View {
         pendingBinding = nil
         reassignPrompt = nil
         reservedShortcutWarning = nil
+        rejectionHint = nil
         startCapture(for: command)
     }
 
@@ -199,7 +213,9 @@ struct KeyboardShortcutsSettings: View {
         let pendingBindingState = $pendingBinding
         let reassignPromptState = $reassignPrompt
         let reservedWarningState = $reservedShortcutWarning
+        let rejectionHintState = $rejectionHint
         let settingsState = $settings
+        let state = appState
         let lifecycle = lifecycle
         let session = ShortcutCaptureSession(
             onRecord: { [weak lifecycle] binding in
@@ -208,6 +224,7 @@ struct KeyboardShortcutsSettings: View {
                 guard let lifecycle else { return }
                 lifecycle.candidateCaptured()
                 guard recordingState.wrappedValue == command else { return }
+                rejectionHintState.wrappedValue = nil
                 if ShortcutRecordingCoordinator.result(for: binding) == .reserved {
                     pendingBindingState.wrappedValue = nil
                     reservedWarningState.wrappedValue = binding
@@ -226,14 +243,28 @@ struct KeyboardShortcutsSettings: View {
                     )
                 }
             },
+            onReject: { rejection, binding in
+                // Not a terminal state: the monitor keeps listening so the user
+                // can add the missing modifier without leaving the row.
+                rejectionHintState.wrappedValue = String(
+                    format: state.localized(ShortcutRejectionText.localizationKey(for: rejection)),
+                    binding.display
+                )
+            },
             onCancel: { [weak lifecycle] in
                 lifecycle?.cancel()
                 recordingState.wrappedValue = nil
                 pendingBindingState.wrappedValue = nil
                 reassignPromptState.wrappedValue = nil
+                rejectionHintState.wrappedValue = nil
             }
         )
         lifecycle.start(session)
+    }
+
+    private func remove(_ command: ShortcutCommand) {
+        lifecycle.stopForAlert()
+        settings.clearShortcut(command)
     }
 
     private func reset(_ command: ShortcutCommand) {
@@ -298,6 +329,16 @@ enum ShortcutCapturePresentation {
     }
 }
 
+/// Localized explanation for a keypress the recorder refused.
+enum ShortcutRejectionText {
+    static func localizationKey(for rejection: ShortcutRejection) -> String {
+        switch rejection {
+        case .needsCommandControlOrOption: "shortcuts.rejected.modifiers"
+        case .needsCommand: "shortcuts.rejected.command"
+        }
+    }
+}
+
 private struct ShortcutSettingsActionButton: View {
     @Environment(\.frameTheme) private var theme
     let title: String
@@ -334,6 +375,9 @@ struct ShortcutSettingsRowState {
 
     var showsEdit: Bool { !isRecording && !isLocked }
     var showsReset: Bool { isCustomized && !isLocked }
+    /// Removing a shortcut writes an explicit `.unassigned` override instead of
+    /// relying on assigning the same key to another command.
+    var showsRemove: Bool { showsReset }
 }
 
 enum ShortcutSettingsLayout {
@@ -527,43 +571,53 @@ enum ShortcutRecordingCoordinator {
     enum CandidateResult: Equatable {
         case accepted
         case reserved
+        /// Missing ⌘/⌃/⌥ (character keys) or ⌘ (Delete, arrows).
+        case invalid
     }
 
     static func result(for binding: ShortcutBinding) -> CandidateResult {
-        ShortcutRegistry.isAssignable(binding) ? .accepted : .reserved
+        if ShortcutRegistry.rejection(for: binding) != nil { return .invalid }
+        return ShortcutRegistry.isAssignable(binding) ? .accepted : .reserved
     }
 }
 
 /// A scoped, injectable local monitor that consumes events before SwiftUI
 /// commands see them. The coordinator guarantees there is only one recorder.
-final class ShortcutCaptureSession: @unchecked Sendable {
-    private nonisolated(unsafe) static weak var activeSession: ShortcutCaptureSession?
+///
+/// The session is a plain, non-`Sendable` object: local event monitors and the
+/// Settings view both run on the main thread. Only the process-wide active
+/// session pointer is shared, and it lives behind a lock.
+final class ShortcutCaptureSession {
+    private static let activeSlot = ActiveSessionSlot()
+
+    static var isAnySessionActive: Bool { activeSlot.current()?.isActive == true }
 
     private let eventMonitor: ShortcutCaptureEventMonitoring
     private let onRecord: (ShortcutBinding) -> Void
+    private let onReject: (ShortcutRejection, ShortcutBinding) -> Void
     private let onCancel: () -> Void
     private var monitorToken: Any?
 
     private(set) var isActive = false
 
-    static var isAnySessionActive: Bool { activeSession?.isActive == true }
-
     init(
         eventMonitor: ShortcutCaptureEventMonitoring = AppKitShortcutCaptureEventMonitor.shared,
         onRecord: @escaping (ShortcutBinding) -> Void,
+        onReject: @escaping (ShortcutRejection, ShortcutBinding) -> Void = { _, _ in },
         onCancel: @escaping () -> Void
     ) {
         self.eventMonitor = eventMonitor
         self.onRecord = onRecord
+        self.onReject = onReject
         self.onCancel = onCancel
     }
 
     deinit { stop() }
 
     func start() {
-        if Self.activeSession !== self { Self.activeSession?.stop() }
+        if Self.activeSlot.current() !== self { Self.activeSlot.current()?.stop() }
         guard !isActive else { return }
-        Self.activeSession = self
+        Self.activeSlot.set(self)
         isActive = true
         monitorToken = eventMonitor.addLocalKeyDownMonitor { [weak self] event in
             self?.consume(event)
@@ -576,11 +630,11 @@ final class ShortcutCaptureSession: @unchecked Sendable {
             self.monitorToken = nil
         }
         isActive = false
-        if Self.activeSession === self { Self.activeSession = nil }
+        Self.activeSlot.clear(if: self)
     }
 
     static func stopActiveSession() {
-        activeSession?.stop()
+        activeSlot.current()?.stop()
     }
 
     /// Returning `nil` consumes the event in the local application event loop.
@@ -592,22 +646,54 @@ final class ShortcutCaptureSession: @unchecked Sendable {
             onCancel()
             return nil
         }
-        if let binding = ShortcutCaptureParser.binding(from: event) {
+        if let candidate = ShortcutCaptureParser.candidate(from: event) {
+            if let rejection = ShortcutRegistry.rejection(for: candidate) {
+                // Keep listening: the user just needs another modifier.
+                onReject(rejection, candidate)
+                return nil
+            }
             // A valid candidate is terminal: it must not continue consuming
             // events while a Save/Cancel state or conflict alert is visible.
             stop()
-            onRecord(binding)
+            onRecord(candidate)
         }
         return nil
     }
 }
 
+/// Lock-protected owner of the process-wide active capture session.
+private final class ActiveSessionSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var session: ShortcutCaptureSession?
+
+    func current() -> ShortcutCaptureSession? {
+        lock.withLock { session }
+    }
+
+    func set(_ newValue: ShortcutCaptureSession?) {
+        lock.withLock { session = newValue }
+    }
+
+    func clear(if expected: ShortcutCaptureSession) {
+        lock.withLock {
+            if session === expected { session = nil }
+        }
+    }
+}
+
 enum ShortcutCaptureParser {
+    /// The binding the physical key would produce, even when it is unusable.
+    /// Used to explain the rejection instead of swallowing the keypress.
+    static func candidate(from event: NSEvent) -> ShortcutBinding? {
+        ShortcutPhysicalKeyMapper.binding(
+            for: event.keyCode,
+            modifiers: shortcutModifiers(from: event.modifierFlags)
+        )
+    }
+
     static func binding(from event: NSEvent) -> ShortcutBinding? {
-        let modifiers = shortcutModifiers(from: event.modifierFlags)
-        let binding = ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers)
-        guard let binding, binding.isValid else { return nil }
-        return binding
+        guard let candidate = candidate(from: event), candidate.isValid else { return nil }
+        return candidate
     }
 
     private static func shortcutModifiers(from flags: NSEvent.ModifierFlags) -> Set<ShortcutModifier> {
