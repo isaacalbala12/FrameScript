@@ -11,7 +11,10 @@ final class DuplicateCoverageTests: XCTestCase {
 
         let copy = store.duplicateProject(copySuffix: "copy")
 
-        assertMirrorEqual(source, copy, path: "project", ignoredAtRoot: ["title"])
+        // A copy is a new project: it must never reuse the source's AI threads (WP1 #16).
+        assertMirrorEqual(source, copy, path: "project", ignoredAtRoot: ["title", "aiThreadMap"])
+        XCTAssertTrue(copy.aiThreadMap.threadIDsByProviderModel.isEmpty)
+        XCTAssertTrue(copy.aiThreadMap.t3ProjectID.isEmpty)
     }
 
     func testDuplicateSceneCopiesEveryStoredProperty() throws {
@@ -22,7 +25,12 @@ final class DuplicateCoverageTests: XCTestCase {
 
         let copy = store.duplicate(sourceScene, copySuffix: "copy")
 
-        assertMirrorEqual(sourceScene, copy, path: "scene", ignoredAtRoot: ["title"])
+        // Recordings belong to the scene that was filmed: duplicates start without takes (WP1 #16).
+        assertMirrorEqual(sourceScene, copy, path: "scene", ignoredAtRoot: ["title", "takes", "languageVariants"])
+        XCTAssertTrue(copy.takes.isEmpty)
+        XCTAssertTrue(copy.languageVariants.allSatisfy { $0.takes.isEmpty })
+        XCTAssertEqual(copy.languageVariants.map(\.languageCode), sourceScene.languageVariants.map(\.languageCode))
+        XCTAssertEqual(copy.languageVariants.map(\.text), sourceScene.languageVariants.map(\.text))
     }
 
     // MARK: Mirror comparator
