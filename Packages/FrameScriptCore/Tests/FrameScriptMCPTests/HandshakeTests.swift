@@ -185,7 +185,54 @@ struct HandshakeTests {
         let harness = MCPTestHarness(registry: try TestTools.standard())
         _ = try await harness.performInitialize()
         harness.channel.closeInput()
-        await harness.serverTask.value
+        let outcome = await harness.serverTask.value
+        #expect(outcome == .endOfInput)
         #expect(harness.serverTask.isCancelled == false)
     }
+
+    @Test("a transport read failure is reported separately from EOF")
+    func transportFailureOutcome() async throws {
+        let configuration = MCPServerConfiguration(log: MCPLog.disabled)
+        let server = MCPServer(
+            registry: try TestTools.standard(),
+            channel: FailingReadChannel(),
+            configuration: configuration
+        )
+        let outcome = await server.run()
+        #expect(outcome == .transportError)
+    }
+
+    @Test("pipelined initialize, initialized notification and tools/list run in order")
+    func pipelinedLifecycleIsOrdered() async throws {
+        try await withHarness(try TestTools.standard()) { harness in
+            // Write all three lines before reading any response. The server
+            // must process initialize inline; otherwise notifications and
+            // tools/list race the handshake and the session never becomes
+            // ready.
+            try harness.send(RPC.initialize(id: 1))
+            try harness.send(RPC.notification("notifications/initialized"))
+            try harness.send(RPC.request(id: 2, method: "tools/list"))
+
+            let initialize = try await harness.nextResponse()
+            #expect(initialize["id"]?.intValue == 1)
+            #expect(initialize.rpcResult?["protocolVersion"] != nil)
+
+            let list = try await harness.nextResponse()
+            #expect(list["id"]?.intValue == 2)
+            #expect(list.toolNames.contains("echo"))
+            #expect(list.rpcError == nil)
+
+            // A second initialize must be rejected now that the session is
+            // ready, proving notifications/initialized was not dropped.
+            try harness.send(RPC.initialize(id: 3))
+            let duplicate = try await harness.nextResponse()
+            #expect(duplicate.errorCode == JSONRPCErrorCode.invalidRequest.rawValue)
+        }
+    }
+}
+
+
+private struct FailingReadChannel: MCPMessageChannel {
+    func receive() async throws -> Data? { throw MCPTransportError.closed }
+    func send(_ message: Data) async throws {}
 }

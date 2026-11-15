@@ -18,7 +18,7 @@ public struct MCPServerConfiguration: Sendable {
             name: "framescript",
             version: FrameScriptCore.version,
             title: "FrameScript",
-            description: "FrameScript project tools over the Model Context Protocol"
+            description: "FrameScript demo tools over the Model Context Protocol"
         ),
         instructions: String? = nil,
         supportedProtocolVersions: [String] = MCPProtocolVersion.supported,

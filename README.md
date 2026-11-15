@@ -20,8 +20,8 @@ The [ZIP fallback](https://github.com/Drash-ko/frame-script/releases/latest/down
 
 ## Features
 
-- Scene-based Script, Visuals, and Editing workspaces with English and Russian interface strings.
-- A disposable five-scene built-in product showcase in English and Russian, including production plans, editing direction, and prepared local review notes.
+- Scene-based Script, Visuals, and Editing workspaces with English, Spanish, and Russian interface strings.
+- A disposable five-scene built-in product showcase in English, Spanish, and Russian, including production plans, editing direction, and prepared local review notes.
 - Configurable keyboard shortcuts with recording, conflict reassignment, explicit unassignment, reserved-shortcut protection, and immediate updates to menus and visible keycaps. Letter shortcuts execute by physical key position, independently of the active keyboard layout.
 - Anchor-first Visuals and Editing relationships. Ordinary unambiguous script edits keep selections and production markers aligned; links are cleared when a substantial rewrite cannot be repaired safely.
 - Live word counts and scene, sidebar, and project duration estimates; saved projects coalesce rapid changes into one autosave.
@@ -52,11 +52,24 @@ FrameScript/
   Models/              Document models, settings, templates, demo data
   Services/            AI, export, file storage, Keychain
   Assets.xcassets      App icon and assets
+Packages/FrameScriptCore/
+  Package.swift
+  Sources/FrameScriptCore/   UI-free models, document codec, markup, exports
+  Sources/FrameScriptMCP/    MCP server, tools and transports
+  Sources/framescript/       `framescript` CLI (mcp, --version, --help)
+  Tests/                     Swift Testing suites for the package
 docs/
   banner.webp          README banner
+  format/              `.fscr` format guide and JSON Schema
 scripts/
   package-release.sh   Verified DMG/ZIP release packaging
 ```
+
+`FrameScript` depends on `Packages/FrameScriptCore`; the package never imports
+SwiftUI or AppKit. Keep UI-free logic (document models, codecs, markup and export
+rendering) in `FrameScriptCore` so the app, the tests, the CLI and the MCP server
+share one implementation. The app-only `FrameScript/Core/` folder holds UI
+utilities such as theme and localization.
 
 Built-in templates are defined in `FrameScript/Models/SampleData.swift`.
 

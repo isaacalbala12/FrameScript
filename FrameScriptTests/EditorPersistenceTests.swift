@@ -2431,8 +2431,12 @@ final class EditorPersistenceTests: FrameScriptTestCase {
     }
 
     private func temporaryProjectURL() -> URL {
-        FileManager.default.temporaryDirectory
+        let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("EditorPersistenceTests-\(UUID().uuidString).fscr")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
     }
 
     private func firstSubview<T: NSView>(of type: T.Type, in view: NSView) -> T? {
@@ -2477,22 +2481,6 @@ final class EditorPersistenceTests: FrameScriptTestCase {
                 return
             }
             try await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
-    private func waitUntil(
-        _ condition: @escaping @MainActor () -> Bool,
-        message: String = "editor delegate flow",
-        timeout: Duration = .seconds(1)
-    ) async throws {
-        let clock = ContinuousClock()
-        let start = clock.now
-        while !condition() {
-            guard clock.now - start < timeout else {
-                XCTFail("Timed out waiting for \(message)")
-                throw NSError(domain: "EditorPersistenceTests", code: 1)
-            }
-            await Task.yield()
         }
     }
 

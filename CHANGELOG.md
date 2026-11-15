@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Test runs no longer touch the user's real preferences, Keychain, recents, project files or application-support backups: the app test host, the `TestDefaults` suites and the UI tests use per-run temporary locations, and a launch baseline fails the bundle if the real `com.drashko.FrameScript` domain changes.
+- `framescript mcp` exits with status 1 after a framing or transport failure instead of reporting success, accepts `"arguments": null` as an empty object, processes the `initialize` handshake in order with pipelined clients, caps concurrent requests at 16, preserves already-framed lines before an oversized message, and no longer crashes the host when an in-memory channel gets concurrent readers.
 - Script markup highlighting now re-runs over the whole document after a multi-paragraph paste and covers the whole blank-line block for emphasis that spans several lines, instead of leaving pasted or distant markers unstyled.
 - Word count and duration are cached from one debounced parse per settled edit, with the parse off the main actor, so typing a 20k-word scene no longer parses the whole script on every keystroke.
 - Rhythm review runs on an immutable snapshot off the main actor; warnings are dropped immediately when their scene changes, project-level outliers count in the sidebar badge, threshold edits refresh the review, and anchor links/unlinks refresh the visual-change analysis.
@@ -19,6 +21,7 @@
 
 ### Changed
 
+- The `framescript` CLI and MCP server report the app release version (0.4.0), and the README now documents the `FrameScriptCore` package layering rule.
 - Duration estimates for scenes, the sidebar and the project now run through `ScriptMarkup`: spoken words only (cues excluded) plus pause durations, using the per-language rate, the project's learned WPM when present, and the configured pause defaults.
 - `.fscr` format v4 persists every Visuals and Editing field; readers migrate v1–v3 in memory and writers always emit v4. Files from a newer version fail with a clear error.
 - Settings decoding falls back per field and per section instead of resetting every preference when a key is missing.

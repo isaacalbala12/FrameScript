@@ -745,7 +745,7 @@ final class SubscriptionAIProviderTests: FrameScriptTestCase {
         let first = Task {
             try await runtime.complete(request: llmRequest(task: .analyze))
         }
-        let started = await waitUntil { runtime.isRunning }
+        let started = try await waitUntil { runtime.isRunning }
         XCTAssertTrue(started)
 
         do {
@@ -805,7 +805,7 @@ final class SubscriptionAIProviderTests: FrameScriptTestCase {
         let run = Task {
             try await runtime.complete(request: llmRequest(task: .analyze))
         }
-        let started = await waitUntil { runtime.isRunning }
+        let started = try await waitUntil { runtime.isRunning }
         XCTAssertTrue(started)
 
         runtime.resetThread(for: selection)
@@ -949,14 +949,6 @@ final class SubscriptionAIProviderTests: FrameScriptTestCase {
             await Task.yield()
         }
         XCTFail("Runner was not called", file: file, line: line)
-    }
-
-    private func waitUntil(_ predicate: @MainActor () -> Bool) async -> Bool {
-        for _ in 0..<200 {
-            if predicate() { return true }
-            await Task.yield()
-        }
-        return false
     }
 
     private func waitForObservation(_ flag: SubscriptionObservationFlag) async -> Bool {

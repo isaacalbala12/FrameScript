@@ -93,11 +93,13 @@ class FrameScriptTestCase: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        TestBundleCleanup.register()
         failIfRealDomainChanged(phase: "before")
     }
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        TestBundleCleanup.register()
         failIfRealDomainChanged(phase: "before")
     }
 

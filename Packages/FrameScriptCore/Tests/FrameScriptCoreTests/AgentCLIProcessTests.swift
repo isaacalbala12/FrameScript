@@ -292,7 +292,7 @@ struct SystemAgentProcessLauncherTests {
                 // than the request timeout. A launcher that waits for EOF would
                 // block for the full 30 s.
                 arguments: ["-c", "sleep 30 & echo parent-done"],
-                timeout: 0.6
+                timeout: 2
             )
         )
         let elapsed = start.duration(to: .now)

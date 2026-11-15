@@ -51,6 +51,12 @@ final class DocumentMappingTests: XCTestCase {
         XCTAssertEqual(loaded.publishDate, project.publishDate, file: file, line: line)
         XCTAssertEqual(loaded.targetDuration, project.targetDuration, file: file, line: line)
         XCTAssertEqual(loaded.learnedWordsPerMinuteByLanguage, project.learnedWordsPerMinuteByLanguage, file: file, line: line)
+        XCTAssertEqual(
+            loaded.learnedWordsPerMinuteResetAtByLanguage,
+            project.learnedWordsPerMinuteResetAtByLanguage,
+            file: file,
+            line: line
+        )
         XCTAssertEqual(loaded.assets, project.assets, file: file, line: line)
         XCTAssertEqual(loaded.publishingPacks, project.publishingPacks, file: file, line: line)
         XCTAssertEqual(loaded.checklistTasks, project.checklistTasks, file: file, line: line)
@@ -135,6 +141,69 @@ final class DocumentMappingTests: XCTestCase {
                 XCTAssertEqual(loadedItem.status, projectItem.status, file: file, line: line)
             }
         }
+    }
+
+    func testDocumentEnumRawValuesMatchTheAppEnums() {
+        XCTAssertEqual(
+            AppSectionType.allCases.map(\.rawValue),
+            FrameScriptFile.SectionType.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppSegmentType.allCases.map(\.rawValue),
+            FrameScriptFile.SegmentType.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppBRollSourceType.allCases.map(\.rawValue),
+            FrameScriptFile.BRollSourceType.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppBRollStatus.allCases.map(\.rawValue),
+            FrameScriptFile.BRollStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppAICommentStatus.allCases.map(\.rawValue),
+            FrameScriptFile.AICommentStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppAICommentSeverity.allCases.map(\.rawValue),
+            FrameScriptFile.AICommentSeverity.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppEditingStatus.allCases.map(\.rawValue),
+            FrameScriptFile.EditingStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppProductionStatus.allCases.map(\.rawValue),
+            FrameScriptFile.ProductionStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppTakeRating.allCases.map(\.rawValue),
+            FrameScriptFile.TakeRating.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppAssetKind.allCases.map(\.rawValue),
+            FrameScriptFile.AssetKind.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppClaimStatus.allCases.map(\.rawValue),
+            FrameScriptFile.ClaimStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppChecklistTaskKind.allCases.map(\.rawValue),
+            FrameScriptFile.ChecklistTaskKind.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppShortClipFormat.allCases.map(\.rawValue),
+            FrameScriptFile.ShortClipFormat.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppShortClipStatus.allCases.map(\.rawValue),
+            FrameScriptFile.ShortClipStatus.allCases.map(\.rawValue)
+        )
+        XCTAssertEqual(
+            AppExportFormat.allCases.map(\.rawValue),
+            FrameScriptFile.ExportFormat.allCases.map(\.rawValue)
+        )
     }
 
     static func makeFullProject() throws -> FrameProject {
@@ -410,6 +479,10 @@ final class DocumentMappingTests: XCTestCase {
             publishDate: Date(timeIntervalSince1970: 1_700_000_800),
             targetDuration: 720,
             learnedWordsPerMinuteByLanguage: ["es": 152.5, "en": 161],
+            learnedWordsPerMinuteResetAtByLanguage: [
+                "es": Date(timeIntervalSince1970: 1_700_000_900),
+                "en": Date(timeIntervalSince1970: 1_700_000_950)
+            ],
             assets: [asset],
             publishingPacks: ["es": pack],
             checklistTasks: [task],

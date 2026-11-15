@@ -6,7 +6,7 @@ import Foundation
 public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
     private struct OutboundWaiter {
         let token: UInt64
-        let continuation: CheckedContinuation<Data?, Never>
+        let continuation: CheckedContinuation<Data?, Error>
     }
 
     private enum InboundDecision {
@@ -21,7 +21,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
 
     private let lock = NSLock()
     private var inbox: [Data?] = []
-    private var inboxWaiter: CheckedContinuation<Data?, Never>?
+    private var inboxWaiter: CheckedContinuation<Data?, Error>?
     private var outbox: [Data] = []
     private var outboundWaiter: OutboundWaiter?
     private var nextToken: UInt64 = 0
@@ -82,7 +82,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
         case .value(let value):
             return value
         case .wait:
-            return await withCheckedContinuation { continuation in
+            return try await withCheckedThrowingContinuation { continuation in
                 installInboxWaiter(continuation)
             }
         }
@@ -100,7 +100,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
         return .wait
     }
 
-    private func installInboxWaiter(_ continuation: CheckedContinuation<Data?, Never>) {
+    private func installInboxWaiter(_ continuation: CheckedContinuation<Data?, Error>) {
         lock.lock()
         if !inbox.isEmpty {
             let value = inbox.removeFirst()
@@ -113,7 +113,11 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
             continuation.resume(returning: nil)
             return
         }
-        precondition(inboxWaiter == nil, "MCPInMemoryChannel supports a single receiver")
+        guard inboxWaiter == nil else {
+            lock.unlock()
+            continuation.resume(throwing: MCPTransportError.concurrentReceiver)
+            return
+        }
         inboxWaiter = continuation
         lock.unlock()
     }
@@ -126,7 +130,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
         waiter?.resume(returning: message)
     }
 
-    private func enqueueOutbound(_ message: Data) -> CheckedContinuation<Data?, Never>? {
+    private func enqueueOutbound(_ message: Data) -> CheckedContinuation<Data?, Error>? {
         lock.lock()
         defer { lock.unlock() }
         if let waiter = outboundWaiter {
@@ -140,12 +144,12 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
     // MARK: Test observation
 
     /// Waits for the next server message, or returns `nil` after `timeout`.
-    public func nextOutbound(timeout: TimeInterval = 2) async -> Data? {
+    public func nextOutbound(timeout: TimeInterval = 2) async throws -> Data? {
         switch dequeueOutbound() {
         case .value(let data):
             return data
         case .wait:
-            return await withCheckedContinuation { continuation in
+            return try await withCheckedThrowingContinuation { continuation in
                 installOutboundWaiter(continuation, timeout: timeout)
             }
         }
@@ -153,7 +157,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
 
     /// Convenience for tests: decodes the next server message.
     public func nextOutboundJSON(timeout: TimeInterval = 2) async throws -> JSONValue? {
-        guard let data = await nextOutbound(timeout: timeout) else { return nil }
+        guard let data = try await nextOutbound(timeout: timeout) else { return nil }
         return try MCPJSON.decode(data)
     }
 
@@ -167,7 +171,7 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
     }
 
     private func installOutboundWaiter(
-        _ continuation: CheckedContinuation<Data?, Never>,
+        _ continuation: CheckedContinuation<Data?, Error>,
         timeout: TimeInterval
     ) {
         lock.lock()
@@ -177,9 +181,13 @@ public final class MCPInMemoryChannel: MCPMessageChannel, @unchecked Sendable {
             continuation.resume(returning: value)
             return
         }
+        guard outboundWaiter == nil else {
+            lock.unlock()
+            continuation.resume(throwing: MCPTransportError.concurrentOutboundReader)
+            return
+        }
         let token = nextToken
         nextToken &+= 1
-        precondition(outboundWaiter == nil, "MCPInMemoryChannel supports a single outbound reader")
         outboundWaiter = OutboundWaiter(token: token, continuation: continuation)
         lock.unlock()
 

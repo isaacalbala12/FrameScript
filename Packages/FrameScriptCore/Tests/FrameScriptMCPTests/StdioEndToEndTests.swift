@@ -133,6 +133,9 @@ final class SubprocessSession: @unchecked Sendable {
         return !process.isRunning
     }
 
+    var terminationStatus: Int32 { process.terminationStatus }
+    var isRunning: Bool { process.isRunning }
+
     func stop() {
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
@@ -248,6 +251,28 @@ struct StdioEndToEndTests {
             session.waitForExit(timeout: 5),
             "server did not exit after stdin EOF; stderr: \(session.stderr)"
         )
+    }
+
+    @Test(
+        "a framing failure exits with status 1",
+        .enabled(if: FrameScriptBinary.locate() != nil, "build framescript first")
+    )
+    func framingFailureExitsNonZero() throws {
+        let binary = try #require(FrameScriptBinary.locate())
+        let session = try SubprocessSession(binary: binary)
+        defer { session.stop() }
+
+        try session.send(RPC.initialize(id: 1))
+        _ = try #require(session.nextLine(timeout: 10) != nil, "no initialize response")
+
+        // One oversized line trips MCPLineFramer; the CLI must not report
+        // success to a supervisor after a protocol-level input violation.
+        var oversized = Data(repeating: 0x61, count: MCPLineFramer.defaultMaximumMessageSize + 1)
+        oversized.append(0x0A)
+        try? session.sendRaw(oversized)
+
+        #expect(session.waitForExit(timeout: 10), "server did not exit after the framing error")
+        #expect(session.terminationStatus == 1)
     }
 
     @Test(

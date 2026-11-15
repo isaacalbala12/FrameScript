@@ -57,6 +57,25 @@ Every project-level collection is always present, even when empty. Members that 
 optional in the Swift type are omitted when `nil`; the writer never emits JSON
 `null`.
 
+### Dormant persisted fields
+
+Some v4 members are written, copied and migrated, but the current app UI does not
+read them yet. They are still part of the format and must round-trip unchanged;
+treat them as opaque data unless you are implementing the matching feature.
+
+| Member | Status |
+| --- | --- |
+| `TextSegment.timingEstimate` | Written and migrated; the app recomputes timings instead of showing this value. |
+| `Project.exportPresets` | Persisted only; the export UI uses the current settings. |
+| `Project.assets` | Persisted only; no asset browser yet. |
+| `Project.clips` | Persisted only; short-form clip editing is not exposed. |
+| `Project.glossary` | Persisted only; translation tooling reads it, the editor does not. |
+| `Project.versionHistory` | Persisted and snapshotted; restore is not exposed in the UI. |
+| `Project.publishedVideos` | Persisted only; the published-video comparison UI is not exposed. |
+
+New readers should preserve these members even when they do not use them. Do not
+drop them from a read-modify-write cycle.
+
 ---
 
 ## 2. JSON encoding rules

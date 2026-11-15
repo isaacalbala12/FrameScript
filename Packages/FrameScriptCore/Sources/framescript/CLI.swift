@@ -61,8 +61,13 @@ enum FrameScriptCLI {
                 registry: try DemoTools.registry(),
                 channel: MCPStdioChannel()
             )
-            await server.run()
-            return 0
+            switch await server.run() {
+            case .endOfInput:
+                return 0
+            case .transportError:
+                write("framescript: MCP transport failed; exiting\n", to: .standardError)
+                return 1
+            }
         } catch {
             write("framescript: invalid tool registry: \(error)\n", to: .standardError)
             return 1

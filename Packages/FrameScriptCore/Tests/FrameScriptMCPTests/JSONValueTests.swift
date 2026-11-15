@@ -157,6 +157,79 @@ struct JSONValueTests {
         }
     }
 
+    @Test("line framer keeps complete lines before an oversized line")
+    func framerKeepsLinesBeforeOversizedLine() {
+        var framer = MCPLineFramer(maximumMessageSize: 8)
+        var lines: [Data] = []
+        do {
+            try framer.append(Data("ok\n123456789\n".utf8), framedLines: &lines)
+            Issue.record("expected MCPFramingError.messageTooLarge")
+        } catch let error as MCPFramingError {
+            #expect(error == .messageTooLarge(limit: 8))
+            #expect(lines == [Data("ok".utf8)])
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test("in-memory channel throws on a concurrent receiver instead of crashing")
+    func inMemoryChannelRejectsConcurrentReceiver() async throws {
+        let channel = MCPInMemoryChannel()
+        let first = Task { try await channel.receive() }
+        try await Task.sleep(for: .milliseconds(50))
+
+        do {
+            _ = try await channel.receive()
+            Issue.record("expected MCPTransportError.concurrentReceiver")
+        } catch let error as MCPTransportError {
+            #expect(error == .concurrentReceiver)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        channel.sendLine("delivered")
+        let value = try await first.value
+        #expect(value == Data("delivered".utf8))
+    }
+
+    @Test("in-memory channel throws on a concurrent outbound reader instead of crashing")
+    func inMemoryChannelRejectsConcurrentOutboundReader() async throws {
+        let channel = MCPInMemoryChannel()
+        let first = Task { try await channel.nextOutbound(timeout: 5) }
+        try await Task.sleep(for: .milliseconds(50))
+
+        do {
+            _ = try await channel.nextOutbound(timeout: 5)
+            Issue.record("expected MCPTransportError.concurrentOutboundReader")
+        } catch let error as MCPTransportError {
+            #expect(error == .concurrentOutboundReader)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+
+        try await channel.send(Data("response".utf8))
+        let value = try await first.value
+        #expect(value == Data("response".utf8))
+    }
+
+    @Test("stdio channel cancellation unblocks receive")
+    func stdioChannelCancellationUnblocksReceive() async throws {
+        let pipe = Pipe()
+        let channel = MCPStdioChannel(input: pipe.fileHandleForReading, output: .nullDevice)
+        let read = Task { try await channel.receive() }
+        try await Task.sleep(for: .milliseconds(100))
+        read.cancel()
+
+        do {
+            _ = try await read.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected: the poll loop notices the cancellation flag.
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
     @Test("in-memory channel rejects embedded newlines")
     func inMemoryChannelRejectsEmbeddedNewlines() async {
         let channel = MCPInMemoryChannel()

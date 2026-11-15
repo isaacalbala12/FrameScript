@@ -5,7 +5,7 @@ import FrameScriptCore
 import XCTest
 
 @MainActor
-final class TeleprompterReadingTests: XCTestCase {
+final class TeleprompterReadingTests: FrameScriptTestCase {
     // MARK: Starting scene
 
     func testStartIndexSkipsAnEmptySelectedScene() {
@@ -331,29 +331,20 @@ final class TeleprompterReadingTests: XCTestCase {
     // MARK: Live language
 
     func testOpenModelFollowsTheSettingsLanguage() throws {
-        let languageSuite = "TeleprompterLanguage-\(UUID().uuidString)"
-        let languageDefaults = try XCTUnwrap(UserDefaults(suiteName: languageSuite))
-        addTeardownBlock {
-            languageDefaults.removePersistentDomain(forName: languageSuite)
-        }
+        let defaults = makeDefaults()
         let settingsStore = SettingsStore(
             settings: AppSettings.defaults,
-            userDefaults: languageDefaults,
+            userDefaults: defaults,
             key: "settings"
         )
 
-        let teleprompterSuite = "TeleprompterLanguageModel-\(UUID().uuidString)"
-        let teleprompterDefaults = try XCTUnwrap(UserDefaults(suiteName: teleprompterSuite))
-        addTeardownBlock {
-            teleprompterDefaults.removePersistentDomain(forName: teleprompterSuite)
-        }
         let model = TeleprompterModel(
             sections: [
                 TeleprompterSection(sceneID: UUID(), title: "Uno", runs: [.text("Hola")])
             ],
             startingSectionIndex: 0,
             language: .english,
-            settingsStore: TeleprompterSettingsStore(userDefaults: teleprompterDefaults),
+            settingsStore: TeleprompterSettingsStore(userDefaults: defaults),
             languageProvider: {
                 L10n.resolve(
                     settingsStore.settings.generalPreferences.language,
@@ -383,11 +374,7 @@ final class TeleprompterReadingTests: XCTestCase {
     }
 
     func testSettingsStorePostsTheLanguageChangeNotification() throws {
-        let suiteName = "TeleprompterLanguageNotice-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = makeDefaults()
         let store = SettingsStore(
             settings: AppSettings.defaults,
             userDefaults: defaults,
@@ -561,11 +548,7 @@ final class TeleprompterReadingTests: XCTestCase {
         sections: [TeleprompterSection],
         start: Int
     ) throws -> TeleprompterModel {
-        let suiteName = "TeleprompterReading-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = makeDefaults()
         let model = TeleprompterModel(
             sections: sections,
             startingSectionIndex: start,

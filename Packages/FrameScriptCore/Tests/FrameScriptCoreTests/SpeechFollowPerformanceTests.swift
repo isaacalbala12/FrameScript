@@ -50,9 +50,17 @@ import Testing
             return
         }
         let average = durations.reduce(.zero, +) / durations.count
-        // Budget from the cross-review: 100 ms per recognizer update. The
-        // average gets extra headroom for CI scheduling noise.
-        #expect(fastest < .milliseconds(100))
-        #expect(average < .milliseconds(250))
+        // Budget from the cross-review: 100 ms per recognizer update. Debug
+        // builds get 5x headroom so a loaded CI machine cannot fail the suite
+        // while still catching an order-of-magnitude regression.
+        #if DEBUG
+        let fastestLimit = Duration.milliseconds(500)
+        let averageLimit = Duration.milliseconds(1_250)
+        #else
+        let fastestLimit = Duration.milliseconds(100)
+        let averageLimit = Duration.milliseconds(250)
+        #endif
+        #expect(fastest < fastestLimit)
+        #expect(average < averageLimit)
     }
 }

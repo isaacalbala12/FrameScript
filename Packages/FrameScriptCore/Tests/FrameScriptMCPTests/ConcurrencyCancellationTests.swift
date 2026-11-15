@@ -135,11 +135,11 @@ struct ConcurrencyCancellationTests {
         #expect(wasCancelled)
     }
 
-    @Test("handles many concurrent calls")
+    @Test("handles the maximum number of concurrent calls")
     func manyConcurrentCalls() async throws {
         try await withHarness(try TestTools.standard()) { harness in
             _ = try await harness.performInitialize()
-            for id in 1...20 {
+            for id in 1...16 {
                 try harness.send(RPC.toolsCall(
                     id: id,
                     name: "echo",
@@ -148,13 +148,44 @@ struct ConcurrencyCancellationTests {
             }
 
             var seen: Set<Int> = []
-            for _ in 1...20 {
+            for _ in 1...16 {
                 let response = try await harness.nextResponse()
                 if let id = response["id"]?.intValue {
                     seen.insert(id)
                 }
             }
-            #expect(seen == Set(1...20))
+            #expect(seen == Set(1...16))
+        }
+    }
+
+    @Test("caps concurrent requests at 16 and rejects the excess")
+    func capsConcurrentRequests() async throws {
+        let registry = try MCPToolRegistry([
+            TestTools.slowTool(duration: .seconds(2)),
+            TestTools.echoTool()
+        ])
+        try await withHarness(registry) { harness in
+            _ = try await harness.performInitialize()
+            for id in 1...20 {
+                try harness.send(RPC.toolsCall(
+                    id: id,
+                    name: "slow",
+                    arguments: .object([:])
+                ))
+            }
+
+            var accepted = 0
+            var rejected = 0
+            for _ in 1...20 {
+                let response = try await harness.nextResponse(timeout: 5)
+                if response.errorCode == JSONRPCErrorCode.internalError.rawValue {
+                    rejected += 1
+                } else if response["id"] != nil {
+                    accepted += 1
+                }
+            }
+            #expect(accepted == 16)
+            #expect(rejected == 4)
         }
     }
 }
