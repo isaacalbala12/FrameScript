@@ -181,6 +181,13 @@ struct FrameScriptProductionApp: App {
             Button(appState.localized("project.export")) { appState.exportProject() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .export))
                 .disabled(!commands.canExportProject)
+            Button(appState.localized("resolvePack.menu")) {
+                ResolvePackPresenter.shared.present(
+                    languageCode: appState.resolvePackDefaultLanguageCode
+                )
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .resolvePack))
+            .disabled(!commands.canExportResolvePack)
             Divider()
             Button(appState.localized("menu.importEscaleta")) {
                 escaletaImport.chooseFile(appState: appState)

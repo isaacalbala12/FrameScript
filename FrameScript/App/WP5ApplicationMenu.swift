@@ -35,6 +35,7 @@ enum ApplicationMenuSpec {
         .init(command: .importEscaleta, menu: .file),
         .init(command: .exportEscaleta, menu: .file),
         .init(command: .exportAVScript, menu: .file),
+        .init(command: .resolvePack, menu: .file),
         .init(command: .showBackups, menu: .file),
 
         .init(command: .scriptMode, menu: .view),

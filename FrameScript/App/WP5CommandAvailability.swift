@@ -43,6 +43,7 @@ struct CommandAvailability: Equatable {
     var canSaveProjectAs: Bool { hasOpenProject }
     var canExportProject: Bool { hasOpenProject }
     var canExportAVScript: Bool { hasOpenProject }
+    var canExportResolvePack: Bool { hasOpenProject }
     var canRevertToSaved: Bool { hasOpenProject && hasSavedFile && !hasActiveTake }
 
     /// Set by `CommandAvailability(appState:)`; kept out of the initializer so
@@ -110,7 +111,7 @@ struct CommandAvailability: Equatable {
             canSaveProject
         case .saveAs:
             canSaveProjectAs
-        case .export, .exportEscaleta, .exportAVScript:
+        case .export, .exportEscaleta, .exportAVScript, .resolvePack:
             canExportProject
         case .importEscaleta:
             canReplaceProject

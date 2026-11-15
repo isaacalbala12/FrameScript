@@ -262,6 +262,10 @@ struct CommandPaletteView: View {
             appState.openResearchPanel()
         case .showBoard:
             appState.showBoardWindow()
+        case .resolvePack:
+            ResolvePackPresenter.shared.presentAfterPaletteDismissal(
+                languageCode: appState.resolvePackDefaultLanguageCode
+            )
         case .commandPalette:
             break
         case .toggleContentsPanel:

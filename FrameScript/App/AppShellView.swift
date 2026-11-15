@@ -10,6 +10,7 @@ struct AppRootView: View {
     var body: some View {
         @Bindable var windowState = appState.windowState
         @Bindable var recording = appState.recording
+        @Bindable var resolvePackPresenter = ResolvePackPresenter.shared
         // Read the observable property in the body so a pending question
         // invalidates this view and presents the sheet.
         let pendingPrompt = subscriptionRuntime.pendingPrompt
@@ -108,6 +109,7 @@ struct AppRootView: View {
 
     private func performPendingPaletteAction() {
         HookSheetPresenter.shared.presentPendingRequest()
+        ResolvePackPresenter.shared.presentPendingRequest()
         if PaletteActionHandoff.shared.takeExportRequest() {
             appState.windowState.isExportPresented = true
         }
@@ -190,6 +192,7 @@ struct AppShellView: View {
             handleDrop(urls)
         }
         .hookGeneratorSheets(presenter: HookSheetPresenter.shared)
+        .resolvePackSheet(presenter: ResolvePackPresenter.shared)
         .task(id: appState.project.id) {
             appState.syncOBSAssetsFromTakes()
             await appState.refreshAssetReachability()

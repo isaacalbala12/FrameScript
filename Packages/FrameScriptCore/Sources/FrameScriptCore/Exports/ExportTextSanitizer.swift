@@ -182,12 +182,23 @@ public enum ExportTextSanitizer {
         asciiSafe useASCII: Bool,
         limit: Int = 60
     ) -> String {
+        markerNameInfo(value, asciiSafe: useASCII, limit: limit).text
+    }
+
+    /// Same output as ``markerName(_:asciiSafe:limit:)`` plus whether the
+    /// 60-character cap cut the name. The delivery UI surfaces that warning
+    /// before exporting.
+    public static func markerNameInfo(
+        _ value: String,
+        asciiSafe useASCII: Bool,
+        limit: Int = 60
+    ) -> (text: String, wasTruncated: Bool) {
         var base = useASCII ? asciiSafe(value) : stripEmoji(stripMarkdown(value))
         base = stripControlCharacters(collapseWhitespace(base))
         let withoutPipes = base.replacingOccurrences(of: "|", with: "/")
         let trimmed = withoutPipes.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "Marker" }
-        return truncated(trimmed, limit: limit).text
+        guard !trimmed.isEmpty else { return ("Marker", false) }
+        return truncated(trimmed, limit: limit)
     }
 
     /// A safe EDL marker note: one line, no pipes, never empty with a fallback.

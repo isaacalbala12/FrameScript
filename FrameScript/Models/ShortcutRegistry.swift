@@ -238,6 +238,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case newProject, newProjectFromTemplate, openProject, save, saveAs, `import`, export
     case importEscaleta, exportEscaleta
     case exportAVScript
+    case resolvePack
     case addScene, duplicateScene, deleteScene, moveSceneUp, moveSceneDown
     case nextScene, previousScene
     case scriptMode, visualsMode, editingMode, clipsMode, timelineMode, avScriptMode
@@ -339,6 +340,9 @@ enum ShortcutRegistry {
         .init(command: .exportEscaleta, localizationKey: "menu.exportEscaleta", category: .project, factoryDefault: .init("e", modifiers: [.command, .shift]), order: 8),
         .init(command: .showBackups, localizationKey: "backups.menu", category: .project, factoryDefault: .init("b", modifiers: [.command, .shift]), order: 9),
         .init(command: .exportAVScript, localizationKey: "menu.exportAVScript", category: .project, factoryDefault: .init("e", modifiers: [.command, .option]), order: 10),
+        // ⌘E, ⇧⌘E and ⌥⌘E were taken by export, escaleta export and the AV
+        // script export, so the Resolve pack keeps the E mnemonic on ⌃⌘E.
+        .init(command: .resolvePack, localizationKey: "resolvePack.menu", category: .project, factoryDefault: .init("e", modifiers: [.command, .control]), order: 11),
         .init(command: .addScene, localizationKey: "scene.add", category: .scenes, factoryDefault: .init("n", modifiers: [.command, .option]), order: 0),
         .init(command: .duplicateScene, localizationKey: "scene.duplicate", category: .scenes, factoryDefault: .init("d", modifiers: [.command]), order: 1),
         .init(command: .deleteScene, localizationKey: "scene.delete", category: .scenes, factoryDefault: .init(key: .delete, modifiers: [.command]), order: 2),
