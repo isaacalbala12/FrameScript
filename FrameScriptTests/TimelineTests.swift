@@ -6,20 +6,24 @@ import XCTest
 
 @MainActor
 final class TimelineTests: XCTestCase {
-    private var suites: [String] = []
+    /// Isolated suites live in the process temporary directory, so no test
+    /// writes `~/Library/Preferences`.
+    private var testDefaults: [TestDefaults] = []
+
+    override func setUp() {
+        super.setUp()
+        TestBundleCleanup.register()
+    }
 
     override func tearDown() async throws {
         await MainActor.run {
             if let pending = TimelineNavigation.shared.pendingRequest {
                 TimelineNavigation.shared.consume(pending.id)
             }
-            for suite in suites {
-                UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
-                let plist = FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/Preferences/\(suite).plist")
-                try? FileManager.default.removeItem(at: plist)
+            for defaults in testDefaults {
+                defaults.cleanup()
             }
-            suites.removeAll()
+            testDefaults.removeAll()
         }
         try await super.tearDown()
     }
@@ -28,7 +32,9 @@ final class TimelineTests: XCTestCase {
 
     func testTimelineModeHasStableRawValueAndShortcut() {
         XCTAssertEqual(WorkspaceMode.timeline.rawValue, "Timeline")
-        XCTAssertEqual(ShortcutRegistry.definition(for: .timelineMode).factoryDefault, .init("4", modifiers: [.command]))
+        // Integration moved the timeline to ⌘5: the clips workspace landed
+        // first and already owns ⌘4.
+        XCTAssertEqual(ShortcutRegistry.definition(for: .timelineMode).factoryDefault, .init("5", modifiers: [.command]))
         XCTAssertEqual(ShortcutRegistry.definition(for: .timelineZoomIn).factoryDefault, .init("=", modifiers: [.command]))
         XCTAssertEqual(ShortcutRegistry.definition(for: .timelineZoomOut).factoryDefault, .init("-", modifiers: [.command]))
     }
@@ -372,9 +378,9 @@ final class TimelineTests: XCTestCase {
     }
 
     private func makeAppState(project: FrameProject) -> AppState {
-        let suite = "FrameScript.TimelineTests.\(UUID().uuidString)"
-        suites.append(suite)
-        let defaults = UserDefaults(suiteName: suite)!
+        let isolated = TestDefaults.make()
+        testDefaults.append(isolated)
+        let defaults = isolated.defaults
         let store = ProjectStore(project: project)
         store.openProject(project, fileURL: nil, wordsPerMinute: 150, markUnsaved: false)
         let recording = RecordingController(
