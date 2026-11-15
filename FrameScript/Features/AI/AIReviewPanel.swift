@@ -58,8 +58,6 @@ struct AIReviewContent: View {
                     }
                 }
 
-                RhythmReviewSection()
-
                 if appState.aiState.isAnalyzing {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -90,6 +88,7 @@ struct AIReviewContent: View {
                 }
             }
             .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -130,6 +129,7 @@ private struct AICommentView: View {
             }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(theme.sidebar.opacity(0.65))
@@ -156,6 +156,7 @@ private struct SoftCallout: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(theme.sidebar.opacity(0.65))

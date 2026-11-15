@@ -146,23 +146,17 @@ struct UXActionBarModel: Equatable {
     }
 }
 
-enum UXActionBarLayout {
-    /// The column width below which labels always collapse. Spanish/English
-    /// labels need more than this to render without clipping, so
-    /// ``requiredLabelWidth(for:)`` is the effective threshold.
-    static let minimumLabelWidth: CGFloat = 720
+enum UXActionBarLabelMode {
+    case all
+    case insertAndProduction
+    case none
 
-    /// Width the full set of short labels needs before it can render without
-    /// clipping. Russian strings are longer than Spanish/English ones.
-    static func requiredLabelWidth(for language: AppLanguage) -> CGFloat {
-        switch L10n.resolve(language) {
-        case .russian: 980
-        case .english, .spanish, .system: 850
+    func showsLabel(for group: UXActionGroup) -> Bool {
+        switch self {
+        case .all: true
+        case .insertAndProduction: group != .ai
+        case .none: false
         }
-    }
-
-    static func showsLabels(columnWidth: CGFloat, language: AppLanguage) -> Bool {
-        columnWidth >= max(minimumLabelWidth, requiredLabelWidth(for: language))
     }
 }
 
@@ -221,9 +215,8 @@ enum UXEditorActionPerformer {
 /// Action bar between the scene meta line and the script text.
 ///
 /// It sits inside `ScriptEditorView`, so it already shares the text column's
-/// width and alignment. Labels collapse to icons under
-/// `UXActionBarLayout.showsLabels(columnWidth:language:)`; tooltips keep the
-/// full name and the active shortcut.
+/// width and alignment. `ViewThatFits` keeps the widest label layout that
+/// fits; tooltips keep the full name and the active shortcut.
 struct UXEditorActionBar: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
@@ -235,30 +228,29 @@ struct UXEditorActionBar: View {
     var previewHoveredAction: UXEditorAction?
 
     var body: some View {
-        // Measure the space the parent offers before laying the buttons out.
-        // A plain GeometryReader background inside the bar would report the
-        // bar's ideal width once the labels stop fitting, so a wide editor
-        // column kept its labels and overflowed narrow windows.
-        GeometryReader { proxy in
-            barContent(showsLabels: UXActionBarLayout.showsLabels(
-                columnWidth: proxy.size.width,
-                language: appState.currentLanguage
-            ))
-            .frame(width: proxy.size.width, height: 34, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(theme.panelBackground)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(theme.divider, lineWidth: 1)
-                    }
-            }
+        // Real measurement instead of fixed width thresholds: the full label
+        // set wins when it fits, then labels for the Insert and Production
+        // groups (AI stays icon-only), then all icons. This keeps labels
+        // visible in a 1180 pt window with the inspector open.
+        ViewThatFits(in: .horizontal) {
+            barContent(labelMode: .all)
+            barContent(labelMode: .insertAndProduction)
+            barContent(labelMode: .none)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 34)
+        .background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(theme.panelBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .stroke(theme.divider, lineWidth: 1)
+                }
+        }
         .accessibilityElement(children: .contain)
     }
 
-    private func barContent(showsLabels: Bool) -> some View {
+    private func barContent(labelMode: UXActionBarLabelMode) -> some View {
         let model = UXActionBarModel(appState: appState)
 
         return HStack(spacing: 0) {
@@ -267,18 +259,18 @@ struct UXEditorActionBar: View {
                     Rectangle()
                         .fill(theme.divider)
                         .frame(width: 1, height: 16)
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, 3)
                         .accessibilityHidden(true)
                 }
-                HStack(spacing: 1) {
+                HStack(spacing: 0) {
                     ForEach(group.actions) { action in
                         UXActionButton(
                             action: action,
                             title: appState.localized(action.titleKey),
-                            showsLabel: showsLabels,
+                            showsLabel: labelMode.showsLabel(for: group),
                             isEnabled: model.isEnabled(action),
                             tooltip: tooltip(for: action, model: model),
-                            emphasis: emphasis(for: action),
+                            emphasis: UXActionEmphasisPolicy.emphasis(for: action),
                             isPreviewHovered: previewHoveredAction == action
                         ) {
                             UXEditorActionPerformer.perform(
@@ -294,16 +286,8 @@ struct UXEditorActionBar: View {
                 .accessibilityLabel(appState.localized(group.titleKey))
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 4)
         .padding(.vertical, 4)
-    }
-
-    private func emphasis(for action: UXEditorAction) -> UXActionEmphasis {
-        switch action {
-        case .recordTake: .filled
-        case .analyzeScene: .tinted
-        default: .standard
-        }
     }
 
     private func tooltip(for action: UXEditorAction, model: UXActionBarModel) -> String {
@@ -317,10 +301,16 @@ struct UXEditorActionBar: View {
     }
 }
 
-enum UXActionEmphasis {
+enum UXActionEmphasis: Equatable {
     case standard
-    case tinted
     case filled
+}
+
+enum UXActionEmphasisPolicy {
+    /// Only "Grabar toma" is the filled primary; every other action is plain.
+    static func emphasis(for action: UXEditorAction) -> UXActionEmphasis {
+        action == .recordTake ? .filled : .standard
+    }
 }
 
 /// One bar button. Deliberately not focusable: clicking it must leave the
@@ -365,19 +355,19 @@ struct UXActionButton: View {
 
     var body: some View {
         Button(action: perform) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: action.systemImage)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .frame(width: 13)
                 if showsLabel {
                     Text(title)
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
                         .fixedSize()
                 }
             }
-            .padding(.horizontal, showsLabel ? 6 : 0)
-            .frame(width: showsLabel ? nil : 26, height: 26)
+            .padding(.horizontal, showsLabel ? 4 : 0)
+            .frame(width: showsLabel ? nil : 24, height: 26)
             .foregroundStyle(foreground)
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -402,8 +392,6 @@ struct UXActionButton: View {
         switch emphasis {
         case .standard:
             return effectiveHover ? theme.primaryText : theme.secondaryText
-        case .tinted:
-            return theme.accentText
         case .filled:
             return FrameTheme.textColor(onFill: theme.accentStrong)
         }
@@ -416,8 +404,6 @@ struct UXActionButton: View {
         switch emphasis {
         case .standard:
             return effectiveHover ? theme.hover : Color.clear
-        case .tinted:
-            return theme.accentSoft.opacity(effectiveHover ? 0.9 : 0.65)
         case .filled:
             return theme.accentStrong.opacity(effectiveHover ? 0.88 : 1)
         }

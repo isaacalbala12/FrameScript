@@ -64,12 +64,14 @@ final class UXSnapshotTests: FrameScriptTestCase {
             XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
             XCTAssertTrue(text.contains { $0.contains("Grabar toma") }, "\(name): production label missing")
         case "1180x760":
-            // The inspector pushes the text column under 720 pt: icons only,
-            // but the inspector stays visible.
-            XCTAssertFalse(text.contains { $0.contains("Pausa corta") }, "\(name): labels should collapse")
+            // The inspector narrows the text column: Insert and Production
+            // keep their labels, AI collapses to icons.
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
+            XCTAssertTrue(text.contains { $0.contains("Grabar toma") }, "\(name): Production labels missing")
+            XCTAssertFalse(text.contains { $0.contains("Analizar escena") }, "\(name): AI should be icon-only")
             XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
         default:
-            XCTAssertFalse(text.contains { $0.contains("Pausa corta") }, "\(name): labels should collapse")
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
             XCTAssertFalse(text.contains { $0.contains("Panel lateral") }, "\(name): inspector must hide")
             return
         }
@@ -79,6 +81,10 @@ final class UXSnapshotTests: FrameScriptTestCase {
             XCTAssertTrue(
                 text.contains { $0.contains("Analizar la escena actual") },
                 "\(name): AI content missing"
+            )
+            XCTAssertFalse(
+                text.contains { $0.contains("Sin cambio de imagen") || $0.contains("Sin avisos de ritmo") },
+                "\(name): the rhythm card must stay in the Ritmo tab"
             )
         case .rhythm:
             XCTAssertTrue(text.contains { $0.contains("Ritmo") }, "\(name): rhythm card missing")
@@ -180,7 +186,7 @@ final class UXSnapshotTests: FrameScriptTestCase {
                             .font(.system(size: 13))
                             .foregroundStyle(theme.secondaryText)
                         UXEditorActionBar(sceneID: scene.id)
-                            .frame(width: 640)
+                            .frame(width: 520)
                         Spacer()
                     }
                     .padding(48)
@@ -197,9 +203,9 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     result.textFragments.contains { $0.contains("Pausa corta") },
                     "\(name): icon-only mode still shows labels"
                 )
-                XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Grabar toma") || $0.contains(scene.title) },
-                    "\(name): bar did not render"
+                XCTAssertFalse(
+                    result.textFragments.contains { $0.contains("Analizar escena") },
+                    "\(name): icon-only mode still shows AI labels"
                 )
             }
         }
@@ -242,8 +248,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     "\(name): disabled bar should keep its labels at this width"
                 )
                 XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Gancho") },
-                    "\(name): disabled AI actions missing"
+                    result.textFragments.contains { $0.contains("Grabar toma") },
+                    "\(name): disabled production actions missing"
                 )
             }
         }
@@ -294,9 +300,9 @@ final class UXSnapshotTests: FrameScriptTestCase {
         }
     }
 
-    // MARK: - Localized labels that do not fit
+    // MARK: - Middle label stage
 
-    func testActionBarFallsBackToIconsWhenLabelsDoNotFit() {
+    func testActionBarUsesMiddleLabelsWhenFullLabelsDoNotFit() {
         let project = makeProject()
         let (appState, _) = makeSnapshotAppState(project: project, inspectorTab: .ai)
         let scene = project.scenes.sortedByOrder[0]
@@ -306,7 +312,7 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 colorScheme: appearance.colorScheme,
                 accent: appState.settings.accentColor
             )
-            let name = "ux-action-bar-fit-fallback-1180x760-\(appearance.rawValue)"
+            let name = "ux-action-bar-middle-labels-1180x760-\(appearance.rawValue)"
             let result = SnapshotRenderer.render(
                 VStack(alignment: .leading, spacing: 10) {
                     Text(scene.title)
@@ -314,9 +320,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     Text("1:15 estimado · 186 palabras")
                         .font(.system(size: 13))
                         .foregroundStyle(theme.secondaryText)
-                    // Above the 720 pt baseline but still below the width the
-                    // full Spanish labels need: the bar must use icons instead
-                    // of clipping text.
+                    // Too narrow for the full label set, wide enough for the
+                    // Insert and Production labels. AI stays icon-only.
                     UXEditorActionBar(sceneID: scene.id)
                         .frame(width: 760)
                     Spacer()
@@ -331,9 +336,17 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 appState: appState
             )
             assertRendered(result, name: name)
-            XCTAssertFalse(
+            XCTAssertTrue(
                 result.textFragments.contains { $0.contains("Pausa corta") },
-                "\(name): labels should fall back to icons instead of clipping"
+                "\(name): Insert labels should survive the middle stage"
+            )
+            XCTAssertTrue(
+                result.textFragments.contains { $0.contains("Grabar toma") },
+                "\(name): Production labels should survive the middle stage"
+            )
+            XCTAssertFalse(
+                result.textFragments.contains { $0.contains("Analizar escena") },
+                "\(name): AI should be icon-only in the middle stage"
             )
         }
     }

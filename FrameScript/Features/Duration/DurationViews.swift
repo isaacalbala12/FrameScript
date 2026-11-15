@@ -47,11 +47,24 @@ struct SceneDurationInlineText: View {
 
 // MARK: - Scene header control
 
+/// Keeps the target affordance in exactly one place on the scene header.
+enum SceneTargetIndicatorPolicy {
+    /// The chip shows when a target exists; the legacy duration-control glyph
+    /// is only needed in the no-target state.
+    static func showsLegacyGlyph(hasTarget: Bool) -> Bool {
+        !hasTarget
+    }
+}
+
 /// Duration label in the scene header. Clicking it opens the targets popover.
 struct SceneDurationControl: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let scene: Scene
+    /// The scene header's target chip owns the target affordance when one is
+    /// set. Show the legacy glyph only when no target exists, so it is never
+    /// displayed twice.
+    var showsLegacyTargetGlyph: Bool = true
 
     @State private var isPopoverPresented = false
 
@@ -81,7 +94,7 @@ struct SceneDurationControl: View {
                         .foregroundStyle(theme.warning)
                 }
 
-                if summary.target != nil {
+                if showsLegacyTargetGlyph {
                     Image(systemName: "target")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(theme.tertiaryText)

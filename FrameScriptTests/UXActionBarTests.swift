@@ -235,6 +235,37 @@ final class UXActionBarTests: FrameScriptTestCase {
         )
     }
 
+    func testEveryBarActionHasALabelAndHelpWithItsShortcut() {
+        var settings = AppSettings.defaults
+        settings.shortcutOverrides[.suggestRehooks] = .unassigned
+
+        for action in UXEditorAction.allCases {
+            for language in [AppLanguage.english, .spanish, .russian] {
+                let title = L10n.tr(action.titleKey, language: language)
+                XCTAssertFalse(title.isEmpty, "\(action) has an empty title")
+                XCTAssertNotEqual(title, action.titleKey, "\(action) is untranslated in \(language)")
+            }
+
+            let title = L10n.tr(action.titleKey, language: .spanish)
+            let help = UXActionTooltip.text(
+                title: title,
+                command: action.shortcutCommand,
+                settings: settings
+            )
+            XCTAssertTrue(help.hasPrefix(title), "\(action) help lost its label: \(help)")
+
+            if let command = action.shortcutCommand,
+               let binding = settings.activeShortcut(for: command) {
+                XCTAssertTrue(
+                    help.contains(binding.display),
+                    "\(action) help omits \(binding.display): \(help)"
+                )
+            } else {
+                XCTAssertEqual(help, title, "\(action) should omit an unassigned shortcut")
+            }
+        }
+    }
+
     func testInsertionButtonsHaveNoShortcutTheyCouldPretendToOwn() {
         for action in UXEditorAction.allCases where action.group == .insert {
             XCTAssertNil(action.shortcutCommand)
@@ -244,15 +275,33 @@ final class UXActionBarTests: FrameScriptTestCase {
 
     // MARK: - Narrow column
 
-    func testActionBarLabelsCollapseBelowTheColumnThreshold() {
-        XCTAssertFalse(UXActionBarLayout.showsLabels(columnWidth: 719, language: .spanish))
-        XCTAssertFalse(UXActionBarLayout.showsLabels(columnWidth: 849, language: .spanish))
-        XCTAssertTrue(UXActionBarLayout.showsLabels(columnWidth: 850, language: .spanish))
-        XCTAssertTrue(UXActionBarLayout.showsLabels(columnWidth: 900, language: .english))
-        // Russian labels are longer, so they keep the icons until there is
-        // genuinely room for the full text.
-        XCTAssertFalse(UXActionBarLayout.showsLabels(columnWidth: 856, language: .russian))
-        XCTAssertTrue(UXActionBarLayout.showsLabels(columnWidth: 980, language: .russian))
+    func testLabelModesDescribeTheThreeFitStages() {
+        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .insert))
+        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .ai))
+        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .production))
+
+        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .insert))
+        XCTAssertFalse(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .ai))
+        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .production))
+
+        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .insert))
+        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .ai))
+        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .production))
+    }
+
+    func testOnlyRecordTakeUsesTheFilledPrimaryStyle() {
+        for action in UXEditorAction.allCases {
+            XCTAssertEqual(
+                UXActionEmphasisPolicy.emphasis(for: action),
+                action == .recordTake ? .filled : .standard,
+                "\(action) must not look toggled on"
+            )
+        }
+    }
+
+    func testSceneTargetAffordanceIsNotShownTwice() {
+        XCTAssertTrue(SceneTargetIndicatorPolicy.showsLegacyGlyph(hasTarget: false))
+        XCTAssertFalse(SceneTargetIndicatorPolicy.showsLegacyGlyph(hasTarget: true))
     }
 
     // MARK: - Inspector

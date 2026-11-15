@@ -173,7 +173,12 @@ struct ScriptEditorView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if appState.settings.editorPreferences.showSceneDuration {
-                    SceneDurationControl(scene: scene)
+                    SceneDurationControl(
+                        scene: scene,
+                        showsLegacyTargetGlyph: SceneTargetIndicatorPolicy.showsLegacyGlyph(
+                            hasTarget: scene.targetDuration != nil
+                        )
+                    )
                 }
                 if appState.settings.editorPreferences.showSceneDuration && appState.settings.editorPreferences.showWordCount { Text("·") }
                 if appState.settings.editorPreferences.showWordCount {
