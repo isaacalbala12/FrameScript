@@ -214,7 +214,10 @@ final class AppState {
         exportFolderBookmarkResolver: @escaping ExportFolderBookmarkResolver = { data, isStale in
             try URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
         },
-        templates: [FrameTemplate] = SampleData.templates
+        templates: [FrameTemplate] = SampleData.templates,
+        /// `nil` reads the user's custom templates. Tests pass `[]` so they
+        /// never touch the real app defaults domain.
+        customTemplates: [FrameTemplate]? = nil
     ) {
         self.projectStore = projectStore
         self.recentProjectStore = recentProjectStore
@@ -237,9 +240,16 @@ final class AppState {
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
-        let loadedCustomTemplates = Self.loadCustomTemplates()
-        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: loadedCustomTemplates.templates)
-        self.didFailToLoadCustomTemplates = loadedCustomTemplates.failed
+        // `customTemplates` stays injectable for tests; production passes `nil`
+        // and reads the isolated application defaults.
+        if let customTemplates {
+            self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: customTemplates)
+            self.didFailToLoadCustomTemplates = false
+        } else {
+            let loadedCustomTemplates = Self.loadCustomTemplates()
+            self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: loadedCustomTemplates.templates)
+            self.didFailToLoadCustomTemplates = loadedCustomTemplates.failed
+        }
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
@@ -330,6 +340,11 @@ final class AppState {
         if editorState.selectedSceneID == nil {
             editorState.selectedSceneID = project.scenes.first?.id
         }
+#if DEBUG
+        if arguments.contains("--framescript-ui-test-open-timeline") {
+            editorState.selectedMode = .timeline
+        }
+#endif
     }
 
     var project: FrameProject {
@@ -1118,7 +1133,7 @@ final class AppState {
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
-        case .script, .clips: []
+        case .script, .clips, .timeline: []
         }
         let anchorsByID = Dictionary(uniqueKeysWithValues: items)
         let selectedIDs = itemIDs.reduce(into: [UUID]()) { result, itemID in
@@ -1175,7 +1190,7 @@ final class AppState {
             scene.editingItems.enumerated().compactMap { index, item in
                 TextAnchorRepair.current(item.textAnchor, in: scene.scriptText).map { (item.id, $0, index) }
             }
-        case .script, .clips:
+        case .script, .clips, .timeline:
             []
         }
         let sorted = anchors.sorted {
@@ -1211,7 +1226,7 @@ final class AppState {
             editorState.selectedProductionItemIDs.lazy.compactMap { selectedID in
                 scene.editingItems.first(where: { $0.id == selectedID }).flatMap { TextAnchorRepair.current($0.textAnchor, in: scene.scriptText) }
             }.first
-        case .script, .clips:
+        case .script, .clips, .timeline:
             nil
         }
         return selectedAnchor ?? TextAnchorRepair.anchor(

@@ -11,6 +11,7 @@
 - Added per-language reading speeds (Spanish 150, English 160, Russian 140 wpm), configurable short/long pause durations, and clean "sin marcas" text and Markdown exports.
 - Added `FrameScriptCore`, a UI-free Swift package linked into the app, with the `.fscr` document value types and codec.
 - Added the v4 project schema for takes, learned speech rate, assets, per-language publishing packs, checklist tasks, sources and claims, comparison tables, language variants, short clips, version snapshots, T3 thread reuse, Markdown import leftovers, and published-video comparison.
+- Added a read-only script timeline (F18) in a new Timeline workspace mode (⌘4): scene, narration, pause, Visuals, Editing, take and rhythm tracks with widths proportional to real or estimated duration, drag-to-reorder scenes as one undo step, zoom by slider/⌘+/⌘-/pinch, and click-through to the scene, paragraph or production item.
 
 ### Fixed
 

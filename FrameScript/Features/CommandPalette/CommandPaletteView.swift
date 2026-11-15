@@ -244,6 +244,12 @@ struct CommandPaletteView: View {
             appState.selectMode(.clips)
         case .createClip:
             appState.createClipFromEditorSelection()
+        case .timelineMode:
+            appState.selectMode(.timeline)
+        case .timelineZoomIn:
+            appState.timelineZoomIn()
+        case .timelineZoomOut:
+            appState.timelineZoomOut()
         case .commandPalette:
             break
         case .toggleContentsPanel:

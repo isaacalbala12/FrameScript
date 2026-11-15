@@ -28,6 +28,7 @@ extension L10n {
         wp7Strings,
         wp8Strings,
         productionStrings,
-        clipsStrings
+        clipsStrings,
+        timelineStrings
     ]
 }

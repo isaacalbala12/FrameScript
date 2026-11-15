@@ -47,6 +47,7 @@ struct CommandAvailability: Equatable {
     /// Set by `CommandAvailability(appState:)`; kept out of the initializer so
     /// the matrix stays easy to build in tests.
     var hasSavedFile: Bool = false
+    var isTimelineMode: Bool = false
 
     // MARK: - Backups and app-level windows
 
@@ -89,6 +90,8 @@ struct CommandAvailability: Equatable {
     var canSwitchMode: Bool { hasOpenProject }
     /// A clip starts from the selected scene or the current editor selection.
     var canCreateClip: Bool { hasOpenProject && hasSelectedScene }
+    /// Timeline zoom only applies while the timeline workspace is on screen.
+    var canZoomTimeline: Bool { isTimelineMode }
     var canToggleContentsPanel: Bool { hasOpenProject }
     var canToggleAIReview: Bool { hasOpenProject }
     var canToggleFocusMode: Bool { hasOpenProject }
@@ -121,6 +124,8 @@ struct CommandAvailability: Equatable {
             canSwitchMode
         case .createClip:
             canCreateClip
+        case .timelineZoomIn, .timelineZoomOut:
+            canZoomTimeline
         case .commandPalette:
             canShowCommandPalette
         case .toggleContentsPanel:
@@ -158,6 +163,7 @@ extension CommandAvailability {
             hasActiveTake: appState.recording.hasActiveTake
         )
         hasSavedFile = appState.projectStore.currentFileURL != nil
+        isTimelineMode = appState.selectedMode == .timeline
     }
 }
 
