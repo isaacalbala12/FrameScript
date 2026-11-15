@@ -137,9 +137,9 @@ struct AVScriptEditorView: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 0) {
-            EmptyModeState(
-                title: appState.localized("avScript.emptyTitle"),
+            EmptyProductionState(
                 message: appState.localized("avScript.emptyMessage"),
+                title: appState.localized("avScript.emptyTitle"),
                 actionTitle: appState.localized("avScript.goToScript")
             ) {
                 appState.selectMode(.script)

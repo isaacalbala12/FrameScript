@@ -22,6 +22,9 @@ struct EditorModeHeader: View {
 struct EmptyProductionState: View {
     @Environment(\.frameTheme) private var theme
     let message: String
+    /// Optional headline, used by the AV script dead end. Callers that only
+    /// have a sentence keep the single-block layout.
+    var title: String?
     /// Optional way out of the dead end ("Go to Script"). Omitted when the
     /// caller cannot switch modes.
     var actionTitle: String?
@@ -29,6 +32,12 @@ struct EmptyProductionState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let title {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(theme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(theme.secondaryText)
