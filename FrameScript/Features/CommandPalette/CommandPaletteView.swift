@@ -260,6 +260,8 @@ struct CommandPaletteView: View {
             appState.showPublishingPanel()
         case .researchPanel:
             appState.openResearchPanel()
+        case .showBoard:
+            appState.showBoardWindow()
         case .commandPalette:
             break
         case .toggleContentsPanel:

@@ -33,6 +33,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
     case appearance
     case editor
     case templates
+    case board
     case ai
     case export
     case keyboardShortcuts
@@ -46,6 +47,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
         case .appearance: "paintpalette"
         case .editor: "text.alignleft"
         case .templates: "doc.on.doc"
+        case .board: "rectangle.split.3x1"
         case .ai: "sparkles"
         case .export: "square.and.arrow.up"
         case .keyboardShortcuts: "keyboard"
@@ -60,6 +62,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
         case .appearance: appState.localized("settings.appearance")
         case .editor: appState.localized("settings.editor")
         case .templates: appState.localized("settings.templates")
+        case .board: appState.localized("settings.board")
         case .ai: appState.localized("settings.ai")
         case .export: appState.localized("settings.export")
         case .keyboardShortcuts: appState.localized("settings.keyboardShortcuts")
@@ -491,6 +494,7 @@ final class AppState {
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
         willReplaceOpenProject()
+        applyBoardTemplateDefault(to: project, template: selectedTemplate)
         projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true, recalculateDurations: false)
         resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)

@@ -99,6 +99,8 @@ struct CommandAvailability: Equatable {
     var canToggleFocusMode: Bool { hasOpenProject }
     var canShowAssets: Bool { hasOpenProject }
     var canShowResearch: Bool { hasOpenProject }
+    /// The board is a library window: it works without an open project.
+    var canShowBoard: Bool { true }
 
     func isEnabled(_ command: ShortcutCommand) -> Bool {
         switch command {
@@ -142,6 +144,8 @@ struct CommandAvailability: Equatable {
             canShowAssets
         case .researchPanel:
             canShowResearch
+        case .showBoard:
+            canShowBoard
         case .teleprompter:
             canOpenTeleprompter
         case .recordTake:

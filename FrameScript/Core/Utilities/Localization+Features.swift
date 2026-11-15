@@ -33,6 +33,7 @@ extension L10n {
         avScriptStrings,
         assetsStrings,
         publishingStrings,
-        researchStrings
+        researchStrings,
+        boardStrings
     ]
 }

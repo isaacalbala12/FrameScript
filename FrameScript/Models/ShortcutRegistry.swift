@@ -247,6 +247,7 @@ enum ShortcutCommand: String, Codable, CaseIterable, Identifiable, Hashable {
     case timelineZoomIn, timelineZoomOut
     case assets
     case publishingPack
+    case showBoard
     case recordTake, toggleRecordingPanel
     case productionChecklist
     case analyzeCurrentScene, openSettings, showShortcuts, showBackups
@@ -369,6 +370,7 @@ enum ShortcutRegistry {
         // Publishing arrived after the production checklist claimed ⇧⌘P.
         .init(command: .publishingPack, localizationKey: "publishing.menu.open", category: .workspace, factoryDefault: .init("u", modifiers: [.command, .shift]), order: 18),
         .init(command: .researchPanel, localizationKey: "research.menu", category: .workspace, factoryDefault: .init("j", modifiers: [.command, .shift]), order: 19),
+        .init(command: .showBoard, localizationKey: "board.menu", category: .workspace, factoryDefault: .init("b", modifiers: [.command, .option]), order: 20),
         .init(command: .analyzeCurrentScene, localizationKey: "ai.analyzeCurrentScene", category: .ai, factoryDefault: .init("a", modifiers: [.command, .shift]), order: 0),
         .init(command: .generateHook, localizationKey: "menu.generateHook", category: .ai, factoryDefault: .init("g", modifiers: [.command, .shift]), order: 1),
         .init(command: .suggestRehooks, localizationKey: "menu.suggestRehooks", category: .ai, factoryDefault: .init("h", modifiers: [.command, .shift]), order: 2),

@@ -240,6 +240,8 @@ struct FrameScriptProductionApp: App {
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))
                 .disabled(!commands.canOpenTeleprompter)
+            Button(appState.localized("board.menu")) { appState.showBoardWindow() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .showBoard))
             Divider()
             Toggle(appState.localized("command.toggleSidebar"), isOn: $appState.isSidebarVisible)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleContentsPanel))

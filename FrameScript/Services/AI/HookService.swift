@@ -195,7 +195,10 @@ enum HookContextBuilder {
     }
 
     private static func thesis(project: FrameProject, scene: Scene) -> String {
-        let topic = project.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The board stores its template choice in the topic, and an imported
+        // escaleta stores a metadata blob there: neither is a thesis.
+        let topic = BoardProjectTopic.strippingMarker(from: project.topic)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         if !topic.isEmpty {
             // Imported escaletas store their round-trip metadata (including a
             // base64 JSON blob) in `topic`. It is not a thesis: strip the blob
