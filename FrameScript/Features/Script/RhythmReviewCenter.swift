@@ -6,7 +6,7 @@ import Observation
 /// analyzing it elsewhere keeps the document model off the background thread.
 /// Only value copies live here; the analyzer input is assembled inside the
 /// detached task.
-struct RhythmSceneSnapshot: Sendable {
+struct RhythmSceneSnapshot: Sendable, Equatable {
     let sceneID: UUID
     let text: String
     let visualChangeOffsets: [Int]
@@ -30,18 +30,41 @@ struct RhythmAnalysisOutput: Sendable {
     let analyses: [UUID: RhythmSceneAnalysis]
     let projectWarnings: [RhythmWarning]
     let textLength: Int
+    /// Inputs each analysis was computed from, so the next pass can reuse the
+    /// untouched scenes without re-analyzing the whole project.
+    let analyzedSnapshots: [UUID: RhythmSceneSnapshot]
+}
+
+/// Cached per-scene results from the previous pass. A scene is reused only when
+/// its snapshot (text, anchors, hook role, pace) and the thresholds are equal.
+struct RhythmAnalysisCache: Sendable {
+    var analyses: [UUID: RhythmSceneAnalysis] = [:]
+    var snapshots: [UUID: RhythmSceneSnapshot] = [:]
+    var calibration: RhythmCalibration?
 }
 
 /// Pure background analyzer. No `Scene`, SwiftUI or settings cross into it.
 enum RhythmAnalysisRunner {
     static func analyze(
         _ snapshots: [RhythmSceneSnapshot],
-        calibration: RhythmCalibration
+        calibration: RhythmCalibration,
+        reusing cache: RhythmAnalysisCache = RhythmAnalysisCache()
     ) -> RhythmAnalysisOutput {
         var analyses: [UUID: RhythmSceneAnalysis] = [:]
         analyses.reserveCapacity(snapshots.count)
+        var analyzedSnapshots: [UUID: RhythmSceneSnapshot] = [:]
+        analyzedSnapshots.reserveCapacity(snapshots.count)
+        let calibrationMatches = cache.calibration == calibration
 
         for snapshot in snapshots {
+            if calibrationMatches,
+               let cachedAnalysis = cache.analyses[snapshot.sceneID],
+               cache.snapshots[snapshot.sceneID] == snapshot {
+                analyses[snapshot.sceneID] = cachedAnalysis
+                analyzedSnapshots[snapshot.sceneID] = snapshot
+                continue
+            }
+
             let input = RhythmSceneInput(
                 id: snapshot.sceneID.uuidString,
                 text: snapshot.text,
@@ -73,6 +96,7 @@ enum RhythmAnalysisRunner {
                 }
             )
             analyses[snapshot.sceneID] = analysis
+            analyzedSnapshots[snapshot.sceneID] = snapshot
         }
 
         let ordered = snapshots.compactMap { analyses[$0.sceneID] }
@@ -83,7 +107,8 @@ enum RhythmAnalysisRunner {
         return RhythmAnalysisOutput(
             analyses: analyses,
             projectWarnings: projectWarnings,
-            textLength: snapshots.reduce(0) { $0 + $1.utf16Length }
+            textLength: snapshots.reduce(0) { $0 + $1.utf16Length },
+            analyzedSnapshots: analyzedSnapshots
         )
     }
 }
@@ -113,6 +138,10 @@ final class RhythmReviewCenter {
 
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var refreshGeneration = 0
+    /// Per-scene inputs of the last completed pass. `invalidate` drops only the
+    /// edited scene, so the next pass re-analyzes that scene and reuses the rest.
+    @ObservationIgnored private var analyzedSnapshotsBySceneID: [UUID: RhythmSceneSnapshot] = [:]
+    @ObservationIgnored private var analyzedCalibration: RhythmCalibration?
 
     init() {}
 
@@ -172,14 +201,19 @@ final class RhythmReviewCenter {
             // model) but runs only after the debounce, never per keystroke.
             let calibration = RhythmReview.effectiveThresholds(project: project, settings: settings)
             let snapshots = Self.makeSnapshots(project: project, settings: settings)
+            let cache = RhythmAnalysisCache(
+                analyses: self.analysesBySceneID,
+                snapshots: self.analyzedSnapshotsBySceneID,
+                calibration: self.analyzedCalibration
+            )
             let started = DispatchTime.now()
             let output = await Task.detached(priority: .userInitiated) {
-                RhythmAnalysisRunner.analyze(snapshots, calibration: calibration)
+                RhythmAnalysisRunner.analyze(snapshots, calibration: calibration, reusing: cache)
             }.value
             guard !Task.isCancelled, generation == self.refreshGeneration else {
                 return
             }
-            self.apply(output, started: started)
+            self.apply(output, calibration: calibration, started: started)
         }
     }
 
@@ -196,6 +230,7 @@ final class RhythmReviewCenter {
         analysisTask?.cancel()
         analysisTask = nil
         analysesBySceneID.removeValue(forKey: sceneID)
+        analyzedSnapshotsBySceneID.removeValue(forKey: sceneID)
         projectWarnings.removeAll { $0.sceneID == sceneID.uuidString }
         isPending = true
         revision += 1
@@ -204,6 +239,7 @@ final class RhythmReviewCenter {
     /// Removes a deleted scene from the cache.
     func removeScene(_ sceneID: UUID) {
         analysesBySceneID.removeValue(forKey: sceneID)
+        analyzedSnapshotsBySceneID.removeValue(forKey: sceneID)
         projectWarnings.removeAll { $0.sceneID == sceneID.uuidString }
         revision += 1
     }
@@ -215,14 +251,22 @@ final class RhythmReviewCenter {
         isEnabled = false
         isPending = false
         analysesBySceneID = [:]
+        analyzedSnapshotsBySceneID = [:]
+        analyzedCalibration = nil
         projectWarnings = []
         lastRefreshDuration = 0
         lastAnalyzedTextLength = 0
         revision += 1
     }
 
-    private func apply(_ output: RhythmAnalysisOutput, started: DispatchTime) {
+    private func apply(
+        _ output: RhythmAnalysisOutput,
+        calibration: RhythmCalibration,
+        started: DispatchTime
+    ) {
         analysesBySceneID = output.analyses
+        analyzedSnapshotsBySceneID = output.analyzedSnapshots
+        analyzedCalibration = calibration
         projectWarnings = output.projectWarnings
         lastAnalyzedTextLength = output.textLength
         lastRefreshDuration = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000

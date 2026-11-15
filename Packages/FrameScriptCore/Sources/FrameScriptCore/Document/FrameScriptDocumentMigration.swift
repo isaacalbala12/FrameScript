@@ -349,12 +349,49 @@ extension FrameScriptDocument {
         }
 
         public static func repair(_ anchor: TextAnchor?, from previousText: String, to text: String) -> TextAnchor? {
+            repair(
+                anchor,
+                from: previousText,
+                to: text,
+                edit: contiguousEdit(from: previousText, to: text)
+            )
+        }
+
+        /// The single contiguous edit that turns `previousText` into `text`.
+        /// Callers that repair several anchors after one keystroke compute it
+        /// once instead of rescanning both strings for every item.
+        public struct ContiguousEdit: Sendable, Equatable {
+            public let oldRange: NSRange
+            public let newRange: NSRange
+
+            public init(oldRange: NSRange, newRange: NSRange) {
+                self.oldRange = oldRange
+                self.newRange = newRange
+            }
+        }
+
+        public static func contiguousEdit(from previousText: String, to text: String) -> ContiguousEdit {
+            guard previousText != text else {
+                let length = (previousText as NSString).length
+                return ContiguousEdit(
+                    oldRange: NSRange(location: length, length: 0),
+                    newRange: NSRange(location: length, length: 0)
+                )
+            }
+            let edit = contiguousEdit(from: previousText as NSString, to: text as NSString)
+            return ContiguousEdit(oldRange: edit.oldRange, newRange: edit.newRange)
+        }
+
+        public static func repair(
+            _ anchor: TextAnchor?,
+            from previousText: String,
+            to text: String,
+            edit: ContiguousEdit
+        ) -> TextAnchor? {
             guard let anchor,
                   let current = current(anchor, in: previousText) else { return nil }
             guard previousText != text else { return self.anchor(in: text, range: current.nsRange) }
-            let previous = previousText as NSString
             let updated = text as NSString
-            let edit = contiguousEdit(from: previous, to: updated)
             let start = current.startUTF16
             let end = start + current.lengthUTF16
             let oldStart = edit.oldRange.location
@@ -407,6 +444,71 @@ extension FrameScriptDocument {
         public static func isAnchor(_ anchor: TextAnchor, in segment: TextSegment, text: String) -> Bool {
             guard let segmentAnchor = self.anchor(for: segment, in: text) else { return false }
             return NSLocationInRange(anchor.startUTF16, segmentAnchor.nsRange)
+        }
+
+        /// Resolves every segment of one scene to its UTF-16 range in `text`,
+        /// segmenting the scene once per split mode instead of once per query.
+        ///
+        /// The result is exactly what repeated `anchor(for:in:)` calls return:
+        /// candidate `segment.order` is searched from the end of the previous
+        /// candidate and only accepted when its normalized text matches. A
+        /// candidate that cannot be found makes that segment and every later
+        /// candidate unrepairable, mirroring the sequential search above.
+        public static func segmentRanges(
+            for segments: [TextSegment],
+            in text: String
+        ) -> [UUID: NSRange] {
+            guard !segments.isEmpty, !text.isEmpty else { return [:] }
+            let full = text as NSString
+            var rangesBySegmentID: [UUID: NSRange] = [:]
+            let byType = Dictionary(grouping: segments, by: \.segmentType)
+
+            for (splitMode, typedSegments) in byType {
+                let candidates = TextSegmenter.segmentTexts(in: text, splitMode: splitMode)
+                guard !candidates.isEmpty else { continue }
+
+                var candidateRanges: [NSRange?] = []
+                candidateRanges.reserveCapacity(candidates.count)
+                var searchStart = 0
+                var searchFailed = false
+                for candidate in candidates {
+                    guard !searchFailed else {
+                        candidateRanges.append(nil)
+                        continue
+                    }
+                    let searchRange = NSRange(
+                        location: searchStart,
+                        length: max(0, full.length - searchStart)
+                    )
+                    let found = full.range(of: candidate, options: [], range: searchRange)
+                    guard found.location != NSNotFound else {
+                        searchFailed = true
+                        candidateRanges.append(nil)
+                        continue
+                    }
+                    candidateRanges.append(found)
+                    searchStart = NSMaxRange(found)
+                }
+
+                var normalizedCandidates: [Int: String] = [:]
+                for segment in typedSegments {
+                    guard segment.order >= 0,
+                          segment.order < candidates.count,
+                          let range = candidateRanges[segment.order] else { continue }
+                    let normalizedCandidate: String
+                    if let cached = normalizedCandidates[segment.order] {
+                        normalizedCandidate = cached
+                    } else {
+                        normalizedCandidate = TextSegmenter.normalized(candidates[segment.order])
+                        normalizedCandidates[segment.order] = normalizedCandidate
+                    }
+                    guard normalizedCandidate == TextSegmenter.normalized(segment.sourceText) else {
+                        continue
+                    }
+                    rangesBySegmentID[segment.id] = range
+                }
+            }
+            return rangesBySegmentID
         }
 
         private static func contextBefore(_ text: NSString, location: Int) -> String {

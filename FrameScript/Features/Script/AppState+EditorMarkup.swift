@@ -43,6 +43,7 @@ extension AppState {
             scene.estimatedDuration = estimate.duration
             SceneMetricsCache.shared.store(estimate, for: scene.id)
         }
+        projectStore.adoptDurationConfiguration(editorDurationConfiguration)
         return changed
     }
 

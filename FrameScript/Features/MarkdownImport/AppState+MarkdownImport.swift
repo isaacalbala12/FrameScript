@@ -80,8 +80,10 @@ final class EscaletaImportCoordinator {
     }
 
     func present(url: URL, appState: AppState) {
-        guard let request = appState.prepareEscaletaImport(url: url) else { return }
-        self.request = request
+        Task { @MainActor [weak self] in
+            guard let request = await appState.prepareEscaletaImport(url: url) else { return }
+            self?.request = request
+        }
     }
 
     func dismiss() {
@@ -96,12 +98,16 @@ extension AppState {
         category: "MarkdownImport"
     )
 
-    func prepareEscaletaImport(url: URL) -> EscaletaImportRequest? {
+    func prepareEscaletaImport(url: URL) async -> EscaletaImportRequest? {
         do {
             let markdown = try securityScope.withAccess(to: url) {
                 try String(contentsOf: url, encoding: .utf8)
             }
-            let result = EscaletaParser.parse(markdown)
+            // Parsing a 30k-word escaleta used to block the main actor for
+            // hundreds of milliseconds; only the value result comes back.
+            let result = await Task.detached(priority: .userInitiated) {
+                EscaletaParser.parse(markdown)
+            }.value
             let mode = importMode(for: result.document)
             let mapping: EscaletaProjectMapping? = if result.document.kind == .escaleta, !result.document.scenes.isEmpty {
                 EscaletaProjectMapper.map(

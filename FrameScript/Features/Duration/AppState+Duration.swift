@@ -156,7 +156,7 @@ extension AppState {
             return []
         }
         var records: [DurationTakeRecord] = []
-        let sceneHash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        let sceneHash = projectStore.textHash(for: scene)
         for take in scene.takes {
             let language = take.languageCode
                 .trimmingCharacters(in: .whitespacesAndNewlines)

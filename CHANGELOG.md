@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Export, save/autosave, typing, rhythm review and escaleta import no longer repeat whole-project work: anchored exports index each scene once, saves recompute durations only for dirty scenes and encode/write off the main actor, typing repairs every anchor from one edit range, rhythm review reuses unchanged scenes, escaleta parsing runs off-main with precompiled regexes, and unchanged version-history payloads are written without re-encoding.
 - Test runs no longer touch the user's real preferences, Keychain, recents, project files or application-support backups: the app test host, the `TestDefaults` suites and the UI tests use per-run temporary locations, and a launch baseline fails the bundle if the real `com.drashko.FrameScript` domain changes.
 - `framescript mcp` exits with status 1 after a framing or transport failure instead of reporting success, accepts `"arguments": null` as an empty object, processes the `initialize` handshake in order with pipelined clients, caps concurrent requests at 16, preserves already-framed lines before an oversized message, and no longer crashes the host when an in-memory channel gets concurrent readers.
 - Script markup highlighting now re-runs over the whole document after a multi-paragraph paste and covers the whole blank-line block for emphasis that spans several lines, instead of leaving pasted or distant markers unstyled.

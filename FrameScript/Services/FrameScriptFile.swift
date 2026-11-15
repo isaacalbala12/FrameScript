@@ -676,7 +676,8 @@ extension FrameScriptDocument.VersionSnapshot {
             name: snapshot.name,
             isAutomatic: snapshot.isAutomatic,
             label: snapshot.label,
-            compressedPayload: snapshot.compressedPayload
+            compressedPayload: snapshot.compressedPayload,
+            encodedPayloadBase64: snapshot.encodedPayloadBase64
         )
     }
 
@@ -687,7 +688,8 @@ extension FrameScriptDocument.VersionSnapshot {
             name: name,
             isAutomatic: isAutomatic,
             label: label,
-            compressedPayload: compressedPayload
+            compressedPayload: compressedPayload,
+            encodedPayloadBase64: encodedPayloadBase64
         )
     }
 }

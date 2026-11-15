@@ -146,16 +146,17 @@ struct ExportService: ExportServicing {
         for scene in project.scenes.sortedByOrder {
             let sceneNotes = sceneNotes(scene) ?? ""
             let segments = scene.textSegments.sortedByOrder
+            let anchors = SceneAnchorIndex(scene: scene)
             var emittedRow = false
             for segment in segments {
                 if preferences.includeBRoll {
-                    for item in scene.bRollItems where isLinked(item.textAnchor, to: segment, in: scene) {
+                    for item in scene.bRollItems where anchors.isLinked(item.textAnchor, to: segment) {
                         rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.broll", language: language), source: label("brollSource.\(item.sourceType.rawValue)", language: language), description: item.descriptionText, notes: item.notes, sceneNotes: sceneNotes))
                         emittedRow = true
                     }
                 }
                 if preferences.includeEditingNotes {
-                    for item in scene.editingItems where isLinked(item.textAnchor, to: segment, in: scene) {
+                    for item in scene.editingItems where anchors.isLinked(item.textAnchor, to: segment) {
                         rows.append(csvRow(scene: scene, segment: segment, type: label("export.label.editing", language: language), source: "", description: item.cutStyle, notes: item.notes, sceneNotes: sceneNotes))
                         emittedRow = true
                     }
@@ -194,10 +195,11 @@ struct ExportService: ExportServicing {
 
     private func renderSegmentProduction(scene: Scene, preferences: ExportPreferences, language: AppLanguage, headingPrefix: String) -> String {
         let segments = scene.textSegments.sortedByOrder
+        let anchors = SceneAnchorIndex(scene: scene)
         var output = ""
         for segment in segments {
-            let bRoll = preferences.includeBRoll ? scene.bRollItems.filter { isLinked($0.textAnchor, to: segment, in: scene) } : []
-            let editing = preferences.includeEditingNotes ? scene.editingItems.filter { isLinked($0.textAnchor, to: segment, in: scene) } : []
+            let bRoll = preferences.includeBRoll ? scene.bRollItems.filter { anchors.isLinked($0.textAnchor, to: segment) } : []
+            let editing = preferences.includeEditingNotes ? scene.editingItems.filter { anchors.isLinked($0.textAnchor, to: segment) } : []
             guard !bRoll.isEmpty || !editing.isEmpty else { continue }
             output += "\(headingPrefix)\(label("export.csv.segmentText", language: language)): \(segmentPreview(segment.sourceText))\n"
             appendProductionItems(&output, bRoll: bRoll, editing: editing, language: language)
@@ -213,9 +215,30 @@ struct ExportService: ExportServicing {
         return output
     }
 
-    private func isLinked(_ anchor: TextAnchor?, to segment: TextSegment, in scene: Scene) -> Bool {
-        guard let anchor else { return false }
-        return TextAnchorRepair.isAnchor(anchor, in: segment, text: scene.scriptText)
+    private struct SceneAnchorIndex {
+        private let rangesBySegmentID: [UUID: NSRange]
+
+        init(scene: Scene) {
+            let segments = scene.textSegments.map { segment in
+                FrameScriptDocument.TextSegment(
+                    id: segment.id,
+                    sceneID: segment.sceneID,
+                    order: segment.order,
+                    sourceText: segment.sourceText,
+                    segmentType: FrameScriptDocument.SegmentType(rawValue: segment.segmentType.rawValue) ?? .scene,
+                    timingEstimate: segment.timingEstimate
+                )
+            }
+            rangesBySegmentID = FrameScriptDocument.TextAnchorRepair.segmentRanges(
+                for: segments,
+                in: scene.scriptText
+            )
+        }
+
+        func isLinked(_ anchor: TextAnchor?, to segment: TextSegment) -> Bool {
+            guard let anchor, let range = rangesBySegmentID[segment.id] else { return false }
+            return NSLocationInRange(anchor.startUTF16, range)
+        }
     }
 
     private func appendProductionItems(_ output: inout String, bRoll: [BRollItem], editing: [EditingItem], language: AppLanguage) {

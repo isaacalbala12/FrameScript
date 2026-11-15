@@ -236,6 +236,7 @@ final class AppState {
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
             self?.durationConfiguration(for: scene) ?? .standard
         }
+        self.projectStore.markAllDurationsDirty()
         self.projectStore.markupReviewRefreshHandler = { [weak self] in
             self?.scheduleRhythmReview()
         }
@@ -575,10 +576,51 @@ final class AppState {
         openProject()
     }
 
+    /// Waits for a background autosave and adopts its bytes as the new
+    /// external-change baseline, so the pre-write check does not mistake our own
+    /// write for an external edit. A failed drained write is reported exactly
+    /// like a non-drained one unless the caller is about to retry synchronously.
+    @discardableResult
+    func syncPendingBackgroundSave(
+        presentsFailure: Bool = true
+    ) -> ProjectStore.BackgroundWriteDrain {
+        let outcome = projectStore.waitForBackgroundWrite()
+        switch outcome {
+        case .applied(.success):
+            if let url = projectStore.currentFileURL, let data = projectStore.lastSavedFileData {
+                recordProjectFileSnapshot(data: data, at: url)
+            }
+            errorCenter.clearAutosaveFailureSuppression()
+        case .applied(.failure(let error)):
+            if presentsFailure {
+                Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+                errorCenter.presentAutosave(
+                    AppError.project(error, fileURL: projectStore.currentFileURL, operation: .autosave)
+                )
+            }
+        case .none, .stale:
+            break
+        }
+        return outcome
+    }
+
+    /// Lifecycle version of the old synchronous flush: settle the write already
+    /// in flight, then write any edit that landed after its snapshot. App
+    /// resign, window close, close, open-another, duplicate and delete must end
+    /// with disk == memory when autosave is on, exactly like the synchronous
+    /// base did.
+    private func settlePendingSaveForLifecycle() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+        syncPendingBackgroundSave()
+        performAutosave(synchronous: true)
+    }
+
     @discardableResult
     func saveProject() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        syncPendingBackgroundSave(presentsFailure: false)
         guard let url = projectStore.currentFileURL else { return saveProjectAs() }
         switch prepareProjectFileForWrite() {
         case .proceed:
@@ -607,6 +649,7 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        syncPendingBackgroundSave(presentsFailure: false)
         let url: URL
         if let saveAsDestinationProvider {
             guard let chosenURL = saveAsDestinationProvider() else { return false }
@@ -684,6 +727,9 @@ final class AppState {
     func revertToSaved() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        // Revert reads the file again; a pending write must land (or be
+        // consumed) before that read or memory/disk can diverge silently.
+        syncPendingBackgroundSave()
         guard confirm(title: localized("dialog.revertToSaved.title"), message: localized("dialog.revertToSaved.message")) else {
             return false
         }
@@ -692,13 +738,14 @@ final class AppState {
 
     func duplicateProject() {
         guard hasOpenProject else { return }
-        var copy: FrameProject?
-        transitionEditorContext {
-            copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
-        }
+        // Commit editor text and settle the write before the copy replaces the
+        // document id/url.
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
+        let copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
         editorState.resetScriptEditorStates()
         resetProjectFileTracking()
-        setEditorContextAfterFlush(sceneID: .some(copy?.scenes.sortedByOrder.first?.id))
+        setEditorContextAfterFlush(sceneID: .some(copy.scenes.sortedByOrder.first?.id))
     }
 
     func selectPreviousScene() {
@@ -711,7 +758,10 @@ final class AppState {
     func closeProject() -> Bool {
         guard hasOpenProject else { return true }
         guard !refuseProjectChangeWhileRecording() else { return false }
-        flushActiveEditorBoundary()
+        flushActiveEditorBoundary(saveImmediately: false)
+        // Autosave is asynchronous: settle it and write any newer edit before
+        // asking Save/Don't Save, so the prompt reflects the true dirty state.
+        settlePendingSaveForLifecycle()
         guard confirmCloseProjectIfNeeded() else { return false }
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
         if let url = projectStore.currentFileURL {
@@ -761,7 +811,8 @@ final class AppState {
     func deleteProject() {
         guard hasOpenProject else { return }
         guard !refuseProjectChangeWhileRecording() else { return }
-        flushActiveEditorBoundary()
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
         if projectStore.needsCloseConfirmation {
             // Delete discards the open project, so unsaved edits need the same
             // Save / Don't Save / Cancel decision as closing it, even when the
@@ -814,7 +865,8 @@ final class AppState {
 
     private func prepareForProjectReplacement() -> Bool {
         guard !refuseProjectChangeWhileRecording() else { return false }
-        flushActiveEditorBoundary()
+        flushActiveEditorBoundary(saveImmediately: false)
+        settlePendingSaveForLifecycle()
         guard !hasOpenProject || confirmCloseProjectIfNeeded() else { return false }
         return true
     }
@@ -1666,7 +1718,7 @@ final class AppState {
         )
     }
 
-    func performAutosave() {
+    func performAutosave(synchronous: Bool = false) {
         guard !isTerminatingApplication, !isConfirmingTermination,
               settings.generalPreferences.autosaveEnabled,
               !projectStore.isBuiltInDemo,
@@ -1674,10 +1726,18 @@ final class AppState {
               projectStore.hasUnsavedFileChanges else {
             return
         }
+        // A write that is already running carries the edits up to its snapshot.
+        // Starting a second one would queue behind it; the next edit or the next
+        // interval starts a new save with the newer text.
+        guard !projectStore.hasPendingBackgroundWrite else { return }
         switch prepareProjectFileForWrite(honoringDeclinedConflict: true, reportsMissingFile: false) {
         case .proceed:
             break
         case .handled, .declined, .failed:
+            return
+        }
+        if projectStore.canSaveInBackground, !synchronous {
+            startBackgroundAutosave(at: url)
             return
         }
         do {
@@ -1689,6 +1749,50 @@ final class AppState {
         } catch {
             Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             errorCenter.presentAutosave(AppError.project(error, fileURL: projectStore.currentFileURL, operation: .autosave))
+        }
+    }
+
+    /// Snapshot and write off the main actor. The write is atomic and serialized
+    /// with every other write; `completeBackgroundSave` keeps the project dirty
+    /// when an edit landed while the bytes were being written.
+    private func startBackgroundAutosave(at url: URL) {
+        let didAccess = securityScope.start(url)
+        let pending: ProjectStore.BackgroundSave
+        do {
+            pending = try projectStore.startBackgroundSave(wordsPerMinute: currentDurationWordsPerMinute)
+        } catch {
+            if didAccess {
+                securityScope.stop(url)
+            }
+            Self.projectFilesLogger.error("Operation autosave start failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+            errorCenter.presentAutosave(AppError.project(error, fileURL: url, operation: .autosave))
+            return
+        }
+        Task { @MainActor [weak self] in
+            let result = await pending.task.result
+            if didAccess {
+                self?.securityScope.stop(url)
+            }
+            guard let self else { return }
+            // A manual save or a new document consumed this write: its bytes
+            // are already replaced on disk. Do not clobber the baseline or
+            // report a stale error for it.
+            guard self.projectStore.completeBackgroundSave(pending, result: result) else {
+                return
+            }
+            switch result {
+            case .success:
+                self.recordProjectFileSnapshotAfterSave(at: url)
+                self.errorCenter.clearAutosaveFailureSuppression()
+                if self.projectStore.hasUnsavedFileChanges {
+                    self.scheduleAutosaveIfNeeded()
+                }
+            case .failure(let error):
+                Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
+                self.errorCenter.presentAutosave(
+                    AppError.project(error, fileURL: url, operation: .autosave)
+                )
+            }
         }
     }
 
@@ -1727,7 +1831,10 @@ final class AppState {
     /// separate from the notification plumbing so it is directly testable.
     func flushForApplicationResignation() {
         guard !isTerminatingApplication, !isConfirmingTermination else { return }
-        flushActiveEditorBoundary(allEditors: true)
+        flushActiveEditorBoundary(saveImmediately: false, allEditors: true)
+        // Base wrote synchronously here. Settle the in-flight write and then
+        // write any newer edit so losing focus never strands unsaved text.
+        settlePendingSaveForLifecycle()
     }
 
     /// Runs the same Save / Don't Save / Cancel decision as closing a project.
@@ -1738,6 +1845,9 @@ final class AppState {
         // The autosave task must not win a race against the modal decision.
         autosaveTask?.cancel()
         autosaveTask = nil
+        // "Don't Save" used to kill a write that was still running. Settle it
+        // before the decision; the dirty flag then reflects reality.
+        syncPendingBackgroundSave()
 
         isConfirmingTermination = true
         let shouldTerminate = confirmCloseProjectIfNeeded()
@@ -1773,7 +1883,8 @@ final class AppState {
 
     func flushForWindowClose() {
         guard !isTerminatingApplication, !isConfirmingTermination else { return }
-        flushActiveEditorBoundary(allEditors: true)
+        flushActiveEditorBoundary(saveImmediately: false, allEditors: true)
+        settlePendingSaveForLifecycle()
     }
 
     private func presentAutomaticRecentRemovalNotice(count: Int) {
@@ -2084,6 +2195,10 @@ final class ProjectStore {
         case missingFileURL
     }
 
+    enum ProjectFileBackgroundSaveError: Error {
+        case unavailable
+    }
+
     private var isConfigured = false
     private(set) var project: FrameProject
     private(set) var hasOpenProject = false
@@ -2099,6 +2214,27 @@ final class ProjectStore {
     /// Text hash per scene at the last full segmentation. Unchanged scenes keep
     /// their segments, so a save does not re-split the whole script.
     private var segmentedTextHashes: [UUID: String] = [:]
+    /// Scenes whose stored duration must be recomputed on the next duration
+    /// pass. Typing a character dirties one scene, not the whole project.
+    private var durationDirtySceneIDs: Set<UUID> = []
+    /// Bumped on every document mutation. A background save only clears the
+    /// dirty flag when nothing changed after its snapshot.
+    private var contentRevision = 0
+    /// Last background write, used to serialize writes and to let close/quit
+    /// wait for a pending save. The whole descriptor is kept so a consumed
+    /// write can apply its own revision logic exactly once.
+    private var pendingBackgroundSave: BackgroundSave?
+    /// Bumped whenever the open document is replaced or reloaded. A completion
+    /// from a previous document must never touch the new one.
+    private var documentGeneration = 0
+    /// True while bytes written off the main actor are not reflected in the
+    /// external-change baseline yet.
+    var hasPendingBackgroundWrite: Bool { pendingBackgroundSave != nil }
+    private var textRevisions: [UUID: Int] = [:]
+    private var textHashCache: [UUID: (revision: Int, hash: String)] = [:]
+    /// Configuration used by the last duration pass. A settings change without
+    /// a text edit still forces one full pass, exactly like the old save path.
+    private var lastDurationConfiguration: DurationConfiguration?
     private let projectWriter: ((FrameProject, URL) throws -> Void)?
     /// Resolves the markup-aware duration configuration for a scene. Set by
     /// `AppState`; a closure keeps this store independent from settings.
@@ -2112,7 +2248,7 @@ final class ProjectStore {
     ) {
         self.project = project
         self.projectWriter = projectWriter
-        recalculateDurations(wordsPerMinute: AppSettings.defaults.editorPreferences.wordsPerMinute)
+        recalculateAllDurations(wordsPerMinute: AppSettings.defaults.editorPreferences.wordsPerMinute)
     }
 
     func setSegmentSplitMode(_ splitMode: SegmentType) {
@@ -2121,10 +2257,37 @@ final class ProjectStore {
 
     func configure(wordsPerMinute: Int) {
         isConfigured = true
-        recalculateDurations(wordsPerMinute: wordsPerMinute)
+        recalculateAllDurations(wordsPerMinute: wordsPerMinute)
     }
 
     var isBuiltInDemo: Bool { origin == .builtInDemo }
+
+    /// The injected writer seam is synchronous by contract (tests, diagnostics
+    /// and the CLI rely on the bytes being on disk when the call returns).
+    /// Production has no writer and can encode/write off the main actor.
+    var canSaveInBackground: Bool { projectWriter == nil }
+
+    /// Cached SHA-256 of a scene's script text. Scenes without takes never ask
+    /// for it; scenes with takes asked for it on every keystroke before.
+    func textHash(for scene: Scene) -> String {
+        let revision = textRevisions[scene.id, default: 0]
+        if let cached = textHashCache[scene.id], cached.revision == revision {
+            return cached.hash
+        }
+        let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        textHashCache[scene.id] = (revision, hash)
+        return hash
+    }
+
+    private func bumpTextRevision(for sceneID: UUID) {
+        textRevisions[sceneID, default: 0] &+= 1
+    }
+
+    private func resetTextCaches() {
+        textRevisions.removeAll()
+        textHashCache.removeAll()
+        segmentedTextHashes.removeAll()
+    }
 
     func openProject(
         _ project: FrameProject,
@@ -2139,10 +2302,18 @@ final class ProjectStore {
         self.origin = origin
         hasOpenProject = true
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        documentGeneration &+= 1
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
         if recalculateDurations {
-            self.recalculateDurations(wordsPerMinute: wordsPerMinute)
+            recalculateAllDurations(wordsPerMinute: wordsPerMinute)
+        } else {
+            // One pass is still required on open: the stored estimates may come
+            // from a different pace, an older estimator or a hand edit. The
+            // regression fixed here was doing that pass twice.
+            durationDirtySceneIDs = Set(project.scenes.map(\.id))
         }
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
@@ -2156,7 +2327,10 @@ final class ProjectStore {
         origin = .normal
         project = SampleData.defaultProject
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        documentGeneration &+= 1
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
     }
 
@@ -2175,7 +2349,37 @@ final class ProjectStore {
         try saveCurrentProject(to: currentFileURL, wordsPerMinute: wordsPerMinute)
     }
 
+    /// Result of a write that runs off the main actor.
+    struct BackgroundSave: Sendable {
+        let id: UUID
+        let url: URL
+        let projectID: UUID
+        let documentGeneration: Int
+        let revision: Int
+        let task: Task<Data, Error>
+    }
+
+    private final class BackgroundWriteBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Result<Data, Error>?
+
+        func store(_ result: Result<Data, Error>) {
+            lock.lock()
+            stored = result
+            lock.unlock()
+        }
+
+        func read() -> Result<Data, Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
+        }
+    }
+
     func saveCurrentProject(to url: URL, wordsPerMinute: Int) throws {
+        // A pending background write must land before this one so an older
+        // snapshot can never overwrite the newer bytes.
+        waitForBackgroundWrite()
         prepareForSave(wordsPerMinute: wordsPerMinute)
         if currentFileURL != url {
             // Save As: the destination may belong to another project. Back it up
@@ -2196,8 +2400,7 @@ final class ProjectStore {
             }
         } catch {
             lastSavedFileData = nil
-            hasUnsavedFileChanges = true
-            saveState = .edited
+            markDirtyWithoutTimestamp()
             throw error
         }
         currentFileURL = url
@@ -2206,15 +2409,132 @@ final class ProjectStore {
         saveState = .saved
     }
 
+    /// Snapshots the model on the main actor, then encodes and writes it on a
+    /// detached task. The next save chains after this one, so writes to the same
+    /// URL can never complete out of order.
+    func startBackgroundSave(wordsPerMinute: Int) throws -> BackgroundSave {
+        guard projectWriter == nil else {
+            throw ProjectFileBackgroundSaveError.unavailable
+        }
+        guard let url = currentFileURL else { throw ProjectFileError.missingFileURL }
+        prepareForSave(wordsPerMinute: wordsPerMinute)
+        BackupsCenter.backUpBeforeOverwrite(project: project, fileURL: url)
+        let document = FrameScriptDocument(project: project)
+        let projectID = project.id
+        let generation = documentGeneration
+        let revision = contentRevision
+        let previous = pendingBackgroundSave?.task
+        saveState = .autosaving
+        let task = Task.detached(priority: .userInitiated) {
+            if let previous {
+                _ = try? await previous.value
+            }
+            let data = try FrameScriptDocumentCodec.encode(document)
+            try FrameScriptDocumentCodec.writeEncoded(data, to: url)
+            return data
+        }
+        let save = BackgroundSave(
+            id: UUID(),
+            url: url,
+            projectID: projectID,
+            documentGeneration: generation,
+            revision: revision,
+            task: task
+        )
+        pendingBackgroundSave = save
+        return save
+    }
+
+    /// Applies a completed background write and reports whether it still
+    /// described the open document. A late completion of a write that was
+    /// already consumed by a manual save (or belongs to a previous document)
+    /// returns `false` and must not touch state, the baseline or error UI.
+    ///
+    /// An edit that landed while the write was running keeps the project dirty
+    /// instead of being marked saved.
+    @discardableResult
+    func completeBackgroundSave(_ save: BackgroundSave, result: Result<Data, Error>) -> Bool {
+        guard pendingBackgroundSave?.id == save.id else { return false }
+        pendingBackgroundSave = nil
+        guard project.id == save.projectID,
+              currentFileURL == save.url,
+              documentGeneration == save.documentGeneration else {
+            return false
+        }
+        switch result {
+        case .success(let data):
+            lastSavedFileData = data
+            if contentRevision == save.revision {
+                hasUnsavedFileChanges = false
+                saveState = .saved
+            } else {
+                markDirtyWithoutTimestamp()
+            }
+        case .failure:
+            lastSavedFileData = nil
+            markDirtyWithoutTimestamp()
+        }
+        return true
+    }
+
+    /// Result of waiting for an in-flight background write.
+    enum BackgroundWriteDrain {
+        /// There was nothing to wait for.
+        case none
+        /// The write finished and described the current document. Its revision
+        /// logic has already been applied.
+        case applied(Result<Data, Error>)
+        /// The write belonged to a replaced/reloaded document and was ignored.
+        case stale
+    }
+
+    /// Blocks until the last background write finished, applies its revision
+    /// logic and reports what happened. Used by the synchronous save paths and
+    /// by close/open/quit/revert, which must not race a write.
+    @discardableResult
+    func waitForBackgroundWrite() -> BackgroundWriteDrain {
+        guard let save = pendingBackgroundSave else { return .none }
+        pendingBackgroundSave = nil
+        let box = BackgroundWriteBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached(priority: .userInitiated) {
+            box.store(await save.task.result)
+            semaphore.signal()
+        }
+        semaphore.wait()
+        guard let result = box.read() else { return .none }
+        guard project.id == save.projectID,
+              currentFileURL == save.url,
+              documentGeneration == save.documentGeneration else {
+            return .stale
+        }
+        switch result {
+        case .success(let data):
+            lastSavedFileData = data
+            if contentRevision == save.revision {
+                hasUnsavedFileChanges = false
+                saveState = .saved
+            } else {
+                markDirtyWithoutTimestamp()
+            }
+        case .failure:
+            lastSavedFileData = nil
+            markDirtyWithoutTimestamp()
+        }
+        return .applied(result)
+    }
+
     func duplicateProject(copySuffix: String) -> FrameProject {
         let copy = project.copied(title: "\(project.title) \(copySuffix)")
         project = copy
         currentFileURL = nil
         hasOpenProject = true
-        hasUnsavedFileChanges = true
-        saveState = .edited
+        markDirtyWithoutTimestamp()
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        documentGeneration &+= 1
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
         return copy
     }
@@ -2226,7 +2546,10 @@ final class ProjectStore {
         hasUnsavedFileChanges = false
         saveState = .saved
         lastSavedFileData = nil
-        segmentedTextHashes.removeAll()
+        documentGeneration &+= 1
+        resetTextCaches()
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
     }
 
@@ -2291,6 +2614,9 @@ final class ProjectStore {
         }
         project.scenes.remove(at: storageIndex)
         segmentedTextHashes[scene.id] = nil
+        textRevisions[scene.id] = nil
+        textHashCache[scene.id] = nil
+        durationDirtySceneIDs.remove(scene.id)
         EditorMarkupSessionCaches.removeScene(scene.id)
         normalizeSceneOrder()
         markProjectDirty()
@@ -2311,20 +2637,48 @@ final class ProjectStore {
 
     func markProjectDirty() {
         project.updatedAt = Date()
+        markDirtyWithoutTimestamp()
+    }
+
+    /// Every "the document changed" path funnels through here so
+    /// `contentRevision` always covers the change. A background save captures
+    /// this revision and only clears the dirty flag when it still matches.
+    private func markDirtyWithoutTimestamp() {
+        contentRevision &+= 1
         hasUnsavedFileChanges = true
         saveState = .edited
+    }
+
+    /// Marks every scene for one duration pass. Used when the resolved pace can
+    /// differ from the stored estimates without any text edit.
+    func markAllDurationsDirty() {
+        durationDirtySceneIDs = Set(project.scenes.map(\.id))
+    }
+
+    /// Records that a caller just recomputed every estimate with this
+    /// configuration, so the next save does not repeat the pass.
+    func adoptDurationConfiguration(_ configuration: DurationConfiguration) {
+        lastDurationConfiguration = configuration
+        durationDirtySceneIDs.removeAll()
     }
 
     func commitScriptText(_ text: String, sceneID: UUID, previousText: String? = nil) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         let oldText = previousText ?? scene.scriptText
+        let changed = scene.scriptText != text
         scene.scriptText = text
+        if changed {
+            bumpTextRevision(for: sceneID)
+            durationDirtySceneIDs.insert(sceneID)
+            contentRevision &+= 1
+        }
         refreshProductionAnchors(in: scene, previousText: oldText)
     }
 
     func updateCurrentSceneMetrics(sceneID: UUID, wordsPerMinute: Int) {
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        durationDirtySceneIDs.remove(sceneID)
     }
 
     private func prepareForSave(wordsPerMinute: Int) {
@@ -2334,10 +2688,11 @@ final class ProjectStore {
     }
 
     func synchronizeTextSegments(splitMode: SegmentType, wordsPerMinute: Int, markUnsaved: Bool = true) {
+        refreshDurationsIfConfigurationChanged(wordsPerMinute: wordsPerMinute)
         let splitModeChanged = segmentSplitMode != splitMode
         segmentSplitMode = splitMode
         for scene in project.scenes {
-            let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+            let hash = textHash(for: scene)
             guard splitModeChanged || segmentedTextHashes[scene.id] != hash else { continue }
             synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
             segmentedTextHashes[scene.id] = hash
@@ -2345,8 +2700,7 @@ final class ProjectStore {
         recalculateDurations(wordsPerMinute: wordsPerMinute)
         project.updatedAt = Date()
         if markUnsaved {
-            hasUnsavedFileChanges = true
-            saveState = .edited
+            markDirtyWithoutTimestamp()
         }
     }
 
@@ -2354,15 +2708,14 @@ final class ProjectStore {
         segmentSplitMode = splitMode
         guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
         synchronizeTextSegments(for: scene, splitMode: splitMode, wordsPerMinute: wordsPerMinute)
-        segmentedTextHashes[sceneID] = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        segmentedTextHashes[sceneID] = textHash(for: scene)
         // The scene-level estimate is owned by `SceneMetricsDebouncer`: one
         // off-main parse per settled edit. Recomputing it here would parse the
         // same script a second time on the main actor, just before the debounced
         // pass lands. Saves, restores and exports still refresh it synchronously.
         project.updatedAt = Date()
         if markUnsaved {
-            hasUnsavedFileChanges = true
-            saveState = .edited
+            markDirtyWithoutTimestamp()
         }
     }
 
@@ -2397,11 +2750,16 @@ final class ProjectStore {
     }
 
     private func refreshProductionAnchors(in scene: Scene, previousText: String? = nil) {
+        let edit = previousText.map {
+            TextAnchorRepair.contiguousEdit(from: $0, to: scene.scriptText)
+        }
         for item in scene.bRollItems {
             guard item.textAnchor != nil else { continue }
-            let repaired = previousText == nil
-                ? TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
-                : TextAnchorRepair.repair(item.textAnchor, from: previousText!, to: scene.scriptText)
+            let repaired = if let previousText, let edit {
+                TextAnchorRepair.repair(item.textAnchor, from: previousText, to: scene.scriptText, edit: edit)
+            } else {
+                TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
+            }
             guard let repaired else {
                 item.textAnchor = nil
                 item.linkedSegmentID = nil
@@ -2411,9 +2769,11 @@ final class ProjectStore {
         }
         for item in scene.editingItems {
             guard item.textAnchor != nil else { continue }
-            let repaired = previousText == nil
-                ? TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
-                : TextAnchorRepair.repair(item.textAnchor, from: previousText!, to: scene.scriptText)
+            let repaired = if let previousText, let edit {
+                TextAnchorRepair.repair(item.textAnchor, from: previousText, to: scene.scriptText, edit: edit)
+            } else {
+                TextAnchorRepair.repair(item.textAnchor, in: scene.scriptText)
+            }
             guard let repaired else {
                 item.textAnchor = nil
                 item.linkedSegmentID = nil
@@ -2490,11 +2850,47 @@ final class ProjectStore {
 
 
     private func recalculateDurations(wordsPerMinute: Int) {
+        guard !durationDirtySceneIDs.isEmpty else { return }
+        for scene in project.scenes where durationDirtySceneIDs.contains(scene.id) {
+            scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
+        }
+        durationDirtySceneIDs.removeAll()
+    }
+
+    private func recalculateAllDurations(wordsPerMinute: Int) {
         for scene in project.scenes {
             scene.estimatedDuration = estimatedDuration(for: scene, fallbackWordsPerMinute: wordsPerMinute)
         }
+        durationDirtySceneIDs.removeAll()
+        lastDurationConfiguration = currentDurationConfiguration(wordsPerMinute: wordsPerMinute)
     }
 
+    /// A provider or a settings change can imply a different pace without any
+    /// text edit. Detecting it here keeps stored estimates in sync with the
+    /// current configuration, which is what the old every-save pass did.
+    private func refreshDurationsIfConfigurationChanged(wordsPerMinute: Int) {
+        guard !project.scenes.isEmpty else { return }
+        let configuration = currentDurationConfiguration(wordsPerMinute: wordsPerMinute)
+        guard let lastConfiguration = lastDurationConfiguration else {
+            lastDurationConfiguration = configuration
+            return
+        }
+        guard configuration != lastConfiguration else { return }
+        lastDurationConfiguration = configuration
+        durationDirtySceneIDs = Set(project.scenes.map(\.id))
+    }
+
+    private func currentDurationConfiguration(wordsPerMinute: Int) -> DurationConfiguration {
+        if let durationConfigurationProvider,
+           let scene = project.scenes.first {
+            return durationConfigurationProvider(scene)
+        }
+        return DurationConfiguration(wordsPerMinute: Double(wordsPerMinute))
+    }
+
+    /// A stored estimate is trusted on open (the app used to parse the whole
+    /// project twice to rebuild it). Only files with a missing or impossible
+    /// value pay for a pass.
     private func normalizeSceneOrder() {
         for (index, scene) in project.scenes.sortedByOrder.enumerated() {
             scene.order = index
@@ -2635,6 +3031,24 @@ enum TextAnchorRepair {
         FrameScriptDocument.TextAnchorRepair
             .repair(coreAnchor(anchor), from: previousText, to: text)
             .map(appAnchor)
+    }
+
+    static func repair(
+        _ anchor: TextAnchor?,
+        from previousText: String,
+        to text: String,
+        edit: FrameScriptDocument.TextAnchorRepair.ContiguousEdit
+    ) -> TextAnchor? {
+        FrameScriptDocument.TextAnchorRepair
+            .repair(coreAnchor(anchor), from: previousText, to: text, edit: edit)
+            .map(appAnchor)
+    }
+
+    static func contiguousEdit(
+        from previousText: String,
+        to text: String
+    ) -> FrameScriptDocument.TextAnchorRepair.ContiguousEdit {
+        FrameScriptDocument.TextAnchorRepair.contiguousEdit(from: previousText, to: text)
     }
 
     static func current(_ anchor: TextAnchor?, in text: String) -> TextAnchor? {
