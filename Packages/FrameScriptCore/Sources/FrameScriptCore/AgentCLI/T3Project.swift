@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 public struct T3Project: Sendable, Equatable, Codable {
     public var id: String?
@@ -78,6 +79,10 @@ public struct T3ProjectResolver: Sendable {
 
     /// Resolves the configured project, optionally creating it when a folder is
     /// configured and the project does not exist yet.
+    ///
+    /// `t3 project add` fails with "already exists" when the folder is already a
+    /// project, so that error is recovered by resolving instead of surfacing an
+    /// unrecoverable failure.
     public func resolveOrCreate(
         _ reference: T3ProjectReference,
         createIfMissing: Bool = false
@@ -88,7 +93,11 @@ public struct T3ProjectResolver: Sendable {
             guard createIfMissing, let path = reference.path?.nilIfBlank else {
                 throw AgentCLIError.projectNotFound(reference.identifier ?? reference.name ?? "")
             }
-            return try await createProject(atPath: path, title: reference.name)
+            do {
+                return try await createProject(atPath: path, title: reference.name)
+            } catch AgentCLIError.projectAlreadyExists {
+                return try await resolve(reference)
+            }
         }
     }
 
@@ -233,6 +242,8 @@ public protocol T3AvailabilityChecking: Sendable {
 /// Cheap "is the T3 server there?" probe. `t3 status --json` explicitly does
 /// not test connections, so this lists the project's threads instead.
 public struct T3ServerProbe: T3AvailabilityChecking {
+    private static let logger = Logger(subsystem: "com.drashko.FrameScript", category: "AgentCLI")
+
     public var executable: URL
     public var project: T3ProjectReference
     public var timeout: TimeInterval
@@ -251,14 +262,31 @@ public struct T3ServerProbe: T3AvailabilityChecking {
     }
 
     public func isAvailable() async -> Bool {
-        guard let identifier = project.identifier else { return false }
+        guard let identifier = project.identifier else {
+            Self.logger.debug("T3 probe skipped: no project identifier configured.")
+            return false
+        }
         let request = AgentProcessRequest(
             executableURL: executable,
             arguments: ["thread", "list", "--project", identifier, "--json"],
             timeout: timeout,
             outputByteLimit: 65_536
         )
-        guard let output = try? await launcher.launch(request) else { return false }
-        return output.exitCode == 0
+        do {
+            let output = try await launcher.launch(request)
+            guard output.exitCode == 0 else {
+                // Why the probe failed matters when the router falls back to
+                // another CLI: without this the user only sees a different
+                // provider in the activity pill.
+                Self.logger.debug(
+                    "T3 probe failed. Exit: \(output.exitCode, privacy: .public) stderr: \(output.standardErrorSummary, privacy: .private)"
+                )
+                return false
+            }
+            return true
+        } catch {
+            Self.logger.debug("T3 probe could not run: \(String(describing: error), privacy: .private)")
+            return false
+        }
     }
 }

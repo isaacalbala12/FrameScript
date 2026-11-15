@@ -242,13 +242,16 @@ public struct SystemAgentProcessLauncher: AgentProcessLaunching {
                     let requestDeadline = startedAt.addingTimeInterval(timeout)
                     drainDeadline = min(drainDeadline, requestDeadline)
                 }
+                // A child that exits exactly at the deadline leaves a zero (or
+                // negative) budget, which would snapshot an empty stream. Keep a
+                // small floor so the final bytes are still read.
                 let capturedStdout = await Self.capture(
                     stdout,
-                    boundedBy: max(0, drainDeadline.timeIntervalSinceNow)
+                    boundedBy: Self.drainBudget(for: drainDeadline)
                 )
                 let capturedStderr = await Self.capture(
                     stderr,
-                    boundedBy: max(0, drainDeadline.timeIntervalSinceNow)
+                    boundedBy: Self.drainBudget(for: drainDeadline)
                 )
                 if Task.isCancelled {
                     controller.terminate()
@@ -315,7 +318,14 @@ public struct SystemAgentProcessLauncher: AgentProcessLaunching {
         // POSIX_SPAWN_SETPGROUP with pgroup 0 makes the child a new process
         // group leader whose pgid is its pid. kill(-pid) then reaches every
         // descendant that did not create its own session.
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        //
+        // POSIX_SPAWN_CLOEXEC_DEFAULT closes every descriptor the child did not
+        // receive through a file action, so an AI CLI can never inherit (and
+        // inspect) the app's project-file watch descriptor or any future fd.
+        posix_spawnattr_setflags(
+            &attributes,
+            Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+        )
         guard posix_spawnattr_setpgroup(&attributes, 0) == 0 else {
             throw AgentCLIError.launchFailed("Could not create a process group for the child.")
         }
@@ -383,6 +393,15 @@ public struct SystemAgentProcessLauncher: AgentProcessLaunching {
     }
 
     // MARK: - Deadlines
+
+    /// Minimum time a normal exit still spends draining its pipes. A child that
+    /// exits exactly at the request deadline used to get a zero budget, so its
+    /// last bytes were discarded.
+    static let minimumDrainBudget: TimeInterval = 0.25
+
+    static func drainBudget(for deadline: Date, now: Date = Date()) -> TimeInterval {
+        max(minimumDrainBudget, deadline.timeIntervalSince(now))
+    }
 
     private static func startTimeout(
         _ timeout: TimeInterval?,

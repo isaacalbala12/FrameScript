@@ -13,10 +13,16 @@ extension AppState {
     }
 
     var hookWordsPerMinute: Double {
-        HookContextBuilder.wordsPerMinute(
-            project: project,
-            configured: settings.editorPreferences.wordsPerMinute
-        )
+        HookContextBuilder.wordsPerMinute(project: project, settings: settings)
+    }
+
+    /// Subscription-backed providers authenticate through their local CLI and
+    /// have no Keychain key; asking for one made every hook fail with
+    /// "Add the provider API key in Settings".
+    private func hookAPIKey(for provider: AIProviderKind) throws -> String {
+        guard provider != .disabled else { return "" }
+        guard !provider.isSubscriptionBacked else { return "" }
+        return try providerAPIKey(for: provider)
     }
 
     // MARK: - Generation
@@ -27,7 +33,7 @@ extension AppState {
         }
         let provider = settings.aiPreferences.provider
         guard provider != .disabled else { throw HookServiceError.providerDisabled }
-        let apiKey = try providerAPIKey(for: provider)
+        let apiKey = try hookAPIKey(for: provider)
         let service = HookService(provider: dependencies.llmProvider)
         return try await service.generateHooks(
             scene: scene,
@@ -72,7 +78,7 @@ extension AppState {
 
         let provider = settings.aiPreferences.provider
         guard provider != .disabled else { throw HookServiceError.providerDisabled }
-        let apiKey = try providerAPIKey(for: provider)
+        let apiKey = try hookAPIKey(for: provider)
         let service = HookService(provider: dependencies.llmProvider)
         return try await service.generateRehooks(
             scene: scene,

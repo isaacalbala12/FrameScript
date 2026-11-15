@@ -677,13 +677,25 @@ enum HookFormat {
     static func seconds(_ value: TimeInterval, language: AppLanguage) -> String {
         String(
             format: L10n.tr("hooks.secondsFormat", language: language),
-            locale: Locale.current,
+            locale: locale(for: language),
             value
         )
     }
 
     static func words(_ count: Int, language: AppLanguage) -> String {
-        String(format: L10n.tr("hooks.words", language: language), count)
+        // Plural-aware: "1 palabra" / "2 palabras" / "5 слов" instead of one
+        // plural form for every count.
+        L10n.plural("hooks.words", count: count, language: language)
+    }
+
+    /// Decimal separator and unit language follow the app language, not the
+    /// macOS locale: a Spanish UI on an English Mac still shows "3,5 s".
+    static func locale(for language: AppLanguage) -> Locale {
+        switch L10n.resolve(language) {
+        case .spanish: Locale(identifier: "es_ES")
+        case .russian: Locale(identifier: "ru_RU")
+        default: Locale(identifier: "en_US")
+        }
     }
 }
 

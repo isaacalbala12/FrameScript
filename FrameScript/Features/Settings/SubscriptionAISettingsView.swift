@@ -7,12 +7,22 @@ import SwiftUI
 struct SubscriptionAISettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
-    @State private var store = SubscriptionAISettingsStore.shared
-    @State private var runtime = SubscriptionAIRuntime.shared
+    @State private var store: SubscriptionAISettingsStore
+    @State private var runtime: SubscriptionAIRuntime
     @State private var status = ""
     @State private var isTesting = false
     @State private var isCreatingProject = false
     @State private var showsCreateConfirmation = false
+
+    /// The store and runtime are injectable so a snapshot can render the
+    /// "unreadable settings" state without touching the real singleton.
+    init(
+        store: SubscriptionAISettingsStore = .shared,
+        runtime: SubscriptionAIRuntime = .shared
+    ) {
+        _store = State(initialValue: store)
+        _runtime = State(initialValue: runtime)
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -21,6 +31,26 @@ struct SubscriptionAISettingsView: View {
             store.reset()
             status = ""
         }) {
+            if store.didRecoverFromUnreadableSettings {
+                SettingsRow(appState.localized("settings.ai.subscription.recoveredTitle")) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(appState.localized("settings.ai.subscription.recoveredMessage"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(theme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 430, alignment: .trailing)
+                        Button(appState.localized("error.dismiss")) {
+                            store.acknowledgeUnreadableSettings()
+                        }
+                        .font(.system(size: 11))
+                        .buttonStyle(.borderless)
+                        .clickableCursor()
+                        .help(appState.localized("settings.ai.subscription.dismissHelp"))
+                        .accessibilityLabel(appState.localized("settings.ai.subscription.dismissHelp"))
+                    }
+                }
+            }
+
             SettingsRow(appState.localized("settings.ai.subscription.privacyTitle"), help: appState.localized("settings.ai.subscription.subtitle")) {
                 Text(appState.localized("settings.ai.subscription.privacy"))
                     .font(.system(size: 12))
@@ -105,7 +135,10 @@ struct SubscriptionAISettingsView: View {
 
             SettingsRow(appState.localized("settings.ai.subscription.timeout"), help: appState.localized("settings.ai.subscription.timeoutHelp")) {
                 Stepper(
-                    "\(Int(store.settings.defaultTimeout)) s",
+                    String(
+                        format: appState.localized("settings.ai.subscription.secondsFormat"),
+                        Int(store.settings.defaultTimeout)
+                    ),
                     value: $store.settings.defaultTimeout,
                     in: 30...900,
                     step: 15
@@ -155,7 +188,7 @@ struct SubscriptionAISettingsView: View {
                 Text(appState.localized("settings.ai.subscription.kind"))
                     .font(.system(size: 11))
                     .foregroundStyle(theme.secondaryText)
-                Picker("", selection: Binding(
+                Picker(appState.localized("settings.ai.subscription.kind"), selection: Binding(
                     get: { selection.wrappedValue.kind },
                     set: { newKind in
                         selection.wrappedValue = selection.wrappedValue.selecting(kind: newKind)
@@ -317,7 +350,12 @@ struct SubscriptionAISettingsView: View {
             }
             let resolver = try await SubscriptionAIToolchain.shared.t3ProjectResolver()
             let title = store.settings.t3Project.name ?? "FrameScript IA"
-            let project = try await resolver.createProject(atPath: path, title: title)
+            // A folder that is already a T3 project makes `project add` fail;
+            // resolve it instead of leaving the user stuck on "already exists".
+            let project = try await resolver.resolveOrCreate(
+                T3ProjectReference(path: path, name: title),
+                createIfMissing: true
+            )
             store.settings.t3Project = T3ProjectReference(
                 id: project.id,
                 path: project.path ?? path,

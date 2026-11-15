@@ -9,7 +9,12 @@ import FrameScriptCore
 @MainActor
 extension AppState {
     var subscriptionAIContext: SubscriptionAIContext {
-        guard hasOpenProject else { return .standalone() }
+        // The CLIs run in an empty scratch folder, never inside the project:
+        // a prompt injected through imported text must not find sibling files.
+        let workingDirectory = SubscriptionAIScratchDirectory.url()
+        guard hasOpenProject else {
+            return .standalone(workingDirectory: workingDirectory)
+        }
         let project = projectStore.project
         let settings = SubscriptionAISettingsStore.shared.settings
         let expectedProjectID = settings.t3ProjectIDForStorage
@@ -36,7 +41,7 @@ extension AppState {
         )
         return SubscriptionAIContext(
             projectTitle: project.title,
-            workingDirectory: projectStore.currentFileURL?.deletingLastPathComponent(),
+            workingDirectory: workingDirectory,
             threadMapping: mapping
         )
     }
@@ -92,10 +97,9 @@ extension AppState {
            map.t3ProjectID != expectedProjectID {
             return nil
         }
-        guard let threadID = map.threadIDsByProviderModel[storageKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadID.isEmpty else {
-            return nil
-        }
-        return threadID
+        guard let threadID = map.threadIDsByProviderModel[storageKey] else { return nil }
+        // The map comes from the project file, so treat the id as untrusted:
+        // an id starting with "-" would become a `t3` option.
+        return T3ThreadIdentifier.normalized(threadID)
     }
 }

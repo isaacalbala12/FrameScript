@@ -62,9 +62,18 @@ public struct AgentCLIRouter: Sendable {
         await selectRunner(for: nil)?.kind
     }
 
-    public func run(_ request: AgentCLIRequest) async throws -> AgentCLIResult {
+    /// `onResolved` receives the runner that will actually execute the request
+    /// before it starts, so the app can disclose a fallback instead of silently
+    /// sending the prompt to a CLI the user did not choose.
+    public func run(
+        _ request: AgentCLIRequest,
+        onResolved: (@MainActor @Sendable (AgentCLIKind) async -> Void)? = nil
+    ) async throws -> AgentCLIResult {
         guard let runner = await selectRunner(for: request) else {
             throw AgentCLIError.noProviderAvailable
+        }
+        if let onResolved {
+            await onResolved(runner.kind)
         }
 
         var adapted = request

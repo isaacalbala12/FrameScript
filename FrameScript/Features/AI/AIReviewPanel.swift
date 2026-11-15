@@ -18,6 +18,8 @@ struct AIReviewPanel: View {
                 }
                 .buttonStyle(.cursorPlain)
                 .foregroundStyle(theme.secondaryText)
+                .help(appState.localized("ai.review.closeHelp"))
+                .accessibilityLabel(appState.localized("ai.review.closeHelp"))
             }
             .padding(.horizontal, 16)
             .frame(height: 48)
@@ -53,9 +55,11 @@ struct AIReviewPanel: View {
                         analyzeCurrentScene()
                     }
                     .disabled(appState.aiState.isAnalyzing)
-                    .buttonStyle(.cursorPlain)
+                    // A bordered button reads as a control, not as a heading, and
+                    // shows the disabled state while a review is running.
+                    .buttonStyle(.bordered)
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(theme.primaryText)
+                    .help(appState.localized("ai.analyzeCurrentSceneHelp"))
                     .padding(.top, 4)
 
                     if appState.aiState.didFailMostRecentAnalysis {

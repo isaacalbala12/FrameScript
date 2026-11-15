@@ -29,20 +29,35 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        // Saving is the explicit replacement action. Recreate the item without
-        // preserving access-control attributes from older restricted entries.
-        let deleteStatus = SecItemDelete(query as CFDictionary)
-        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
-            logger.error("Keychain replacement delete failed. Status: \(deleteStatus, privacy: .private)")
-            throw KeychainError.unhandledStatus(deleteStatus)
-        }
-
+        let attributes: [String: Any] = [kSecValueData as String: data]
         var addAttributes = query
         addAttributes[kSecValueData as String] = data
-        let status = SecItemAdd(addAttributes as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            logger.error("Keychain write failed. Status: \(status, privacy: .private)")
-            throw KeychainError.unhandledStatus(status)
+
+        try write(
+            update: { SecItemUpdate(query as CFDictionary, attributes as CFDictionary) },
+            add: { SecItemAdd(addAttributes as CFDictionary, nil) }
+        )
+    }
+
+    /// Updates the existing item and only adds when it does not exist.
+    ///
+    /// The previous delete-then-add destroyed a working key when the add failed
+    /// (locked Keychain, denied ACL prompt, quota). Keeping the old item also
+    /// preserves its access-control attributes.
+    static func write(update: () -> OSStatus, add: () -> OSStatus) throws {
+        let updateStatus = update()
+        switch updateStatus {
+        case errSecSuccess:
+            return
+        case errSecItemNotFound:
+            let addStatus = add()
+            guard addStatus == errSecSuccess else {
+                logger.error("Keychain write failed. Status: \(addStatus, privacy: .private)")
+                throw KeychainError.unhandledStatus(addStatus)
+            }
+        default:
+            logger.error("Keychain update failed. Status: \(updateStatus, privacy: .private)")
+            throw KeychainError.unhandledStatus(updateStatus)
         }
     }
 

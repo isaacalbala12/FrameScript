@@ -245,3 +245,31 @@ extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+
+/// Validates a T3 thread id before it becomes a command-line operand.
+///
+/// The id is stored inside the project file, so a shared or crafted `.fscr`
+/// could otherwise inject `t3` options: `thread send --base-dir=/elsewhere -`
+/// would redirect the CLI's data directory. A valid id never starts with `-`
+/// and only uses the characters the CLI emits (UUIDs and the `mcp:` prefix).
+public enum T3ThreadIdentifier {
+    public static let maximumLength = 128
+
+    private static let allowedCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+    )
+
+    /// The trimmed id, or `nil` when it must not be passed to the CLI.
+    public static func normalized(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= maximumLength else { return nil }
+        guard !trimmed.hasPrefix("-") else { return nil }
+        guard trimmed.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }) else { return nil }
+        return trimmed
+    }
+
+    public static func isValid(_ raw: String?) -> Bool {
+        normalized(raw) != nil
+    }
+}
