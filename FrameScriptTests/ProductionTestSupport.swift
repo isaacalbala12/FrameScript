@@ -5,20 +5,22 @@ import XCTest
 
 /// Shared fixture and isolation rules for production tests.
 ///
-/// Every test gets its own `UserDefaults` suite; tear-down removes the domain
-/// and the on-disk plist so no `FrameScriptTests.*` leftovers remain.
+/// The suite comes from `TestDefaults.make()`, an absolute path inside the
+/// per-process temporary directory, so CFPreferences writes the plist next to
+/// the fixture instead of `~/Library/Preferences`. `cleanup()` removes the
+/// domain, the plist and the directory in `tearDown`.
 @MainActor
 class ProductionTestCase: XCTestCase {
-    private(set) var suiteName = ""
+    private var testDefaults: TestDefaults?
     private(set) var suite: UserDefaults!
     weak var lastAppState: AppState?
 
     override func setUp() {
         super.setUp()
-        ProductionTestBundleCleanup.register()
-        suiteName = "FrameScriptTests.Production.\(UUID().uuidString)"
-        suite = UserDefaults(suiteName: suiteName)
-        suite.removePersistentDomain(forName: suiteName)
+        TestBundleCleanup.register()
+        let made = TestDefaults.make()
+        testDefaults = made
+        suite = made.defaults
         ProductionPresentation.shared.resetForTesting()
         ProductionChecklistCenter.shared.clear()
     }
@@ -27,19 +29,9 @@ class ProductionTestCase: XCTestCase {
         ProductionPresentation.shared.resetForTesting()
         ProductionChecklistCenter.shared.clear()
         XCTAssertNil(lastAppState, "AppState was retained after the test")
-        if !suiteName.isEmpty {
-            let name = suiteName
-            suite?.removePersistentDomain(forName: name)
-            suite?.synchronize()
-            CFPreferencesAppSynchronize(name as CFString)
-            let plist = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Preferences/\(name).plist")
-            try? FileManager.default.removeItem(at: plist)
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            try? FileManager.default.removeItem(at: plist)
-        }
+        testDefaults?.cleanup()
+        testDefaults = nil
         suite = nil
-        suiteName = ""
         super.tearDown()
     }
 
@@ -165,57 +157,6 @@ class ProductionTestCase: XCTestCase {
             checklistTasks: [pendingTask, doneTask],
             claims: [claim]
         )
-    }
-}
-
-/// Last-chance sweep after the whole test bundle. cfprefsd can flush an empty
-/// domain after an individual tearDown, so the bundle observer removes any
-/// production suites that survived until the end of the run.
-final class ProductionTestBundleCleanup: NSObject, XCTestObservation, @unchecked Sendable {
-    private static let shared = ProductionTestBundleCleanup()
-    nonisolated(unsafe) private static var didRegister = false
-    private static let prefix = "FrameScriptTests.Production."
-
-    static func register() {
-        guard !didRegister else { return }
-        didRegister = true
-        XCTestObservationCenter.shared.addTestObserver(shared)
-    }
-
-    func testBundleDidFinish(_ testBundle: Bundle) {
-        let fileManager = FileManager.default
-        let preferences = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences", isDirectory: true)
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: preferences,
-            includingPropertiesForKeys: nil
-        ) else { return }
-
-        for file in files
-        where file.lastPathComponent.hasPrefix(Self.prefix) && file.pathExtension == "plist" {
-            let name = file.deletingPathExtension().lastPathComponent
-            UserDefaults(suiteName: name)?.removePersistentDomain(forName: name)
-            CFPreferencesAppSynchronize(name as CFString)
-            try? fileManager.removeItem(at: file)
-        }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        for file in (try? fileManager.contentsOfDirectory(at: preferences, includingPropertiesForKeys: nil)) ?? []
-        where file.lastPathComponent.hasPrefix(Self.prefix) && file.pathExtension == "plist" {
-            try? fileManager.removeItem(at: file)
-        }
-
-        // cfprefsd can flush an empty domain after the test host exits, which
-        // recreates a 42-byte plist. A detached one-shot cleanup runs after
-        // the host is gone and removes only this feature's suites.
-        let cleanup = Process()
-        cleanup.executableURL = URL(fileURLWithPath: "/bin/sh")
-        cleanup.arguments = [
-            "-c",
-            "sleep 2; rm -f \"$HOME\"/Library/Preferences/FrameScriptTests.Production.*.plist"
-        ]
-        cleanup.standardOutput = FileHandle.nullDevice
-        cleanup.standardError = FileHandle.nullDevice
-        try? cleanup.run()
     }
 }
 
