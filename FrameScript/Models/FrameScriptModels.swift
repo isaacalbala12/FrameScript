@@ -8,6 +8,7 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable {
     case editing = "Editing"
     case clips = "Clips"
     case timeline = "Timeline"
+    case avScript = "AV Script"
 
     var id: String { rawValue }
 

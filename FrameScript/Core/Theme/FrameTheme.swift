@@ -194,9 +194,9 @@ final class ResolvedThemeManager {
 
     private var appearanceObserver: DistributedAppearanceObserver?
 
-    init() {
-        systemColorScheme = Self.currentSystemColorScheme()
-        resolvedColorScheme = systemColorScheme
+    init(systemColorScheme: ColorScheme? = nil) {
+        self.systemColorScheme = systemColorScheme ?? Self.currentSystemColorScheme()
+        resolvedColorScheme = self.systemColorScheme
         appearanceObserver = DistributedAppearanceObserver { [weak self] in
             Task { @MainActor in
                 self?.refreshSystemAppearance()

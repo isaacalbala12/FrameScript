@@ -250,6 +250,10 @@ struct CommandPaletteView: View {
             appState.timelineZoomIn()
         case .timelineZoomOut:
             appState.timelineZoomOut()
+        case .avScriptMode:
+            appState.selectMode(.avScript)
+        case .exportAVScript:
+            appState.exportAVScript(format: .markdown)
         case .commandPalette:
             break
         case .toggleContentsPanel:

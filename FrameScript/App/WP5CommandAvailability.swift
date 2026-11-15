@@ -42,6 +42,7 @@ struct CommandAvailability: Equatable {
     var canSaveProject: Bool { hasOpenProject }
     var canSaveProjectAs: Bool { hasOpenProject }
     var canExportProject: Bool { hasOpenProject }
+    var canExportAVScript: Bool { hasOpenProject }
     var canRevertToSaved: Bool { hasOpenProject && hasSavedFile && !hasActiveTake }
 
     /// Set by `CommandAvailability(appState:)`; kept out of the initializer so
@@ -104,7 +105,7 @@ struct CommandAvailability: Equatable {
             canSaveProject
         case .saveAs:
             canSaveProjectAs
-        case .export, .exportEscaleta:
+        case .export, .exportEscaleta, .exportAVScript:
             canExportProject
         case .importEscaleta:
             canReplaceProject
@@ -120,7 +121,7 @@ struct CommandAvailability: Equatable {
             canMoveScene
         case .previousScene, .nextScene:
             canNavigateScenes
-        case .scriptMode, .visualsMode, .editingMode, .clipsMode, .timelineMode:
+        case .scriptMode, .visualsMode, .editingMode, .clipsMode, .timelineMode, .avScriptMode:
             canSwitchMode
         case .createClip:
             canCreateClip

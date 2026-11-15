@@ -219,6 +219,8 @@ struct AppShellView: View {
                 ClipsPanel()
             case .timeline:
                 TimelineWorkspaceView()
+            case .avScript:
+                AVScriptEditorView(scene: scene)
             }
         } else {
             EmptyProjectView()

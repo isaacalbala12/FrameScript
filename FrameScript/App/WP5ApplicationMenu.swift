@@ -34,6 +34,7 @@ enum ApplicationMenuSpec {
         .init(command: .export, menu: .file),
         .init(command: .importEscaleta, menu: .file),
         .init(command: .exportEscaleta, menu: .file),
+        .init(command: .exportAVScript, menu: .file),
         .init(command: .showBackups, menu: .file),
 
         .init(command: .scriptMode, menu: .view),
@@ -41,6 +42,7 @@ enum ApplicationMenuSpec {
         .init(command: .editingMode, menu: .view),
         .init(command: .clipsMode, menu: .view),
         .init(command: .timelineMode, menu: .view),
+        .init(command: .avScriptMode, menu: .view),
         .init(command: .createClip, menu: .view),
         .init(command: .timelineZoomIn, menu: .view),
         .init(command: .timelineZoomOut, menu: .view),

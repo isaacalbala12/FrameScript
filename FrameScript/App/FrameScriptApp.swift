@@ -191,6 +191,11 @@ struct FrameScriptProductionApp: App {
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportEscaleta))
             .disabled(!commands.canExportProject)
+            Button(appState.localized("menu.exportAVScript")) {
+                appState.exportAVScript(format: .markdown)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportAVScript))
+            .disabled(!commands.canExportAVScript)
         }
 
         CommandGroup(replacing: .appSettings) {
@@ -216,6 +221,9 @@ struct FrameScriptProductionApp: App {
                 .disabled(!commands.canSwitchMode)
             Toggle(appState.localized("mode.timeline"), isOn: modeBinding(.timeline))
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineMode))
+                .disabled(!commands.canSwitchMode)
+            Toggle(appState.localized("mode.avScript"), isOn: modeBinding(.avScript))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .avScriptMode))
                 .disabled(!commands.canSwitchMode)
             Button(appState.localized("clips.command.create")) { appState.createClipFromEditorSelection() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .createClip))

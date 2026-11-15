@@ -1133,7 +1133,7 @@ final class AppState {
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
-        case .script, .clips, .timeline: []
+        case .script, .clips, .timeline, .avScript: []
         }
         let anchorsByID = Dictionary(uniqueKeysWithValues: items)
         let selectedIDs = itemIDs.reduce(into: [UUID]()) { result, itemID in
@@ -1190,7 +1190,7 @@ final class AppState {
             scene.editingItems.enumerated().compactMap { index, item in
                 TextAnchorRepair.current(item.textAnchor, in: scene.scriptText).map { (item.id, $0, index) }
             }
-        case .script, .clips, .timeline:
+        case .script, .clips, .timeline, .avScript:
             []
         }
         let sorted = anchors.sorted {
@@ -1226,7 +1226,7 @@ final class AppState {
             editorState.selectedProductionItemIDs.lazy.compactMap { selectedID in
                 scene.editingItems.first(where: { $0.id == selectedID }).flatMap { TextAnchorRepair.current($0.textAnchor, in: scene.scriptText) }
             }.first
-        case .script, .clips, .timeline:
+        case .script, .clips, .timeline, .avScript:
             nil
         }
         return selectedAnchor ?? TextAnchorRepair.anchor(
