@@ -204,7 +204,91 @@ struct ResolvePackConfiguration: Equatable, Sendable {
     }
 }
 
+/// What the sheet's file checkboxes actually write, which can differ from the
+/// raw booleans when a chapter list cannot be used by YouTube.
+enum ResolvePackFileSelection {
+    static func chaptersWillBeWritten(
+        configuration: ResolvePackConfiguration,
+        plan: ResolvePackPlan?
+    ) -> Bool {
+        guard configuration.includeChapters else { return false }
+        guard let plan else { return true }
+        return plan.chapters.isValidForYouTube || configuration.writeInvalidChapters
+    }
+
+    static func selectedFileCount(
+        configuration: ResolvePackConfiguration,
+        plan: ResolvePackPlan?
+    ) -> Int {
+        var count = [
+            configuration.includeMarkerEDL,
+            configuration.includeFCPXML,
+            configuration.includeShotList,
+            configuration.includeEditingNotes,
+            configuration.includeChapters,
+            configuration.includeReadme
+        ].filter { $0 }.count
+        if configuration.includeChapters,
+           !chaptersWillBeWritten(configuration: configuration, plan: plan) {
+            count -= 1
+        }
+        return max(0, count)
+    }
+}
+
 // MARK: - Presentation
+
+/// Coalesces Resolve-plan rebuilds without ever letting Export write an older
+/// plan than the configuration on screen.
+///
+/// Option changes schedule a rebuild after a short delay (typing in the
+/// timecode field must not re-parse the script per keystroke). Export calls
+/// `flushForExport`, which cancels the pending task and rebuilds synchronously
+/// from the current configuration.
+@MainActor
+@Observable
+final class ResolvePackPlanRefreshController {
+    private(set) var plan: ResolvePackPlan?
+    private var refreshTask: Task<Void, Never>?
+
+    func cancel() {
+        refreshTask?.cancel()
+        refreshTask = nil
+    }
+
+    func refreshNow(
+        appState: AppState,
+        configuration: ResolvePackConfiguration
+    ) {
+        cancel()
+        plan = appState.makeResolvePackPlan(configuration: configuration)
+    }
+
+    func schedule(
+        appState: AppState,
+        configuration: ResolvePackConfiguration
+    ) {
+        cancel()
+        refreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            self.plan = appState.makeResolvePackPlan(configuration: configuration)
+            self.refreshTask = nil
+        }
+    }
+
+    /// Rebuilds synchronously and returns the plan Export must write.
+    @discardableResult
+    func flushForExport(
+        appState: AppState,
+        configuration: ResolvePackConfiguration
+    ) -> ResolvePackPlan? {
+        cancel()
+        let fresh = appState.makeResolvePackPlan(configuration: configuration)
+        plan = fresh
+        return fresh
+    }
+}
 
 struct ResolvePackRequest: Identifiable, Equatable, Sendable {
     let id = UUID()

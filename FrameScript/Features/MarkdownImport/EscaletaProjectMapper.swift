@@ -525,9 +525,31 @@ enum EscaletaProjectMapper {
     ) -> PublishingPack {
         guard let document else { return PublishingPack() }
 
-        let chapters = document.chapters.map { chapter in
+        // A scene can start only one chapter. Exact timestamp matches win over
+        // range matches, and a second chapter inside the same scene stays
+        // sceneless so it travels as an imported chapter instead of vanishing.
+        var claimedScenes = Set<UUID>()
+        var sceneIDs = Array<UUID?>(repeating: nil, count: document.chapters.count)
+        for (index, chapter) in document.chapters.enumerated() {
+            guard let sceneID = sceneIDsByStart[chapter.seconds],
+                  !claimedScenes.contains(sceneID) else { continue }
+            claimedScenes.insert(sceneID)
+            sceneIDs[index] = sceneID
+        }
+        for index in document.chapters.indices where sceneIDs[index] == nil {
+            let chapter = document.chapters[index]
+            guard let sceneID = sceneID(
+                for: chapter.seconds,
+                exact: [:],
+                ranges: sceneRanges
+            ), !claimedScenes.contains(sceneID) else { continue }
+            claimedScenes.insert(sceneID)
+            sceneIDs[index] = sceneID
+        }
+
+        let chapters = document.chapters.enumerated().map { index, chapter in
             ChapterOverride(
-                sceneID: sceneID(for: chapter.seconds, exact: sceneIDsByStart, ranges: sceneRanges),
+                sceneID: sceneIDs[index],
                 title: chapter.title,
                 startSeconds: TimeInterval(chapter.seconds)
             )

@@ -15,10 +15,13 @@ struct ResolvePackSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
     @State private var configuration: ResolvePackConfiguration
-    @State private var plan: ResolvePackPlan?
+    @State private var planController = ResolvePackPlanRefreshController()
     @State private var exportedFolder: URL?
     @State private var errorMessage: String?
-    @State private var refreshTask: Task<Void, Never>?
+
+    private var plan: ResolvePackPlan? {
+        planController.plan
+    }
 
     init(languageCode: String) {
         self.languageCode = languageCode
@@ -39,7 +42,7 @@ struct ResolvePackSheet: View {
                 : appState.settings.exportPreferences.defaultExportFolder,
             exportedFolder: exportedFolder,
             errorMessage: errorMessage,
-            onExport: { chooseFolderAndExport(plan) },
+            onExport: { exportCurrentPlan() },
             onClose: { dismiss() },
             onReveal: { folder in
                 NSWorkspace.shared.activateFileViewerSelecting([folder])
@@ -61,25 +64,28 @@ struct ResolvePackSheet: View {
             refreshPlan()
         }
         .onDisappear {
-            refreshTask?.cancel()
-            refreshTask = nil
+            planController.cancel()
         }
     }
 
     /// The plan depends on every option, but rebuilding it per keystroke in the
     /// timecode field made the sheet re-parse the whole script dozens of times.
-    /// A short coalescing delay keeps typing responsive (H-2).
+    /// A short coalescing delay keeps typing responsive (H-2); Export flushes
+    /// the controller synchronously so it never writes a stale plan.
     private func schedulePlanRefresh() {
-        refreshTask?.cancel()
-        refreshTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            refreshPlan()
-        }
+        planController.schedule(appState: appState, configuration: configuration)
     }
 
     private func refreshPlan() {
-        plan = appState.makeResolvePackPlan(configuration: configuration)
+        planController.refreshNow(appState: appState, configuration: configuration)
+    }
+
+    private func exportCurrentPlan() {
+        guard let fresh = planController.flushForExport(
+            appState: appState,
+            configuration: configuration
+        ) else { return }
+        chooseFolderAndExport(fresh)
     }
 
     private func chooseFolderAndExport(_ plan: ResolvePackPlan?) {
@@ -141,14 +147,10 @@ struct ResolvePackSheetContent: View {
     }
 
     private var selectedFileCount: Int {
-        [
-            configuration.includeMarkerEDL,
-            configuration.includeFCPXML,
-            configuration.includeShotList,
-            configuration.includeEditingNotes,
-            configuration.includeChapters,
-            configuration.includeReadme
-        ].filter { $0 }.count
+        ResolvePackFileSelection.selectedFileCount(
+            configuration: configuration,
+            plan: plan
+        )
     }
 
     var body: some View {
@@ -425,11 +427,7 @@ struct ResolvePackSheetContent: View {
                 fileName: names.editingNotes,
                 isOn: $configuration.includeEditingNotes
             )
-            fileToggle(
-                key: "resolvePack.file.chapters",
-                fileName: names.chapters,
-                isOn: $configuration.includeChapters
-            )
+            chapterFileToggle
             if configuration.includeChapters, plan?.chapters.isValidForYouTube == false {
                 Text(t("resolvePack.chapters.invalid"))
                     .font(.system(size: 10))
@@ -471,6 +469,44 @@ struct ResolvePackSheetContent: View {
                     .truncationMode(.middle)
             }
         }
+    }
+
+    private var chaptersWillBeWritten: Bool {
+        ResolvePackFileSelection.chaptersWillBeWritten(
+            configuration: configuration,
+            plan: plan
+        )
+    }
+
+    private var chapterFileToggle: some View {
+        let written = chaptersWillBeWritten
+        let invalid = plan?.chapters.isValidForYouTube == false
+        return Toggle(
+            isOn: Binding(
+                get: { written },
+                set: { configuration.includeChapters = $0 }
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(t("resolvePack.file.chapters"))
+                        .font(.system(size: 12))
+                    if !written {
+                        Text(t("resolvePack.file.chapters.notWritten"))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(theme.warning)
+                    }
+                }
+                Text(names.chapters)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(theme.tertiaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(invalid && !configuration.writeInvalidChapters)
+        .accessibilityIdentifier("resolve-pack-file-chapters")
     }
 
     private func fileToggle(key: String, fileName: String, isOn: Binding<Bool>) -> some View {

@@ -248,6 +248,7 @@ public struct ResolvePackWarning: Sendable, Hashable {
         case markerNameTruncated(name: String, fullName: String)
         case moreNamesTruncated(count: Int)
         case chaptersOmitted(chapterCount: Int)
+        case chapterListsDiffer
     }
 
     public let kind: Kind
@@ -271,7 +272,11 @@ public struct ResolvePackPlan: Sendable {
     public let markers: [ResolvedMarker]
     /// Markers before the collision merge, in scene + re-hook + cue order.
     public let allMarkers: [ResolvedMarker]
+    /// Paste-ready chapter text (`_chapters.txt`) following the Publishing pack.
     public let chapters: ChapterList
+    /// Chapter markers derived from the same scenes/frame rate as the marker
+    /// EDL, so they line up with the scene markers in the FCPXML.
+    public let timelineChapters: ChapterList
     /// Spanish fallback messages, kept for the README and existing callers.
     public let warnings: [String]
     public let warningItems: [ResolvePackWarning]
@@ -285,6 +290,7 @@ public struct ResolvePackPlan: Sendable {
         markers: [ResolvedMarker],
         allMarkers: [ResolvedMarker],
         chapters: ChapterList,
+        timelineChapters: ChapterList? = nil,
         warnings: [String],
         warningItems: [ResolvePackWarning] = []
     ) {
@@ -296,6 +302,7 @@ public struct ResolvePackPlan: Sendable {
         self.markers = markers
         self.allMarkers = allMarkers
         self.chapters = chapters
+        self.timelineChapters = timelineChapters ?? chapters
         self.warnings = warnings
         self.warningItems = warningItems
     }
@@ -388,7 +395,11 @@ public enum ResolveDeliveryPack {
         )
         let resolution = ExportMarkerResolver.resolve(scenes: scenes, settings: settings)
         let allMarkers = ExportMarkerResolver.allMarkers(scenes: scenes, settings: settings)
-        let chapterList = chapters ?? YouTubeChapters.make(scenes: scenes, rate: settings.fps)
+        // `_chapters.txt` follows the Publishing pack (titles, exclusions and
+        // imported chapters). FCPXML markers must follow the timeline this pack
+        // is building, so they use the same scenes and frame rate as the EDL.
+        let timelineChapters = YouTubeChapters.make(scenes: scenes, rate: settings.fps)
+        let chapterList = chapters ?? timelineChapters
 
         var warningItems: [ResolvePackWarning] = []
         warningItems.append(contentsOf: extraWarningItems)
@@ -420,6 +431,12 @@ public enum ResolveDeliveryPack {
             warningItems.append(contentsOf: chapterList.warnings.map {
                 ResolvePackWarning(kind: .chapter($0), message: $0.message)
             })
+            if options.includeFCPXML && options.includeChapterMarkersInFCPXML,
+               timelineChapters.text != chapterList.text {
+                warningItems.append(contentsOf: timelineChapters.warnings.map {
+                    ResolvePackWarning(kind: .chapter($0), message: $0.message)
+                })
+            }
         }
         warningItems.append(contentsOf: truncationWarnings(
             markers: resolution.markers,
@@ -434,6 +451,17 @@ public enum ResolveDeliveryPack {
                 ResolvePackWarning(
                     kind: .chaptersOmitted(chapterCount: count),
                     message: "No se escribe el archivo de capítulos: YouTube necesita al menos 3 capítulos de 10 s y esta lista tiene \(count)."
+                )
+            )
+        }
+
+        if chapterList.text != timelineChapters.text,
+           options.includeChapters
+            || (options.includeFCPXML && options.includeChapterMarkersInFCPXML) {
+            warningItems.append(
+                ResolvePackWarning(
+                    kind: .chapterListsDiffer,
+                    message: "El archivo de capítulos y los marcadores del FCPXML no coinciden: el archivo usa las duraciones de Publicación y el FCPXML la duración elegida en Resolve."
                 )
             )
         }
@@ -459,6 +487,7 @@ public enum ResolveDeliveryPack {
             markers: resolution.markers,
             allMarkers: allMarkers,
             chapters: chapterList,
+            timelineChapters: timelineChapters,
             warnings: uniqueWarnings,
             warningItems: uniqueWarningItems
         )
@@ -484,7 +513,7 @@ public enum ResolveDeliveryPack {
                     markers: plan.markers,
                     durationFrames: plan.durationFrames,
                     settings: settings,
-                    chapters: settings.includeChapterMarkers ? plan.chapters.chapters : []
+                    chapters: settings.includeChapterMarkers ? plan.timelineChapters.chapters : []
                 )
             ))
         }

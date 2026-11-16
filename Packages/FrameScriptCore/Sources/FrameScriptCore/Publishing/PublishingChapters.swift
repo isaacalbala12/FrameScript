@@ -290,4 +290,41 @@ public enum PublishingChapters {
             return lhs.seconds < rhs.seconds
         }
     }
+
+    /// Paste-ready chapter list that includes the imported chapters. The
+    /// Resolve pack writes this text to `_chapters.txt`, so it cannot silently
+    /// drop a chapter that the Publishing export includes.
+    public static func chapterList(
+        plan: ChapterPlan,
+        importedOverrides: [FrameScriptDocument.ChapterOverride],
+        rate: FrameRate = .fps25
+    ) -> ChapterList {
+        let chapters = escaletaChapters(
+            plan: plan,
+            importedOverrides: importedOverrides
+        ).enumerated().map { index, chapter in
+            Chapter(
+                startFrame: Timecode(
+                    seconds: TimeInterval(chapter.seconds),
+                    rate: rate
+                ).frames,
+                startSeconds: chapter.seconds,
+                title: chapter.title,
+                position: index + 1,
+                sceneID: plan.chapters.first(where: { $0.startSeconds == chapter.seconds })?.sceneID
+            )
+        }
+        let text = chapters
+            .map { "\(DurationFormat.clock(seconds: $0.startSeconds)) \($0.title)" }
+            .joined(separator: "\n")
+        return ChapterList(
+            chapters: chapters,
+            text: text,
+            warnings: plan.warnings,
+            videoEndSeconds: max(
+                plan.videoEndSeconds,
+                chapters.last?.startSeconds ?? 0
+            )
+        )
+    }
 }

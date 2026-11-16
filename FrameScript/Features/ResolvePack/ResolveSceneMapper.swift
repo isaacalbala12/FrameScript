@@ -366,7 +366,7 @@ struct ResolveSceneMapper: Sendable {
                 start: start,
                 duration: duration,
                 isRehook: !uniqueRehooks.isEmpty,
-                emitsSceneRehookMarker: realRehookOffsets.isEmpty,
+                emitsSceneRehookMarker: uniqueRehooks.contains { $0 < 0.5 },
                 markers: Self.spreadCollisions(
                     markers,
                     duration: duration,

@@ -523,6 +523,51 @@ final class ResolvePackTests: XCTestCase {
         }
     }
 
+    func testW3FixCDHInvalidChapterFileCountsAsNotWritten() throws {
+        let scenes = [
+            ExportScene(title: "Uno", start: 0, duration: 20),
+            ExportScene(title: "Dos", start: 20, duration: 20)
+        ]
+        let options = try XCTUnwrap(
+            ResolvePackConfiguration.defaults(languageCode: "es").options()
+        )
+        let plan = ResolveDeliveryPack.plan(
+            scenes: scenes,
+            projectName: "Prueba",
+            options: options
+        )
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+
+        XCTAssertFalse(
+            ResolvePackFileSelection.chaptersWillBeWritten(
+                configuration: configuration,
+                plan: plan
+            )
+        )
+        XCTAssertEqual(
+            ResolvePackFileSelection.selectedFileCount(
+                configuration: configuration,
+                plan: plan
+            ),
+            5
+        )
+
+        configuration.writeInvalidChapters = true
+        XCTAssertTrue(
+            ResolvePackFileSelection.chaptersWillBeWritten(
+                configuration: configuration,
+                plan: plan
+            )
+        )
+        XCTAssertEqual(
+            ResolvePackFileSelection.selectedFileCount(
+                configuration: configuration,
+                plan: plan
+            ),
+            6
+        )
+    }
+
     func testShortcutIsRegisteredAndDoesNotClash() {
         let definition = ShortcutRegistry.definition(for: .resolvePack)
         XCTAssertEqual(definition.category, .project)

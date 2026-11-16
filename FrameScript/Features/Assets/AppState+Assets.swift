@@ -194,11 +194,14 @@ extension AppState {
                 if let projectDirectory {
                     resolved = AssetPath.resolved(path, relativeTo: projectDirectory)
                 }
-            } else if project.assets[index].kind == .thumbnail
-                        || project.assets[index].isCopiedIntoProject,
+            } else if project.assets[index].isCopiedIntoProject,
                       !FileManager.default.fileExists(atPath: path),
                       let projectFileURL,
-                      let repaired = repairedCopiedPath(path, projectFileURL: projectFileURL) {
+                      let repaired = repairedCopiedPath(
+                          path,
+                          asset: project.assets[index],
+                          projectFileURL: projectFileURL
+                      ) {
                 // A build before the C-1 fix saved `/<cwd>/Proyecto
                 // assets/portada.png` (or `/Proyecto assets/portada.png`).
                 // The file is still beside the project; rewrite the stale
@@ -232,11 +235,30 @@ extension AppState {
 
     /// Repairs an absolute-looking thumbnail path by looking for the copied
     /// file inside the project's own `<Project> assets/` folder.
-    private func repairedCopiedPath(_ storedPath: String, projectFileURL: URL) -> String? {
-        let fileName = (storedPath as NSString).lastPathComponent
+    ///
+    /// Only copied thumbnails qualify, only after their bookmark failed to
+    /// resolve, and only when the stale path still ends in
+    /// `<Project> assets/<file>`. A reference to an unmounted external drive
+    /// must never be silently repointed to a same-named local file.
+    private func repairedCopiedPath(
+        _ storedPath: String,
+        asset: ProjectAsset,
+        projectFileURL: URL
+    ) -> String? {
+        guard asset.isCopiedIntoProject else { return nil }
+        if let bookmarkData = asset.bookmarkData,
+           let resolved = AssetBookmark.resolve(bookmarkData),
+           FileManager.default.fileExists(atPath: resolved.path) {
+            return nil
+        }
+        let assetsName = AssetStore.assetsDirectoryName(forProjectFile: projectFileURL)
+        let components = (storedPath as NSString).pathComponents
+        guard components.count >= 2,
+              components[components.count - 2] == assetsName else { return nil }
+        let fileName = components[components.count - 1]
         guard !fileName.isEmpty else { return nil }
-        let directory = AssetStore.assetsDirectory(forProjectFile: projectFileURL)
-        let candidate = directory.appendingPathComponent(fileName)
+        let candidate = AssetStore.assetsDirectory(forProjectFile: projectFileURL)
+            .appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: candidate.path) else { return nil }
         return candidate.path
     }

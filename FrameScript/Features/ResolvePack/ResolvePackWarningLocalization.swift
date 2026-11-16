@@ -75,6 +75,8 @@ extension ResolvePackWarning {
                 format: L10n.tr("resolvePack.warning.chaptersOmitted", language: language),
                 chapterCount
             )
+        case .chapterListsDiffer:
+            return L10n.tr("resolvePack.warning.chapterListsDiffer", language: language)
         }
     }
 }

@@ -125,6 +125,14 @@ final class ResolvePackSnapshotTests: XCTestCase {
             visibleText.localizedCaseInsensitiveContains("capítulos"),
             "Missing invalid-chapters warning. OCR text: \(visibleText)"
         )
+        XCTAssertTrue(
+            visibleText.localizedCaseInsensitiveContains("5 de 6"),
+            "The footer must count the omitted chapters file. OCR text: \(visibleText)"
+        )
+        XCTAssertTrue(
+            visibleText.localizedCaseInsensitiveContains("no se escribirá"),
+            "The chapter row must say it will not be written. OCR text: \(visibleText)"
+        )
         if ProcessInfo.processInfo.environment["FS_SNAPSHOTS"] == "1" {
             try writePNG(rendered.image, name: "resolve-pack-invalid-chapters-light-980x712.png")
         }

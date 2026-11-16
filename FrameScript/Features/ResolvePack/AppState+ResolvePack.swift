@@ -73,20 +73,12 @@ extension AppState {
         )
         let mapping = mapper.map(project: project)
         let chapterPlan = publishingChapterPlan(language: language)
-        let rate = configuration.rate.frameRate
-        let chapters = ChapterList(
-            chapters: chapterPlan.chapters.map { chapter in
-                Chapter(
-                    startFrame: Timecode(seconds: TimeInterval(chapter.startSeconds), rate: rate).frames,
-                    startSeconds: chapter.startSeconds,
-                    title: chapter.title,
-                    position: chapter.position,
-                    sceneID: chapter.sceneID
-                )
-            },
-            text: chapterPlan.text,
-            warnings: chapterPlan.warnings,
-            videoEndSeconds: chapterPlan.videoEndSeconds
+        let chapters = PublishingChapters.chapterList(
+            plan: chapterPlan,
+            importedOverrides: publishingCoreOverrides(
+                publishingPack(language: language).chapterOverrides
+            ),
+            rate: configuration.rate.frameRate
         )
         return ResolveDeliveryPack.plan(
             scenes: mapping.scenes,
