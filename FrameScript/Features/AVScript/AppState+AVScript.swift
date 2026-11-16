@@ -49,27 +49,12 @@ extension AppState {
         )
     }
 
-    /// Replaces one paragraph in the scene and runs the same commit path as the
-    /// script editor, so undo, autosave, metrics, rhythm and anchor repair keep
-    /// working. The range and previous text guard against a stale row.
-    func commitAVParagraph(
-        sceneID: UUID,
-        paragraphRange: NSRange,
-        previousText: String,
-        text: String
-    ) {
-        guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return }
-        let source = scene.scriptText as NSString
-        guard paragraphRange.location >= 0,
-              paragraphRange.length >= 0,
-              paragraphRange.location <= source.length,
-              paragraphRange.length <= source.length - paragraphRange.location,
-              source.substring(with: paragraphRange) == previousText else {
-            return
-        }
-        let updated = source.replacingCharacters(in: paragraphRange, with: text)
-        guard updated != scene.scriptText else { return }
-        commitScriptTextChange(sceneID: sceneID, previousText: scene.scriptText, text: updated)
+    /// Narration is read-only in the AV workspace. This action opens the one
+    /// Script editor at the paragraph and selects its range.
+    func editAVParagraphInScript(sceneID: UUID, range: NSRange) {
+        TimelineNavigation.shared.requestJump(sceneID: sceneID, range: range)
+        selectScene(sceneID)
+        selectMode(.script)
     }
 
     func avScriptExportLabels() -> AVScriptExportLabels {
@@ -98,15 +83,36 @@ extension AppState {
 
     /// Renders the AV script without touching the filesystem. Exposed so tests
     /// and future CLI commands use the exact same labels as the save panel.
-    func avScriptExportText(format: AVScriptExportFormat) -> String {
+    func avScriptExportText(
+        format: AVScriptExportFormat,
+        escapeFormulas: Bool = false,
+        includesBOM: Bool = false
+    ) -> String {
         let document = avScriptDocument()
         let labels = avScriptExportLabels()
         switch format {
         case .markdown:
             return AVScriptExporter.markdown(document: document, labels: labels)
         case .csv:
-            return AVScriptExporter.csv(document: document, labels: labels)
+            return AVScriptExporter.csv(
+                document: document,
+                labels: labels,
+                escapeFormulas: escapeFormulas,
+                includesBOM: includesBOM
+            )
         }
+    }
+
+    /// Bytes the save panel writes. The CSV header is accented, so it carries a
+    /// BOM and neutralises spreadsheet formulas; Markdown stays plain UTF-8.
+    func avScriptExportData(format: AVScriptExportFormat) -> Data {
+        Data(
+            avScriptExportText(
+                format: format,
+                escapeFormulas: true,
+                includesBOM: format == .csv
+            ).utf8
+        )
     }
 
     /// Adds a visual (`bRoll`) or editing note anchored to the whole paragraph.
@@ -170,8 +176,10 @@ extension AppState {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [format.contentType]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(avScriptSafeFileName(project.title))-av.\(format.fileExtension)"
-        panel.message = localized("avScript.exportPanelMessage")
+        panel.nameFieldStringValue = "\(SafeFileName.sanitized(project.title, fallback: "FrameScript"))-av.\(format.fileExtension)"
+        panel.message = localized(
+            format == .csv ? "avScript.exportPanelMessage.csv" : "avScript.exportPanelMessage"
+        )
         if let folder = resolvedDefaultExportFolder() {
             let didStartAccessing = folder.startAccessingSecurityScopedResource()
             defer {
@@ -184,7 +192,7 @@ extension AppState {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            try avScriptExportText(format: format).write(to: url, atomically: true, encoding: .utf8)
+            try avScriptExportData(format: format).write(to: url, options: .atomic)
         } catch {
             errorCenter.present(
                 AppError(
@@ -234,14 +242,5 @@ extension AppState {
             prefixContext: anchor.prefixContext,
             suffixContext: anchor.suffixContext
         )
-    }
-
-    private func avScriptSafeFileName(_ value: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
-        let cleaned = value
-            .components(separatedBy: invalid)
-            .joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? "FrameScript" : cleaned
     }
 }

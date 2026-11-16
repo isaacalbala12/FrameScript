@@ -97,35 +97,21 @@ final class AVScriptTests: XCTestCase {
         XCTAssertEqual(unanchored.annotations.first?.text, "Corte seco al cruzar la meta")
     }
 
-    func testCommitParagraphUsesTheScriptCommitPath() throws {
+    func testExternalScriptCommitIsReflectedInTheAVDocument() throws {
         let text = harness.scene.scriptText
         let original = "Hoy probamos el nuevo simulador de carreras en Spa."
         let range = (text as NSString).range(of: original)
         let replacement = "Hoy probamos el simulador en Spa."
 
-        harness.appState.commitAVParagraph(
+        harness.appState.commitScriptTextChange(
             sceneID: harness.scene.id,
-            paragraphRange: range,
-            previousText: original,
-            text: replacement
+            previousText: text,
+            text: (text as NSString).replacingCharacters(in: range, with: replacement)
         )
 
-        XCTAssertEqual(harness.scene.scriptText, (text as NSString).replacingCharacters(in: range, with: replacement))
+        let document = harness.appState.avScriptDocument()
+        XCTAssertEqual(document.scenes[0].rows[0].paragraph?.text, replacement)
         XCTAssertTrue(harness.appState.projectStore.hasUnsavedFileChanges)
-    }
-
-    func testStaleParagraphCommitIsIgnored() throws {
-        let before = harness.scene.scriptText
-        let range = (before as NSString).range(of: "Hoy probamos el nuevo simulador de carreras en Spa.")
-
-        harness.appState.commitAVParagraph(
-            sceneID: harness.scene.id,
-            paragraphRange: range,
-            previousText: "Texto que ya no está",
-            text: "No debe aplicarse"
-        )
-
-        XCTAssertEqual(harness.scene.scriptText, before)
     }
 
     func testModeAndShortcutRegistrations() {
@@ -181,7 +167,7 @@ final class AVScriptSnapshotTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testParagraphEditorAppliesMarkupStyling() throws {
+    func testReadOnlyNarrationAppliesMarkupStyling() throws {
         let rendered = try renderAVScript(
             harness: harness,
             scene: harness.scene,

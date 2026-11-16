@@ -273,17 +273,16 @@ private struct AVScriptRowView: View {
     @ViewBuilder
     private var leftColumn: some View {
         if let paragraph = row.paragraph {
-            AVParagraphEditor(
-                text: paragraph.text,
-                placeholder: appState.localized("avScript.paragraphPlaceholder")
-            ) { text in
-                appState.commitAVParagraph(
+            let edit = {
+                appState.editAVParagraphInScript(
                     sceneID: scene.id,
-                    paragraphRange: paragraph.range.nsRange,
-                    previousText: paragraph.text,
-                    text: text
+                    range: paragraph.range.nsRange
                 )
             }
+            // Narration is read-only here. The Script editor is the only place
+            // where narration is edited, so there is one owner for the text
+            // and one undo stack.
+            AVReadOnlyParagraph(text: paragraph.text, onEdit: edit)
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Label(appState.localized("avScript.unanchored"), systemImage: "exclamationmark.triangle")
@@ -301,6 +300,29 @@ private struct AVScriptRowView: View {
     @ViewBuilder
     private var rightColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let paragraph = row.paragraph {
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    Button {
+                        appState.editAVParagraphInScript(
+                            sceneID: scene.id,
+                            range: paragraph.range.nsRange
+                        )
+                    } label: {
+                        Label(
+                            appState.localized("avScript.editInScript"),
+                            systemImage: "pencil"
+                        )
+                        .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(theme.tertiaryText)
+                    .help(appState.localized("avScript.editInScriptHelp"))
+                    .accessibilityIdentifier(
+                        "av-script-edit-\(scene.id.uuidString)-\(paragraph.index)"
+                    )
+                }
+            }
             if row.annotations.isEmpty, let paragraph = row.paragraph {
                 Text(appState.localized("avScript.noAnnotations"))
                     .font(.system(size: 11))
@@ -508,6 +530,7 @@ private struct AVEditingCard: View {
                 }
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
+                .tint(theme.accent.color)
                 .foregroundStyle(theme.secondaryText)
                 deleteButton
             }
@@ -564,7 +587,7 @@ private struct AVEditingCard: View {
     }
 }
 
-// MARK: - Paragraph editor
+// MARK: - Narration (read-only)
 
 enum AVScriptLayoutMetrics {
     static let dividerWidth: CGFloat = 1
@@ -586,40 +609,36 @@ enum AVScriptLayoutMetrics {
     }
 }
 
-private struct AVParagraphEditor: View {
+private struct AVReadOnlyParagraph: View {
     let text: String
-    let placeholder: String
-    let onCommit: (String) -> Void
+    let onEdit: () -> Void
 
     var body: some View {
-        AVParagraphTextRepresentable(
-            text: text,
-            placeholder: placeholder,
-            onCommit: onCommit
-        )
-        .frame(minHeight: 24)
+        AVReadOnlyParagraphRepresentable(text: text, onEdit: onEdit)
+            .frame(minHeight: 24)
     }
 }
 
-private struct AVParagraphTextRepresentable: NSViewRepresentable {
+/// Selectable, copyable narration. It deliberately has no delegate, no undo
+/// and no commit path: narration is edited in the Script workspace only.
+private struct AVReadOnlyParagraphRepresentable: NSViewRepresentable {
     let text: String
-    let placeholder: String
-    let onCommit: (String) -> Void
+    let onEdit: () -> Void
 
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        Coordinator()
     }
 
-    func makeNSView(context: Context) -> AVParagraphTextView {
-        let textView = AVParagraphTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+    func makeNSView(context: Context) -> AVReadOnlyTextView {
+        let textView = AVReadOnlyTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         textView.isRichText = true
         textView.importsGraphics = false
-        textView.isEditable = true
+        textView.isEditable = false
         textView.isSelectable = true
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -629,28 +648,24 @@ private struct AVParagraphTextRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.delegate = context.coordinator
-        textView.string = text
-        context.coordinator.attach(to: textView)
-        context.coordinator.configure(textView)
+        textView.onEdit = onEdit
+        context.coordinator.styler.attach(to: textView)
+        configure(textView, styler: context.coordinator.styler)
         return textView
     }
 
-    func updateNSView(_ textView: AVParagraphTextView, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.configure(textView)
+    func updateNSView(_ textView: AVReadOnlyTextView, context: Context) {
+        textView.onEdit = onEdit
+        configure(textView, styler: context.coordinator.styler)
     }
 
-    static func dismantleNSView(_ textView: AVParagraphTextView, coordinator: Coordinator) {
-        if textView.delegate === coordinator {
-            textView.delegate = nil
-        }
-        coordinator.detach()
+    static func dismantleNSView(_ textView: AVReadOnlyTextView, coordinator: Coordinator) {
+        coordinator.styler.textView = nil
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView textView: AVParagraphTextView,
+        nsView textView: AVReadOnlyTextView,
         context: Context
     ) -> CGSize? {
         let width = proposal.width ?? textView.bounds.width
@@ -665,118 +680,74 @@ private struct AVParagraphTextRepresentable: NSViewRepresentable {
         return CGSize(width: width, height: height)
     }
 
-    @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: AVParagraphTextRepresentable
-        let styler = MarkupEditorStyler()
-        private var isApplyingModelText = false
+    private func configure(_ textView: AVReadOnlyTextView, styler: MarkupEditorStyler) {
+        let preferences = appState.settings.editorPreferences
+        let theme = theme
+        let fontSize = CGFloat(max(14, min(18, preferences.fontSize * 0.8)))
 
-        init(parent: AVParagraphTextRepresentable) {
-            self.parent = parent
+        if textView.font?.pointSize != fontSize {
+            textView.font = NSFont.systemFont(ofSize: fontSize)
         }
+        textView.textColor = NSColor(theme.primaryText)
+        textView.backgroundColor = NSColor(theme.editorSurface)
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
 
-        func attach(to textView: AVParagraphTextView) {
-            styler.attach(to: textView)
-        }
+        let paragraphStyle = ScriptEditorLayout.paragraphStyle()
+        textView.defaultParagraphStyle = paragraphStyle
 
-        func detach() {
-            styler.textView = nil
-        }
-
-        func configure(_ textView: AVParagraphTextView) {
-            let preferences = parent.appState.settings.editorPreferences
-            let theme = parent.theme
-            let fontSize = CGFloat(max(14, min(18, preferences.fontSize * 0.8)))
-
-            if textView.font?.pointSize != fontSize {
-                textView.font = NSFont.systemFont(ofSize: fontSize)
-            }
-            textView.textColor = NSColor(theme.primaryText)
-            textView.insertionPointColor = NSColor(theme.accent.color)
-            textView.backgroundColor = NSColor(theme.editorSurface)
-            textView.isContinuousSpellCheckingEnabled = preferences.spellcheck
-            textView.isAutomaticQuoteSubstitutionEnabled = preferences.smartQuotes
-            textView.isAutomaticDashSubstitutionEnabled = false
-            textView.isAutomaticTextReplacementEnabled = false
-            textView.placeholder = parent.placeholder
-            textView.placeholderColor = NSColor(theme.secondaryText.opacity(0.58))
-
-            let paragraphStyle = ScriptEditorLayout.paragraphStyle()
-            textView.defaultParagraphStyle = paragraphStyle
-            textView.typingAttributes[.paragraphStyle] = paragraphStyle
-            applyParagraphStyle(paragraphStyle, to: textView)
-
-            styler.configure(
-                MarkupEditorStyler.Configuration(
-                    isEnabled: true,
-                    pauseDefaults: preferences.markupPauseDefaults,
-                    palette: MarkupEditorPalette(
-                        fontSize: Double(fontSize),
-                        textColor: NSColor(theme.primaryText),
-                        secondaryColor: NSColor(theme.secondaryText),
-                        accentColor: NSColor(theme.accent.color),
-                        rhythmColor: NSColor(theme.warning),
-                        backgroundColor: NSColor(theme.editorSurface)
-                    )
+        styler.configure(
+            MarkupEditorStyler.Configuration(
+                isEnabled: true,
+                pauseDefaults: preferences.markupPauseDefaults,
+                palette: MarkupEditorPalette(
+                    fontSize: Double(fontSize),
+                    textColor: NSColor(theme.primaryText),
+                    secondaryColor: NSColor(theme.secondaryText),
+                    accentColor: NSColor(theme.accent.color),
+                    rhythmColor: NSColor(theme.warning),
+                    backgroundColor: NSColor(theme.editorSurface)
                 )
             )
+        )
 
-            guard textView.string != parent.text else { return }
-            let isFirstResponder = textView.window?.firstResponder === textView
-            guard !isFirstResponder else { return }
-            isApplyingModelText = true
-            textView.string = parent.text
-            applyParagraphStyle(paragraphStyle, to: textView)
-            isApplyingModelText = false
+        guard textView.string != text else {
             styler.applyAll(in: textView)
-            textView.invalidateIntrinsicContentSize()
+            return
         }
+        textView.string = text
+        applyParagraphStyle(paragraphStyle, to: textView)
+        styler.applyAll(in: textView)
+        textView.invalidateIntrinsicContentSize()
+    }
 
-        func textDidChange(_ notification: Notification) {
-            guard !isApplyingModelText,
-                  let textView = notification.object as? AVParagraphTextView else {
-                return
-            }
-            styler.apply(around: textView.selectedRange(), in: textView)
-            parent.onCommit(textView.string)
-            textView.invalidateIntrinsicContentSize()
-        }
+    private func applyParagraphStyle(_ style: NSParagraphStyle, to textView: NSTextView) {
+        guard let storage = textView.textStorage, storage.length > 0 else { return }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: style,
+            range: NSRange(location: 0, length: storage.length)
+        )
+    }
 
-        func textDidEndEditing(_ notification: Notification) {
-            guard !isApplyingModelText,
-                  let textView = notification.object as? AVParagraphTextView else {
-                return
-            }
-            parent.onCommit(textView.string)
-        }
-
-        private func applyParagraphStyle(_ style: NSParagraphStyle, to textView: NSTextView) {
-            guard let storage = textView.textStorage, storage.length > 0 else { return }
-            if let existing = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
-               existing.isEqual(style) {
-                return
-            }
-            let undoManager = textView.undoManager
-            undoManager?.disableUndoRegistration()
-            storage.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: storage.length))
-            undoManager?.enableUndoRegistration()
-        }
+    @MainActor
+    final class Coordinator {
+        let styler = MarkupEditorStyler()
     }
 }
 
-private final class AVParagraphTextView: PlaceholderTextView {
-    override func didChangeText() {
-        super.didChangeText()
-        invalidateIntrinsicContentSize()
-    }
+private final class AVReadOnlyTextView: PlaceholderTextView {
+    var onEdit: (() -> Void)?
 
-    /// The paragraph editor allows rich text so the markup styler can apply
-    /// fonts, but pasted content must stay plain.
-    override func paste(_ sender: Any?) {
-        guard let plain = NSPasteboard.general.string(forType: .string) else {
-            super.paste(sender)
+    /// Double-click opens the paragraph in the Script workspace, where the
+    /// single narration editor lives.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onEdit?()
             return
         }
-        insertText(plain, replacementRange: selectedRange())
+        super.mouseDown(with: event)
     }
 }

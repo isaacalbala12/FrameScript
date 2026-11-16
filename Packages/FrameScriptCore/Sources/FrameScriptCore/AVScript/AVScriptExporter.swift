@@ -158,7 +158,12 @@ public enum AVScriptExporter {
 
     // MARK: CSV
 
-    public static func csv(document: AVScriptDocument, labels: AVScriptExportLabels = AVScriptExportLabels()) -> String {
+    public static func csv(
+        document: AVScriptDocument,
+        labels: AVScriptExportLabels = AVScriptExportLabels(),
+        escapeFormulas: Bool = false,
+        includesBOM: Bool = false
+    ) -> String {
         let header = [
             labels.csvScene,
             labels.csvParagraph,
@@ -169,7 +174,11 @@ public enum AVScriptExporter {
             labels.csvStatus,
             labels.csvAnchor,
         ]
-        var rows: [String] = [header.map { ShotListCSV.escape($0) }.joined(separator: ",")]
+        var rows: [String] = [
+            header
+                .map { ShotListCSV.escape($0, escapeFormulas: escapeFormulas) }
+                .joined(separator: ",")
+        ]
 
         for scene in document.scenes {
             for row in scene.rows {
@@ -188,7 +197,8 @@ public enum AVScriptExporter {
                         description: "",
                         source: "",
                         status: "",
-                        anchor: anchor
+                        anchor: anchor,
+                        escapeFormulas: escapeFormulas
                     ))
                     continue
                 }
@@ -207,13 +217,32 @@ public enum AVScriptExporter {
                         description: annotation.text,
                         source: annotation.source,
                         status: annotation.status,
-                        anchor: anchorValue
+                        anchor: anchorValue,
+                        escapeFormulas: escapeFormulas
                     ))
                 }
             }
         }
 
-        return rows.joined(separator: "\r\n") + "\r\n"
+        let csv = rows.joined(separator: "\r\n") + "\r\n"
+        // The header carries Spanish accents, so Excel needs the BOM to pick
+        // UTF-8 instead of the legacy code page.
+        return includesBOM ? "\u{FEFF}" + csv : csv
+    }
+
+    /// A field that starts with "- " is dialogue prose only when the next
+    /// character is a letter or opening punctuation and no pipe (a spreadsheet
+    /// formula operator) appears anywhere. Everything else stays escaped.
+    static func isDialogueProse(_ field: String) -> Bool {
+        guard field.hasPrefix("- "), !field.contains("|") else { return false }
+        let rest = field.dropFirst(2)
+        guard let first = rest.first else { return false }
+        guard first.isLetter || "¿¡«\"".contains(first) else { return false }
+        // `- HYPERLINK(...)`: a bare word immediately followed by "(" reads
+        // as a spreadsheet function call, not dialogue. Prose such as
+        // "- Vale (más o menos)" has a space before the parenthesis.
+        let word = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }
+        return rest.dropFirst(word.count).first != "("
     }
 
     private static func csvRow(
@@ -224,9 +253,10 @@ public enum AVScriptExporter {
         description: String,
         source: String,
         status: String,
-        anchor: String
+        anchor: String,
+        escapeFormulas: Bool
     ) -> String {
-        [
+        let fields = [
             scene,
             paragraph,
             narration,
@@ -236,7 +266,12 @@ public enum AVScriptExporter {
             status,
             anchor,
         ]
-        .map { ShotListCSV.escape($0) }
-        .joined(separator: ",")
+        return fields.enumerated()
+            .map { index, field in
+                let isProse = index == 2 || index == 4
+                let shouldEscape = escapeFormulas && !(isProse && isDialogueProse(field))
+                return ShotListCSV.escape(field, escapeFormulas: shouldEscape)
+            }
+            .joined(separator: ",")
     }
 }

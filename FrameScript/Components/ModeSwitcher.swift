@@ -34,30 +34,27 @@ struct ModeSwitcher: View {
                 Button {
                     selection = mode
                 } label: {
-                    ZStack {
-                        Color.clear
-
-                        HStack(spacing: 5) {
-                            Text(title(for: mode))
-                                .lineLimit(1)
-                                .minimumScaleFactor(compact ? 0.8 : 0.88)
-                            if !compact {
-                                Text(appState.shortcutDisplay(for: shortcutCommand(for: mode)))
-                                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                                    .foregroundStyle(theme.tertiaryText)
-                                    .padding(.horizontal, 4)
-                                    .frame(height: 16)
-                                    .background {
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(theme.hover)
-                                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.divider))
-                                    }
-                            }
+                    HStack(spacing: 5) {
+                        Text(title(for: mode))
+                            .lineLimit(1)
+                            .minimumScaleFactor(compact ? 0.8 : 0.88)
+                        if !compact {
+                            Text(appState.shortcutDisplay(for: shortcutCommand(for: mode)))
+                                .font(.system(size: 9, weight: .medium, design: .rounded))
+                                .foregroundStyle(theme.tertiaryText)
+                                .padding(.horizontal, 4)
+                                .frame(height: 16)
+                                .background {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(theme.hover)
+                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.divider))
+                                }
                         }
                     }
+                    .padding(.horizontal, compact ? 6 : 0)
+                    .frame(minWidth: compact ? nil : 96, minHeight: 28)
                     .font(.system(size: compact ? 11 : 13, weight: .medium))
                     .foregroundStyle(selection == mode ? theme.primaryText : theme.secondaryText)
-                    .frame(width: compact ? 53 : 96, height: 28)
                     .contentShape(Rectangle())
                     .background {
                         if selection == mode {

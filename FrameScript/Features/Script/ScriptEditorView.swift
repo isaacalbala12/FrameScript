@@ -152,7 +152,9 @@ struct ScriptEditorView: View {
             },
             autocomplete: { context in await appState.autocompleteScript(context: context) },
             onTeardown: { appState.flushActiveEditorBoundary(flushEditor: false) },
-            markerAction: appState.selectProductionItems,
+            markerAction: { ids, mode in
+                appState.selectProductionItems(ids, mode: mode)
+            },
             addMarkerAction: { mode, anchor in
                 switch mode {
                 case .bRoll:

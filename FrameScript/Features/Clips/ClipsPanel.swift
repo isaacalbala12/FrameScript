@@ -5,6 +5,7 @@ import SwiftUI
 struct ClipsPanel: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+    @Environment(\.undoManager) private var undoManager
     @State private var statusFilter: ShortClipStatus?
     @State private var searchText = ""
 
@@ -24,15 +25,17 @@ struct ClipsPanel: View {
     }
 
     private var selectedClip: ShortClip? {
-        if let id = appState.windowState.selectedClipID, let clip = appState.clip(id: id) {
-            return clip
-        }
-        return filteredClips.first
+        guard let id = ClipListSelection.resolvedID(
+            selectedID: appState.windowState.selectedClipID,
+            clips: filteredClips
+        ) else { return nil }
+        return filteredClips.first { $0.id == id }
     }
 
     var body: some View {
+        let sourceScenes = appState.clipSourceScenes
         HStack(spacing: 0) {
-            clipList
+            clipList(sourceScenes: sourceScenes)
                 .frame(width: 248)
                 .background(theme.panelBackground)
                 .clipLayoutFrame("list")
@@ -63,16 +66,21 @@ struct ClipsPanel: View {
         .onChange(of: appState.project.clips.map(\.id)) { _, _ in
             ensureSelection()
         }
+        .onChange(of: filteredClips.map(\.id)) { _, _ in
+            ensureSelection()
+        }
     }
 
     private func ensureSelection() {
-        if let id = appState.windowState.selectedClipID, appState.clip(id: id) != nil {
-            return
-        }
-        appState.windowState.selectedClipID = filteredClips.first?.id
+        let resolved = ClipListSelection.resolvedID(
+            selectedID: appState.windowState.selectedClipID,
+            clips: filteredClips
+        )
+        guard appState.windowState.selectedClipID != resolved else { return }
+        appState.windowState.selectedClipID = resolved
     }
 
-    private var clipList: some View {
+    private func clipList(sourceScenes: [FrameScriptDocument.Scene]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(appState.localized("clips.title"))
@@ -94,7 +102,7 @@ struct ClipsPanel: View {
                 .accessibilityIdentifier("clips-new-button")
             }
 
-            summaryLine
+            summaryLine(sourceScenes: sourceScenes)
 
             Picker("", selection: $statusFilter) {
                 Text(appState.localized("clips.list.all")).tag(Optional<ShortClipStatus>.none)
@@ -122,7 +130,7 @@ struct ClipsPanel: View {
                 ScrollView {
                     LazyVStack(spacing: 4) {
                         ForEach(filteredClips) { clip in
-                            clipRow(clip)
+                            clipRow(clip, sourceScenes: sourceScenes)
                         }
                     }
                 }
@@ -134,13 +142,21 @@ struct ClipsPanel: View {
         .accessibilityIdentifier("clips-list")
     }
 
-    private var summaryLine: some View {
-        let summary = appState.clipsSummary
+    private func summaryLine(sourceScenes: [FrameScriptDocument.Scene]) -> some View {
+        let summary = appState.clipsSummary(scenes: sourceScenes)
         return HStack(spacing: 5) {
-            Text(String(format: appState.localized("clips.summary.count"), summary.total))
+            Text(L10n.plural(
+                "clips.summary.count",
+                count: summary.total,
+                language: appState.currentLanguage
+            ))
             if summary.stale > 0 {
                 Text("·")
-                Text(String(format: appState.localized("clips.summary.stale"), summary.stale))
+                Text(L10n.plural(
+                    "clips.summary.stale",
+                    count: summary.stale,
+                    language: appState.currentLanguage
+                ))
                     .foregroundStyle(theme.warning)
             }
         }
@@ -149,11 +165,13 @@ struct ClipsPanel: View {
         .accessibilityIdentifier("clips-summary")
     }
 
-    private func clipRow(_ clip: ShortClip) -> some View {
-        let isSelected = appState.windowState.selectedClipID == clip.id
-            || (appState.windowState.selectedClipID == nil && selectedClip?.id == clip.id)
+    private func clipRow(
+        _ clip: ShortClip,
+        sourceScenes: [FrameScriptDocument.Scene]
+    ) -> some View {
+        let isSelected = selectedClip?.id == clip.id
         let estimate = appState.clipEstimate(for: clip)
-        let isStale = appState.clipIsStale(clip)
+        let isStale = appState.clipIsStale(clip, scenes: sourceScenes)
 
         return Button {
             appState.windowState.selectedClipID = clip.id
@@ -203,7 +221,9 @@ struct ClipsPanel: View {
         .contextMenu {
             Button(appState.localized("clips.duplicate")) { appState.duplicateClip(id: clip.id) }
             Divider()
-            Button(appState.localized("clips.delete"), role: .destructive) { appState.deleteClip(id: clip.id) }
+            Button(appState.localized("clips.delete"), role: .destructive) {
+                appState.deleteClip(id: clip.id, undoManager: undoManager)
+            }
         }
         .accessibilityIdentifier("clip-row-\(clip.id.uuidString)")
     }
@@ -238,10 +258,6 @@ struct ClipsPanel: View {
                     appState.createClipFromSelectedScene()
                 }
                 .buttonStyle(.bordered)
-                Button(appState.localized("clips.command.create")) {
-                    appState.createClipFromEditorSelection()
-                }
-                .buttonStyle(.bordered)
             }
             .padding(.top, 4)
         }
@@ -266,11 +282,37 @@ struct ClipsPanel: View {
     }
 }
 
+/// Pure selection rule shared by the list and the regression tests. The editor
+/// must never show a clip the active filter excludes.
+enum ClipListSelection {
+    static func resolvedID(selectedID: UUID?, clips: [ShortClip]) -> UUID? {
+        if let selectedID, clips.contains(where: { $0.id == selectedID }) {
+            return selectedID
+        }
+        return clips.first?.id
+    }
+}
+
+/// Fragment remembered while its source scene is unchecked.
+struct ClipDroppedAnchor: Equatable {
+    let sceneID: UUID
+    let anchor: TextAnchor?
+    let anchorSceneID: UUID?
+
+    /// Returns the fragment to restore when this scene is checked again in the
+    /// same editing session.
+    func restoredAnchor(for sceneID: UUID) -> (anchor: TextAnchor, anchorSceneID: UUID?)? {
+        guard self.sceneID == sceneID, let anchor else { return nil }
+        return (anchor, anchorSceneID)
+    }
+}
+
 /// One clip as a mini-project: source range, hook, adapted text, publishing
 /// fields, coverage and export.
 struct ClipEditorView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+    @Environment(\.undoManager) private var undoManager
     let clip: ShortClip
 
     @State private var draft: ShortClip
@@ -278,6 +320,10 @@ struct ClipEditorView: View {
     @State private var isGenerating = false
     @State private var isExportPresented = false
     @State private var didCopy = false
+    /// Remembered when a checkbox unchecks the anchor scene, so re-checking it
+    /// in the same editing session restores the fragment instead of silently
+    /// dropping it.
+    @State private var droppedAnchor: ClipDroppedAnchor?
 
     init(clip: ShortClip) {
         self.clip = clip
@@ -403,9 +449,11 @@ struct ClipEditorView: View {
                         }
                         Spacer(minLength: 0)
                         Button(appState.localized("clips.source.useWholeScene")) {
+                            droppedAnchor = nil
                             appState.useWholeSceneForClip(id: draft.id)
                         }
-                        .buttonStyle(.cursorPlain)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                     .padding(9)
                     .background {
@@ -427,9 +475,21 @@ struct ClipEditorView: View {
                                 if !draft.sourceSceneIDs.contains(scene.id) {
                                     draft.sourceSceneIDs.append(scene.id)
                                 }
+                                if let droppedAnchor,
+                                   let restored = droppedAnchor.restoredAnchor(for: scene.id),
+                                   draft.anchor == nil {
+                                    draft.anchor = restored.anchor
+                                    draft.anchorSceneID = restored.anchorSceneID
+                                    self.droppedAnchor = nil
+                                }
                             } else {
                                 draft.sourceSceneIDs.removeAll { $0 == scene.id }
                                 if draft.anchorSceneID == scene.id {
+                                    droppedAnchor = ClipDroppedAnchor(
+                                        sceneID: scene.id,
+                                        anchor: draft.anchor,
+                                        anchorSceneID: draft.anchorSceneID
+                                    )
                                     draft.anchor = nil
                                     draft.anchorSceneID = nil
                                 }
@@ -441,6 +501,7 @@ struct ClipEditorView: View {
                             .lineLimit(1)
                     }
                     .toggleStyle(.checkbox)
+                    .tint(theme.accent.color)
                 }
 
                 if draft.sourceSceneIDs.isEmpty {
@@ -505,7 +566,10 @@ struct ClipEditorView: View {
                     Button {
                         Task {
                             isGenerating = true
-                            await appState.generateClipAdaptation(id: draft.id)
+                            await appState.generateClipAdaptation(
+                                id: draft.id,
+                                undoManager: undoManager
+                            )
                             isGenerating = false
                         }
                     } label: {
@@ -515,17 +579,15 @@ struct ClipEditorView: View {
                         )
                         .font(.system(size: 12, weight: .medium))
                     }
-                    .buttonStyle(.cursorPlain)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                     .disabled(isGenerating)
 
                     Button(appState.localized("clips.useSourceText")) {
-                        let coreClip = FrameScriptDocument.ShortClip(clip: draft)
-                        draft.adaptedText = ClipSourceExtractor.sourceText(
-                            clip: coreClip,
-                            scenes: appState.clipSourceScenes
-                        )
+                        appState.useSourceTextForClip(id: draft.id, undoManager: undoManager)
                     }
-                    .buttonStyle(.cursorPlain)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
 
                     Spacer(minLength: 0)
                 }
@@ -652,8 +714,19 @@ struct ClipEditorView: View {
                     Label(appState.localized("clips.export.open"), systemImage: "square.and.arrow.up")
                         .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(.cursorPlain)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityIdentifier("clip-export-button")
+
+                Button {
+                    appState.exportClipText(id: draft.id)
+                } label: {
+                    Label(appState.localized("clips.export.saveText"), systemImage: "doc.text")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("clip-export-text-button")
 
                 Button {
                     if appState.copyClipExportToPasteboard(id: draft.id) {
@@ -670,7 +743,8 @@ struct ClipEditorView: View {
                     )
                     .font(.system(size: 12))
                 }
-                .buttonStyle(.cursorPlain)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Spacer(minLength: 0)
             }
@@ -680,17 +754,18 @@ struct ClipEditorView: View {
     @ViewBuilder
     private var staleBanner: some View {
         let report = appState.clipStaleness(for: draft)
-        if report.isStale || report.hasUnresolvedAnchor {
+        if report.isStale {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Label(appState.localized("clips.stale.title"), systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 12, weight: .semibold))
                     Spacer(minLength: 8)
-                    if report.isStale {
+                    if !report.hasUnresolvedAnchor {
                         Button(appState.localized("clips.stale.markReviewed")) {
                             appState.markClipReviewed(id: draft.id)
                         }
-                        .buttonStyle(.cursorPlain)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                 }
 
@@ -700,9 +775,11 @@ struct ClipEditorView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(theme.warning)
                         Button(appState.localized("clips.source.useWholeScene")) {
+                            droppedAnchor = nil
                             appState.useWholeSceneForClip(id: draft.id)
                         }
-                        .buttonStyle(.cursorPlain)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                 }
 
@@ -771,11 +848,30 @@ struct ClipExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     let clip: ShortClip
     @State private var didCopy = false
+    @State private var frameRate: ResolvePackFrameRate = .default
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(appState.localized("clips.export.title"))
                 .font(.system(size: 20, weight: .semibold))
+
+            HStack(spacing: 8) {
+                Text(appState.localized("clips.export.frameRate"))
+                    .font(.system(size: 12))
+                Picker("", selection: $frameRate) {
+                    ForEach(ResolvePackFrameRate.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 118)
+                .accessibilityIdentifier("clip-export-frame-rate")
+                Spacer(minLength: 0)
+                Text(appState.localized("clips.export.frameRateHelp"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.tertiaryText)
+            }
 
             ScrollView {
                 Text(appState.clipExportDocument(for: clip).plainText)
@@ -792,9 +888,9 @@ struct ClipExportSheet: View {
             }
 
             HStack(spacing: 10) {
-                Button(appState.localized("project.unsaved.cancel")) { dismiss() }
+                Button(appState.localized("clips.export.close")) { dismiss() }
+                    .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
-                    .clickableCursor()
 
                 Spacer()
 
@@ -808,17 +904,26 @@ struct ClipExportSheet: View {
                         systemImage: didCopy ? "checkmark" : "doc.on.doc"
                     )
                 }
-                .clickableCursor()
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(appState.localized("clips.export.saveText")) {
+                    appState.exportClipText(id: clip.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Button(appState.localized("clips.export.saveEDL")) {
-                    appState.saveClipMarkers(id: clip.id, format: .edl)
+                    appState.saveClipMarkers(id: clip.id, format: .edl, rate: frameRate)
                 }
-                .clickableCursor()
+                .buttonStyle(.bordered)
+                .controlSize(.small)
 
                 Button(appState.localized("clips.export.saveFCPXML")) {
-                    appState.saveClipMarkers(id: clip.id, format: .fcpxml)
+                    appState.saveClipMarkers(id: clip.id, format: .fcpxml, rate: frameRate)
                 }
-                .clickableCursor()
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
         .padding(24)

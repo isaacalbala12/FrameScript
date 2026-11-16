@@ -130,7 +130,7 @@ struct ShortcutBinding: Codable, Hashable {
         return ansiUSCharacters.contains(character) ? String(character) : nil
     }
 
-    private static let ansiUSCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;'`,./")
+    private static let ansiUSCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;'`,./+")
 
     /// ЙЦУКЕН bindings written by earlier releases were derived from the active
     /// layout. These are the deterministic key-position equivalents.
@@ -409,6 +409,41 @@ enum ShortcutRegistry {
         case .assigned: nil
         case .unassigned: nil
         case nil: definition(for: command).factoryDefault
+        }
+    }
+
+    /// Extra physical keys that trigger a command without replacing its
+    /// configurable binding. The timeline owns both `-`/`=` and `+` because a
+    /// Spanish ISO keyboard types `+` without Shift while a US keyboard needs
+    /// ⇧=, and AppKit's key-equivalent matching is layout-dependent.
+    static func alternateBindings(for command: ShortcutCommand) -> [ShortcutBinding] {
+        guard command == .timelineZoomIn else { return [] }
+        return [
+            // Spanish ISO layouts type "+" on the key that ANSI calls "=".
+            .init("+", modifiers: [.command]),
+            // US layouts need Shift to type "+"; AppKit may deliver either the
+            // produced character or the physical "=" key, so accept both.
+            .init("+", modifiers: [.command, .shift]),
+            .init("=", modifiers: [.command, .shift])
+        ]
+    }
+
+    /// Reverse lookup used by the physical-key router and by the menu mirror.
+    static func command(
+        for binding: ShortcutBinding,
+        overrides: [ShortcutCommand: ShortcutOverride] = [:]
+    ) -> ShortcutCommand? {
+        if let primary = ShortcutCommand.allCases.first(where: {
+            self.binding(for: $0, overrides: overrides) == binding
+        }) {
+            return primary
+        }
+        return ShortcutCommand.allCases.first { command in
+            // Alternates belong to the factory default. A user who assigned a
+            // different key keeps only that key.
+            guard overrides[command] == nil,
+                  self.binding(for: command, overrides: overrides) != nil else { return false }
+            return alternateBindings(for: command).contains(binding)
         }
     }
 

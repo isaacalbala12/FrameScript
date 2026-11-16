@@ -403,7 +403,22 @@ final class AppKitPhysicalShortcutCommandRouter {
                   let appState = self.appState,
                   let menu = NSApp.mainMenu
             else { return event }
-            return PhysicalShortcutMenuDispatcher.dispatch(event, settings: appState.settings, menu: menu) ? nil : event
+            return PhysicalShortcutMenuDispatcher.dispatch(
+                event,
+                settings: appState.settings,
+                menu: menu
+            ) { command in
+                switch command {
+                case .timelineZoomIn:
+                    appState.timelineZoomIn()
+                    return true
+                case .timelineZoomOut:
+                    appState.timelineZoomOut()
+                    return true
+                default:
+                    return false
+                }
+            } ? nil : event
         }
     }
 
@@ -421,17 +436,58 @@ final class AppKitPhysicalShortcutCommandRouter {
 /// key-equivalent dispatch. Keeping this separate from the event monitor makes
 /// the command layer directly integration-testable.
 enum PhysicalShortcutMenuDispatcher {
-    static func dispatch(_ event: NSEvent, settings: AppSettings, menu: NSMenu) -> Bool {
+    static func dispatch(
+        _ event: NSEvent,
+        settings: AppSettings,
+        menu: NSMenu,
+        performAlternate: ((ShortcutCommand) -> Bool)? = nil
+    ) -> Bool {
         let modifiers = shortcutModifiers(from: event.modifierFlags)
         guard !modifiers.isEmpty,
-              let binding = ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers),
+              let binding = physicalBinding(for: event, modifiers: modifiers, settings: settings),
               binding.isValid,
               ShortcutRegistry.isAssignable(binding),
-              ShortcutCommand.allCases.contains(where: { settings.activeShortcut(for: $0) == binding }),
+              let command = ShortcutRegistry.command(
+                for: binding,
+                overrides: settings.shortcutOverrides
+              ),
               let canonicalEvent = canonicalEvent(from: event, binding: binding)
         else { return false }
+
+        // The menu can only carry one key equivalent per command. Alternate
+        // keys (⌘+ on a Spanish layout, ⇧⌘= on a US one) are dispatched here.
+        guard let active = settings.activeShortcut(for: command) else { return false }
+        guard active == binding else {
+            guard active == command.definition.factoryDefault else { return false }
+            return performAlternate?(command) ?? false
+        }
         guard hasEnabledMatchingMenuItem(for: canonicalEvent, in: menu) else { return false }
         return menu.performKeyEquivalent(with: canonicalEvent)
+    }
+
+    /// Layout-aware binding. The physical key wins when a command is assigned
+    /// to it (the shortcut recorder stores ANSI key codes, so a Spanish `+`
+    /// key is stored as `⌘]`). Only an unassigned physical key falls back to
+    /// the produced `+` character, which is how the timeline zoom alternate
+    /// works on layouts where `+` has its own key.
+    private static func physicalBinding(
+        for event: NSEvent,
+        modifiers: Set<ShortcutModifier>,
+        settings: AppSettings
+    ) -> ShortcutBinding? {
+        let physical = ShortcutPhysicalKeyMapper.binding(
+            for: event.keyCode,
+            modifiers: modifiers
+        )
+        if let physical,
+           ShortcutRegistry.command(for: physical, overrides: settings.shortcutOverrides) != nil {
+            return physical
+        }
+        let characters = event.charactersIgnoringModifiers ?? event.characters
+        if characters == "+" {
+            return ShortcutBinding("+", modifiers: modifiers)
+        }
+        return physical
     }
 
     private static func hasEnabledMatchingMenuItem(for event: NSEvent, in menu: NSMenu) -> Bool {
