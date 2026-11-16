@@ -220,7 +220,6 @@ struct ScriptEditorView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.tertiaryText)
                 }
-                ResearchSceneBadge(sceneID: scene.id)
                 UXSceneMetaChips(scene: scene)
             }
             .font(.system(size: 13))

@@ -60,15 +60,16 @@ final class UXSnapshotTests: FrameScriptTestCase {
 
         switch sizeCase.label {
         case "1440x900":
-            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): wide labels missing")
-            XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
-            XCTAssertTrue(text.contains { $0.contains("Grabar toma") }, "\(name): production label missing")
-        case "1180x760":
-            // The inspector narrows the text column: Insert and Production
-            // keep their labels, AI collapses to icons.
+            // 1440 with the inspector open collapses Proyecto; Insertar keeps
+            // its labels. The layout test covers the exact stage boundaries.
             XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
-            XCTAssertTrue(text.contains { $0.contains("Grabar toma") }, "\(name): Production labels missing")
-            XCTAssertFalse(text.contains { $0.contains("Analizar escena") }, "\(name): AI should be icon-only")
+            XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
+            XCTAssertFalse(text.contains { $0.contains("Resolve") }, "\(name): Proyecto must be icons")
+        case "1180x760":
+            // The inspector narrows the text column: Insertar is the group that
+            // keeps its labels; IA, Producción and Proyecto are icon buttons.
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
+            XCTAssertFalse(text.contains { $0.contains("Resolve") }, "\(name): Proyecto must be icons")
             XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
         default:
             XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
@@ -94,6 +95,24 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 "\(name): scene duration content missing"
             )
             XCTAssertTrue(text.contains { $0.contains("Tomas") }, "\(name): takes card missing")
+        case .research:
+            XCTAssertTrue(
+                text.contains { $0.contains("Afirmaciones de la escena") },
+                "\(name): research summary missing"
+            )
+            XCTAssertTrue(
+                text.contains { $0.contains("El circuito se reasfaltó en 2025") },
+                "\(name): scene claim missing"
+            )
+        case .production:
+            XCTAssertTrue(
+                text.contains { $0.contains("Tareas de la escena") },
+                "\(name): production summary missing"
+            )
+            XCTAssertTrue(
+                text.contains { $0.contains("Grabar el gancho") },
+                "\(name): scene task missing"
+            )
         }
     }
 
@@ -158,6 +177,24 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     XCTAssertTrue(
                         result.textFragments.contains { $0.contains("Última toma") },
                         "\(name): latest take status missing"
+                    )
+                case .research:
+                    XCTAssertTrue(
+                        result.textFragments.contains { $0.contains("Afirmaciones de la escena") },
+                        "\(name): research tab content missing"
+                    )
+                    XCTAssertTrue(
+                        result.textFragments.contains { $0.contains("Abrir Investigación") },
+                        "\(name): research open button missing"
+                    )
+                case .production:
+                    XCTAssertTrue(
+                        result.textFragments.contains { $0.contains("Tareas de la escena") },
+                        "\(name): production tab content missing"
+                    )
+                    XCTAssertTrue(
+                        result.textFragments.contains { $0.contains("Abrir Producción") },
+                        "\(name): production open button missing"
                     )
                 }
             }
@@ -245,11 +282,11 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 assertRendered(result, name: name)
                 XCTAssertTrue(
                     result.textFragments.contains { $0.contains("Pausa corta") },
-                    "\(name): disabled bar should keep its labels at this width"
+                    "\(name): Insertar should keep its labels at this width"
                 )
                 XCTAssertTrue(
                     result.textFragments.contains { $0.contains("Grabar toma") },
-                    "\(name): disabled production actions missing"
+                    "\(name): disabled production action missing"
                 )
             }
         }
@@ -294,15 +331,15 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 assertRendered(result, name: name)
                 XCTAssertTrue(
                     result.textFragments.contains { $0.contains("Pausa corta") },
-                    "\(name): insert actions should stay available without AI"
+                    "\(name): Insertar should stay labeled without AI"
                 )
             }
         }
     }
 
-    // MARK: - Middle label stage
+    // MARK: - Proyecto label stage
 
-    func testActionBarUsesMiddleLabelsWhenFullLabelsDoNotFit() {
+    func testActionBarKeepsInsertAndProductionLabelsAt760() {
         let project = makeProject()
         let (appState, _) = makeSnapshotAppState(project: project, inspectorTab: .ai)
         let scene = project.scenes.sortedByOrder[0]
@@ -312,7 +349,7 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 colorScheme: appearance.colorScheme,
                 accent: appState.settings.accentColor
             )
-            let name = "ux-action-bar-middle-labels-1180x760-\(appearance.rawValue)"
+            let name = "ux-action-bar-insert-production-1180x760-\(appearance.rawValue)"
             let result = SnapshotRenderer.render(
                 VStack(alignment: .leading, spacing: 10) {
                     Text(scene.title)
@@ -320,8 +357,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     Text("1:15 estimado · 186 palabras")
                         .font(.system(size: 13))
                         .foregroundStyle(theme.secondaryText)
-                    // Too narrow for the full label set, wide enough for the
-                    // Insert and Production labels. AI stays icon-only.
+                    // Proyecto and IA have collapsed; Insertar and Producción
+                    // keep their labels.
                     UXEditorActionBar(sceneID: scene.id)
                         .frame(width: 760)
                     Spacer()
@@ -338,15 +375,19 @@ final class UXSnapshotTests: FrameScriptTestCase {
             assertRendered(result, name: name)
             XCTAssertTrue(
                 result.textFragments.contains { $0.contains("Pausa corta") },
-                "\(name): Insert labels should survive the middle stage"
+                "\(name): Insertar must keep its label"
             )
             XCTAssertTrue(
                 result.textFragments.contains { $0.contains("Grabar toma") },
-                "\(name): Production labels should survive the middle stage"
+                "\(name): Producción must keep its label"
             )
             XCTAssertFalse(
                 result.textFragments.contains { $0.contains("Analizar escena") },
-                "\(name): AI should be icon-only in the middle stage"
+                "\(name): IA should be icon-only in this stage"
+            )
+            XCTAssertFalse(
+                result.textFragments.contains { $0.contains("Investigación") },
+                "\(name): Proyecto should be icon-only in this stage"
             )
         }
     }
@@ -397,6 +438,181 @@ final class UXSnapshotTests: FrameScriptTestCase {
             XCTAssertTrue(
                 result.textFragments.contains { $0.contains(tooltip) },
                 "\(name): tooltip text missing"
+            )
+        }
+    }
+
+    // MARK: - Proyecto wiring snapshots
+
+    func testProjectActionBarSnapshots() {
+        let project = makeProject()
+        let (appState, inspector) = makeSnapshotAppState(project: project, inspectorTab: .ai)
+
+        for size in [SizeCase(label: "1180x760", size: CGSize(width: 1180, height: 760)),
+                     SizeCase(label: "980x712", size: CGSize(width: 980, height: 712))] {
+            for appearance in SnapshotAppearance.allCases {
+                let name = "ux-project-action-bar-\(size.label)-\(appearance.rawValue)"
+                let result = SnapshotRenderer.render(
+                    AppShellView(inspectorState: inspector),
+                    name: name,
+                    suite: "UXSnapshotTests",
+                    size: size.size,
+                    appearance: appearance,
+                    language: .spanish,
+                    appState: appState
+                )
+                assertRendered(result, name: name)
+                XCTAssertTrue(
+                    result.textFragments.contains { $0.contains("Pausa corta") },
+                    "\(name): Insertar must keep its labels"
+                )
+                XCTAssertFalse(
+                    result.textFragments.contains { $0.contains("Grabar toma") },
+                    "\(name): Producción must have collapsed to icons"
+                )
+                XCTAssertFalse(
+                    result.textFragments.contains { $0.contains("Resolve") },
+                    "\(name): Proyecto must have collapsed to icons"
+                )
+                // The scene header keeps a single research chip, not a badge
+                // plus a chip.
+                XCTAssertTrue(
+                    result.textFragments.contains { $0.contains("por verificar") },
+                    "\(name): the scene research chip is missing"
+                )
+            }
+        }
+    }
+
+    func testProjectInspectorTabsSnapshots() {
+        for tab in [UXInspectorTab.research, .production] {
+            let project = makeProject()
+            let (appState, inspector) = makeSnapshotAppState(project: project, inspectorTab: tab)
+
+            for size in [SizeCase(label: "1180x760", size: CGSize(width: 1180, height: 760)),
+                         SizeCase(label: "980x712", size: CGSize(width: 980, height: 712))] {
+                for appearance in SnapshotAppearance.allCases {
+                    let theme = FrameTheme(
+                        colorScheme: appearance.colorScheme,
+                        accent: appState.settings.accentColor
+                    )
+                    let name = "ux-inspector-\(tab.rawValue)-\(size.label)-\(appearance.rawValue)"
+                    let result = SnapshotRenderer.render(
+                        HStack(spacing: 0) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Escena de ejemplo")
+                                    .font(.system(size: 30, weight: .semibold))
+                                Text("El guion sigue visible mientras el panel lateral trabaja.")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(theme.secondaryText)
+                                Spacer()
+                            }
+                            .padding(48)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .background(theme.editorSurface)
+
+                            Divider()
+                                .overlay(theme.divider)
+
+                            UXInspectorPanel(state: inspector)
+                                .frame(width: 292)
+                        },
+                        name: name,
+                        suite: "UXSnapshotTests",
+                        size: size.size,
+                        appearance: appearance,
+                        language: .spanish,
+                        appState: appState
+                    )
+                    assertRendered(result, name: name)
+
+                    switch tab {
+                    case .research:
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Afirmaciones de la escena") },
+                            "\(name): research summary missing"
+                        )
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("El circuito se reasfaltó en 2025") },
+                            "\(name): scene claim missing"
+                        )
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Verificar antes de grabar") },
+                            "\(name): verification checkbox missing"
+                        )
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Abrir Investigación") },
+                            "\(name): open button missing"
+                        )
+                    case .production:
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Tareas de la escena") },
+                            "\(name): production summary missing"
+                        )
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Grabar el gancho") },
+                            "\(name): scene task missing"
+                        )
+                        XCTAssertFalse(
+                            result.textFragments.contains { $0.contains("El circuito se reasfaltó en 2025") },
+                            "\(name): E-2 research copy leaked into the production tab"
+                        )
+                        XCTAssertTrue(
+                            result.textFragments.contains { $0.contains("Abrir Producción") },
+                            "\(name): open button missing"
+                        )
+                    default:
+                        XCTFail("unexpected tab \(tab)")
+                    }
+                }
+            }
+        }
+    }
+
+    func testSceneResearchChipSnapshots() {
+        let project = makeProject()
+        let (appState, inspector) = makeSnapshotAppState(
+            project: project,
+            inspectorTab: .research
+        )
+        let scene = project.scenes.sortedByOrder[0]
+
+        for appearance in SnapshotAppearance.allCases {
+            let theme = FrameTheme(
+                colorScheme: appearance.colorScheme,
+                accent: appState.settings.accentColor
+            )
+            let name = "ux-scene-research-chip-\(appearance.rawValue)"
+            let result = SnapshotRenderer.render(
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(scene.title)
+                        .font(.system(size: 30, weight: .semibold))
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("1:15 · 186 palabras")
+                        UXSceneMetaChips(scene: scene)
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.secondaryText)
+                    Spacer()
+                }
+                .environment(inspector)
+                .padding(48)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading),
+                name: name,
+                suite: "UXSnapshotTests",
+                size: CGSize(width: 980, height: 712),
+                appearance: appearance,
+                language: .spanish,
+                appState: appState
+            )
+            assertRendered(result, name: name)
+            XCTAssertTrue(
+                result.textFragments.contains { $0.contains("por verificar") },
+                "\(name): research chip text missing"
+            )
+            XCTAssertFalse(
+                result.textFragments.contains { $0 == "2" },
+                "\(name): the old count-only research badge is still visible"
             )
         }
     }
@@ -485,6 +701,49 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 duration: 74,
                 rating: .good
             )
+        ]
+        // Synthetic research and production work for the Proyecto snapshots.
+        // No real script or personal data: the text is invented fixture copy.
+        project.claims = [
+            ProjectClaim(
+                text: "El circuito se reasfaltó en 2025",
+                status: .probable,
+                sceneIDs: [scene.id],
+                needsVerification: true
+            ),
+            ProjectClaim(
+                text: "La batería dura ocho horas de grabación",
+                status: .communityOpinion,
+                sceneIDs: [scene.id],
+                needsVerification: true
+            ),
+            ProjectClaim(
+                text: "El volante tiene levas de carbono",
+                status: .confirmed,
+                sceneIDs: [scene.id],
+                needsVerification: false
+            )
+        ]
+        project.checklistTasks = [
+            ChecklistTask(
+                text: "Grabar el gancho con el plano de la recta",
+                kind: .record,
+                sceneID: scene.id
+            ),
+            ChecklistTask(
+                text: "Guardar el material de la cámara lenta",
+                kind: .acquire,
+                isDone: true,
+                sceneID: scene.id
+            ),
+            // Mirror copy created for the pending claim above. The production
+            // snapshot hides it (E-2); the inspector must not resurrect it.
+            ChecklistTask(
+                text: "El circuito se reasfaltó en 2025",
+                kind: .research,
+                sceneID: scene.id
+            ),
+            ChecklistTask(text: "Publicar el jueves", kind: .other)
         ]
         return project
     }

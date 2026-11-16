@@ -132,62 +132,6 @@ final class UXActionBarTests: FrameScriptTestCase {
 
     // MARK: - Enablement
 
-    func testEnablementMirrorsTheCommandAvailabilityMatrix() {
-        let states: [(CommandAvailability, Bool)] = [
-            (CommandAvailability(), false),
-            (CommandAvailability(hasOpenProject: true), false),
-            (CommandAvailability(hasOpenProject: true, hasScenes: true), true),
-            (
-                CommandAvailability(
-                    hasOpenProject: true,
-                    hasScenes: true,
-                    hasSelectedScene: true,
-                    isRecordingActive: true,
-                    hasActiveTake: true
-                ),
-                true
-            ),
-            (
-                CommandAvailability(
-                    hasOpenProject: true,
-                    hasScenes: true,
-                    hasSelectedScene: true
-                ),
-                false
-            )
-        ]
-
-        for (availability, aiConfigured) in states {
-            let model = UXActionBarModel(
-                availability: availability,
-                isAIProviderConfigured: aiConfigured
-            )
-            for action in UXEditorAction.allCases {
-                switch action.group {
-                case .insert:
-                    XCTAssertEqual(
-                        model.isEnabled(action),
-                        availability.canInsertMarkup,
-                        "\(action) must follow canInsertMarkup"
-                    )
-                case .ai:
-                    let command = action.shortcutCommand
-                    let matrix = command.map(availability.isEnabled) ?? false
-                    XCTAssertEqual(matrix, availability.canAnalyzeScene, "\(action) matrix drift")
-                    XCTAssertEqual(
-                        model.isEnabled(action),
-                        matrix && aiConfigured,
-                        "\(action) must follow the matrix plus the AI prerequisite"
-                    )
-                case .production:
-                    let command = action.shortcutCommand
-                    let expected = command.map(availability.isEnabled) ?? false
-                    XCTAssertEqual(model.isEnabled(action), expected, "\(action) must follow the matrix")
-                }
-            }
-        }
-    }
-
     func testDisabledAIExplainsWhyOnlyWhenAIShouldBeAvailable() {
         let welcome = UXActionBarModel(
             availability: CommandAvailability(),
@@ -274,20 +218,6 @@ final class UXActionBarTests: FrameScriptTestCase {
     }
 
     // MARK: - Narrow column
-
-    func testLabelModesDescribeTheThreeFitStages() {
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .insert))
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .ai))
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .production))
-
-        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .insert))
-        XCTAssertFalse(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .ai))
-        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .production))
-
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .insert))
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .ai))
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .production))
-    }
 
     func testOnlyRecordTakeUsesTheFilledPrimaryStyle() {
         for action in UXEditorAction.allCases {

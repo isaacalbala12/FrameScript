@@ -254,18 +254,16 @@ struct CommandPaletteView: View {
             appState.selectMode(.avScript)
         case .exportAVScript:
             appState.exportAVScript(format: .markdown)
-        case .assets:
-            appState.isAssetsPresented = true
-        case .publishingPack:
-            appState.showPublishingPanel()
-        case .researchPanel:
-            appState.openResearchPanel()
+        case .assets, .publishingPack, .researchPanel, .resolvePack, .productionChecklist:
+            // Same dispatcher as the menu and the action bar; the palette is a
+            // sheet, so sheet presentations wait for it to dismiss.
+            UXProjectCommandDispatcher.perform(
+                command,
+                appState: appState,
+                presentation: .afterSheetDismissal
+            )
         case .showBoard:
             appState.showBoardWindow()
-        case .resolvePack:
-            ResolvePackPresenter.shared.presentAfterPaletteDismissal(
-                languageCode: appState.resolvePackDefaultLanguageCode
-            )
         case .commandPalette:
             break
         case .toggleContentsPanel:
@@ -280,8 +278,6 @@ struct CommandPaletteView: View {
             appState.toggleRecordingTake()
         case .toggleRecordingPanel:
             appState.recording.isPanelVisible.toggle()
-        case .productionChecklist:
-            ProductionPresentation.shared.presentAfterPaletteDismissal()
         case .analyzeCurrentScene:
             appState.settings.editorPreferences.showAIReviewPanel = true
             Task { await appState.analyzeSelectedScene() }

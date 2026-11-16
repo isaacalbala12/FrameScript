@@ -182,9 +182,7 @@ struct FrameScriptProductionApp: App {
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .export))
                 .disabled(!commands.canExportProject)
             Button(appState.localized("resolvePack.menu")) {
-                ResolvePackPresenter.shared.present(
-                    languageCode: appState.resolvePackDefaultLanguageCode
-                )
+                UXProjectCommandDispatcher.perform(.resolvePack, appState: appState)
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .resolvePack))
             .disabled(!commands.canExportResolvePack)
@@ -256,15 +254,19 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("ux.inspector.toggle"), isOn: aiReviewPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleAIReview))
                 .disabled(!commands.canToggleAIReview)
-            Button(appState.localized("research.menu")) { appState.openResearchPanel() }
-                .configuredKeyboardShortcut(appState.shortcutBinding(for: .researchPanel))
-                .disabled(!commands.canShowResearch)
+            Button(appState.localized("research.menu")) {
+                UXProjectCommandDispatcher.perform(.researchPanel, appState: appState)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .researchPanel))
+            .disabled(!commands.canShowResearch)
             Toggle(appState.localized("command.toggleFocus"), isOn: $appState.isFocusModeEnabled)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleFocusMode))
                 .disabled(!commands.canToggleFocusMode)
-            Button(appState.localized("menu.assets")) { appState.isAssetsPresented = true }
-                .configuredKeyboardShortcut(appState.shortcutBinding(for: .assets))
-                .disabled(!commands.canShowAssets)
+            Button(appState.localized("menu.assets")) {
+                UXProjectCommandDispatcher.perform(.assets, appState: appState)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .assets))
+            .disabled(!commands.canShowAssets)
             Button(appState.localized("toolbar.commandPalette")) { appState.isCommandPalettePresented = true }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .commandPalette))
             Button(appState.localized("command.showShortcuts")) { appState.isShortcutsPresented = true }
@@ -332,9 +334,11 @@ struct FrameScriptProductionApp: App {
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
                 .disabled(!commands.canGenerateForScene)
             Divider()
-            Button(appState.localized("publishing.menu.open")) { appState.showPublishingPanel() }
-                .configuredKeyboardShortcut(appState.shortcutBinding(for: .publishingPack))
-                .disabled(!commands.canShowPublishing)
+            Button(appState.localized("publishing.menu.open")) {
+                UXProjectCommandDispatcher.perform(.publishingPack, appState: appState)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .publishingPack))
+            .disabled(!commands.canShowPublishing)
             Divider()
             // A take must always be stoppable, even when the project was closed
             // while OBS was still writing (lifecycle P1-1).
@@ -345,7 +349,7 @@ struct FrameScriptProductionApp: App {
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleRecordingPanel))
                 .disabled(!commands.canToggleRecordingPanel)
             Button(appState.localized("production.menu")) {
-                ProductionPresentation.shared.present()
+                UXProjectCommandDispatcher.perform(.productionChecklist, appState: appState)
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .productionChecklist))
             .disabled(!commands.canShowProductionChecklist)
