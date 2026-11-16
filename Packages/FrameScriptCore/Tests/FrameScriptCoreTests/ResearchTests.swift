@@ -106,7 +106,7 @@ struct ResearchTests {
         #expect(counts.probable == 3)
         #expect(counts.rumor == 1)
         #expect(counts.communityOpinion == 1)
-        #expect(counts.pending == 4)
+        #expect(counts.pending == 5)
         #expect(counts.total == 7)
         #expect(counts.count(for: .rumor) == 1)
         #expect(counts.statusParts.map(\.status) == [.confirmed, .probable, .rumor, .communityOpinion])
@@ -163,7 +163,7 @@ struct ResearchTests {
             sources: [source(id: sourceID, title: "Timing oficial")],
             claims: [
                 claim(text: "Pendiente", sourceIDs: [sourceID], sceneIDs: [sceneID], needsVerification: true),
-                claim(text: "Resuelta", sceneIDs: [sceneID], needsVerification: false)
+                claim(text: "Resuelta", status: .confirmed, sceneIDs: [sceneID], needsVerification: false)
             ]
         )
 

@@ -107,14 +107,20 @@ struct ResearchVerifyTab: View {
                 .disabled(appState.project.sources.isEmpty && appState.project.claims.isEmpty)
 
                 Button(appState.localized("research.verify.addToDescription")) {
-                    if appState.appendResearchToPublishingDescription() {
+                    let language = PublishingPresentation.shared.selectedLanguageCode
+                        ?? appState.project.primaryLanguage
+                    switch appState.appendResearchToPublishingDescription(language: language) {
+                    case .added:
                         presentation.statusMessage = appState.localized("research.verify.addedToDescription")
-                    } else {
+                    case .createdPack:
+                        presentation.statusMessage = appState.localized("research.verify.descriptionCreated")
+                    case .alreadyPresent:
                         presentation.statusMessage = appState.localized("research.verify.descriptionExists")
+                    case .empty:
+                        presentation.statusMessage = appState.localized("research.verify.descriptionEmpty")
                     }
                 }
-                .buttonStyle(.cursorPlain)
-                .font(.system(size: 12, weight: .medium))
+                .buttonStyle(FrameSecondaryButtonStyle(compact: true))
                 .disabled(appState.project.sources.isEmpty && appState.project.claims.isEmpty)
             }
         }

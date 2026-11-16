@@ -8,6 +8,11 @@ public struct BoardPendingLabels: Sendable, Equatable {
     public var edit: String
     public var research: String
     public var manual: String
+    public var publish: String
+    /// Localized labels for the eight publishing checklist items, keyed by
+    /// `PublishingChecklistItem.rawValue`. A raw token must never reach a board
+    /// card or a Plane work item (NEW-1).
+    public var publishingChecklistTitles: [String: String]
     /// Separator between the kind label and the scene title, for example `"Grabar · Intro"`.
     public var separator: String
 
@@ -17,6 +22,8 @@ public struct BoardPendingLabels: Sendable, Equatable {
         edit: String,
         research: String,
         manual: String,
+        publish: String = "Publish",
+        publishingChecklistTitles: [String: String] = BoardPendingLabels.englishPublishingChecklistTitles,
         separator: String = " · "
     ) {
         self.record = record
@@ -24,6 +31,8 @@ public struct BoardPendingLabels: Sendable, Equatable {
         self.edit = edit
         self.research = research
         self.manual = manual
+        self.publish = publish
+        self.publishingChecklistTitles = publishingChecklistTitles
         self.separator = separator
     }
 
@@ -33,9 +42,27 @@ public struct BoardPendingLabels: Sendable, Equatable {
         case .conseguirBroll: bRoll
         case .editar: edit
         case .investigar: research
+        case .publicar: publish
         case .manual: manual
         }
     }
+
+    public func label(for item: PublishingChecklistItem) -> String {
+        publishingChecklistTitles[item.rawValue]
+            ?? Self.englishPublishingChecklistTitles[item.rawValue]
+            ?? item.rawValue
+    }
+
+    public static let englishPublishingChecklistTitles: [String: String] = [
+        PublishingChecklistItem.chosenTitle.rawValue: "Title chosen",
+        PublishingChecklistItem.thumbnailExported.rawValue: "Thumbnail exported",
+        PublishingChecklistItem.descriptionWithChaptersAndSources.rawValue: "Description with chapters and sources",
+        PublishingChecklistItem.tags.rawValue: "Tags",
+        PublishingChecklistItem.pinnedComment.rawValue: "Pinned comment",
+        PublishingChecklistItem.endScreen.rawValue: "End screen",
+        PublishingChecklistItem.communityPost.rawValue: "Community post",
+        PublishingChecklistItem.subtitlesReviewed.rawValue: "Subtitles reviewed"
+    ]
 
     public static let english = BoardPendingLabels(
         record: "Record",
@@ -46,19 +73,13 @@ public struct BoardPendingLabels: Sendable, Equatable {
     )
 }
 
-/// Derives the board's pending production tasks from a project document.
+/// Derives the board's pending production tasks from the same Core rules as the
+/// Production checklist (G-2, E-4, E-5).
 ///
-/// This is a deliberately small local derivation (the app has no shared
-/// production planner yet) behind a protocol so a richer planner can replace
-/// it without touching the board:
-///
-/// - Scenes that still need a recording before the project is marked recorded.
-/// - B-roll items that are not `done`.
-/// - Editing notes that are not `done`.
-/// - Checklist tasks that are not done, mapped to the closest Plane kind.
-///
-/// Published projects report no pending work: leftover checkboxes on a
-/// published video are bookkeeping, not board work.
+/// Using one provider keeps the board card, the Plane plan and Producción from
+/// disagreeing about recording, asset-less B-roll, research claims or the
+/// publishing checklist. Published projects report no pending work: leftover
+/// checkboxes on a published video are bookkeeping, not board work.
 public protocol BoardPendingTaskProviding: Sendable {
     func pendingTasks(
         for project: FrameScriptDocument.Project,
@@ -66,7 +87,7 @@ public protocol BoardPendingTaskProviding: Sendable {
     ) -> [BoardPendingTask]
 }
 
-public struct BoardPendingTaskDeriver: BoardPendingTaskProviding {
+public struct ProductionBoardPendingTaskProvider: BoardPendingTaskProviding {
     public init() {}
 
     public func pendingTasks(
@@ -74,108 +95,96 @@ public struct BoardPendingTaskDeriver: BoardPendingTaskProviding {
         labels: BoardPendingLabels = .english
     ) -> [BoardPendingTask] {
         guard project.productionStatus != .published else { return [] }
+        let primaryLanguage = ProductionLanguage.normalized(project.primaryLanguage)
 
-        let primaryLanguage = BoardLanguage.normalized(project.primaryLanguage)
-        let scenes = project.scenes.sorted { $0.order < $1.order }
-        var tasks: [BoardPendingTask] = []
-        var seen: Set<String> = []
-
-        let recordsRecording = project.productionStatus == .idea
-            || project.productionStatus == .outline
-            || project.productionStatus == .script
-
-        for scene in scenes {
-            let sceneTitle = BoardText.fallbackSceneTitle(scene.title, order: scene.order)
-
-            if recordsRecording,
-               !BoardTakeSelection.hasUsableTake(
-                   in: scene,
-                   primaryLanguage: primaryLanguage
-               ),
-               !scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let id = "\(scene.id.uuidString):record"
-                if seen.insert(id).inserted {
-                    tasks.append(
-                        BoardPendingTask(
-                            id: id,
-                            kind: .grabar,
-                            title: "\(labels.record)\(labels.separator)\(sceneTitle)",
-                            sceneTitle: sceneTitle
-                        )
-                    )
-                }
-            }
-
-            for item in scene.bRollItems where item.status != .done {
-                let id = "\(scene.id.uuidString):broll:\(item.id.uuidString)"
-                guard seen.insert(id).inserted else { continue }
-                let detail = BoardText.firstNonEmpty(item.descriptionText, item.templateType, item.notes)
-                tasks.append(
-                    BoardPendingTask(
-                        id: id,
-                        kind: .conseguirBroll,
-                        title: BoardText.taskTitle(
-                            label: labels.bRoll,
-                            scene: sceneTitle,
-                            detail: detail,
-                            separator: labels.separator
-                        ),
-                        sceneTitle: sceneTitle
-                    )
-                )
-            }
-
-            for item in scene.editingItems where item.status != .done {
-                let id = "\(scene.id.uuidString):edit:\(item.id.uuidString)"
-                guard seen.insert(id).inserted else { continue }
-                let detail = BoardText.firstNonEmpty(item.cutStyle, item.transition, item.notes)
-                tasks.append(
-                    BoardPendingTask(
-                        id: id,
-                        kind: .editar,
-                        title: BoardText.taskTitle(
-                            label: labels.edit,
-                            scene: sceneTitle,
-                            detail: detail,
-                            separator: labels.separator
-                        ),
-                        sceneTitle: sceneTitle
-                    )
-                )
-            }
-        }
-
-        for task in project.checklistTasks where !task.isDone {
-            let id = "\(task.id.uuidString):checklist"
-            guard seen.insert(id).inserted else { continue }
-            let sceneTitle = scenes.first(where: { $0.id == task.sceneID })
-                .map { BoardText.fallbackSceneTitle($0.title, order: $0.order) } ?? ""
-            let kind = BoardPendingTaskDeriver.planeKind(for: task.kind)
-            let text = task.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let title = text.isEmpty
-                ? "\(labels.label(for: kind))\(labels.separator)\(sceneTitle)"
-                : text
-            tasks.append(
+        return ProductionChecklist.items(for: project)
+            .filter { !$0.isDone }
+            .map { item in
                 BoardPendingTask(
-                    id: id,
-                    kind: kind,
-                    title: title,
-                    sceneTitle: sceneTitle
+                    id: item.id,
+                    kind: Self.planeKind(for: item.kind),
+                    title: Self.title(
+                        for: item,
+                        labels: labels,
+                        primaryLanguage: primaryLanguage
+                    ),
+                    sceneTitle: item.sceneTitle
                 )
-            )
-        }
-
-        return tasks
+            }
     }
 
-    static func planeKind(for kind: FrameScriptDocument.ChecklistTaskKind) -> PlaneTaskKind {
+    static func planeKind(for kind: ProductionItemKind) -> PlaneTaskKind {
         switch kind {
         case .record: .grabar
         case .acquire: .conseguirBroll
         case .edit: .editar
         case .research: .investigar
+        case .publish: .publicar
         case .other: .manual
         }
+    }
+
+    static func title(
+        for item: ProductionItem,
+        labels: BoardPendingLabels,
+        primaryLanguage: String
+    ) -> String {
+        let sceneTitle = resolvedSceneTitle(for: item)
+        let detail = item.sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch item.kind {
+        case .record:
+            guard !sceneTitle.isEmpty else { return labels.record }
+            return "\(labels.record)\(labels.separator)\(sceneTitle)"
+        case .acquire:
+            return BoardText.taskTitle(
+                label: labels.bRoll,
+                scene: sceneTitle,
+                detail: detail,
+                separator: labels.separator
+            )
+        case .edit:
+            return BoardText.taskTitle(
+                label: labels.edit,
+                scene: sceneTitle,
+                detail: detail,
+                separator: labels.separator
+            )
+        case .research:
+            if !detail.isEmpty { return detail }
+            return BoardText.taskTitle(
+                label: labels.research,
+                scene: sceneTitle,
+                detail: "",
+                separator: labels.separator
+            )
+        case .publish:
+            let itemTitle = item.reason.publishingChecklistItem.map { labels.label(for: $0) }
+                ?? labels.publish
+            var title = "\(labels.publish)\(labels.separator)\(itemTitle)"
+            if let code = item.languageCode,
+               !code.isEmpty,
+               ProductionLanguage.normalized(code) != primaryLanguage {
+                title += " (\(code))"
+            }
+            return title
+        case .other:
+            if !detail.isEmpty { return detail }
+            return BoardText.taskTitle(
+                label: labels.manual,
+                scene: sceneTitle,
+                detail: "",
+                separator: labels.separator
+            )
+        }
+    }
+
+    private static func resolvedSceneTitle(for item: ProductionItem) -> String {
+        if !item.sceneTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return item.sceneTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard item.sceneID != nil, let order = item.sceneOrder else { return "" }
+        return BoardText.fallbackSceneTitle("", order: order)
     }
 }
 
@@ -352,7 +361,7 @@ public enum BoardProjectSummaryBuilder {
         fileURL: URL,
         fingerprint: BoardFileFingerprint,
         labels: BoardPendingLabels = .english,
-        pendingProvider: any BoardPendingTaskProviding = BoardPendingTaskDeriver()
+        pendingProvider: any BoardPendingTaskProviding = ProductionBoardPendingTaskProvider()
     ) -> BoardProjectSummary {
         makeSummary(
             project: document.project,
@@ -368,7 +377,7 @@ public enum BoardProjectSummaryBuilder {
         fileURL: URL,
         fingerprint: BoardFileFingerprint,
         labels: BoardPendingLabels = .english,
-        pendingProvider: any BoardPendingTaskProviding = BoardPendingTaskDeriver()
+        pendingProvider: any BoardPendingTaskProviding = ProductionBoardPendingTaskProvider()
     ) -> BoardProjectSummary {
         let language = BoardLanguage.normalized(project.primaryLanguage)
         let learned = project.learnedWordsPerMinuteByLanguage

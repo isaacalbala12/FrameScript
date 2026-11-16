@@ -130,6 +130,54 @@ final class ResearchSnapshotTests: XCTestCase {
         }
     }
 
+    func testW3FixEGIStaleClaimAnchorShowsWarningAndRelinkAction() throws {
+        let appState = makeAppState()
+        ResearchPresentation.shared.selectedTab = .claims
+        ResearchPresentation.shared.focusedSceneID = nil
+        ResearchSnapshotSupport.prepareSelection(appState: appState, tab: .claims)
+
+        var claim = try XCTUnwrap(appState.project.claims.first { $0.text == "El parche sale en mayo" })
+        claim.anchorSceneID = claim.sceneIDs.first
+        claim.anchor = TextAnchor(
+            startUTF16: 0,
+            lengthUTF16: 6,
+            selectedText: "ZZZZZZ"
+        )
+        appState.updateResearchClaim(claim)
+
+        let view = ResearchPanelView()
+            .environment(appState)
+            .environment(\.frameTheme, FrameTheme(colorScheme: .light, accent: .sage))
+            .preferredColorScheme(.light)
+            .frame(width: 1180, height: 760)
+
+        let result = try ResearchSnapshotSupport.render(
+            view,
+            width: 1180,
+            height: 760,
+            appearance: NSAppearance(named: .aqua),
+            shouldRecognizeText: true
+        )
+
+        if ProcessInfo.processInfo.environment["FS_SNAPSHOTS"] == "1" {
+            try ResearchSnapshotSupport.writePNG(
+                result,
+                name: "research-stale-anchor-light-1180x760",
+                branchFolder: branchFolder
+            )
+        }
+
+        let joined = result.recognizedText.map(\.text.compactForSnapshotMatch).joined()
+        XCTAssertTrue(
+            joined.contains("yanocoincide"),
+            "The stale anchor warning is not visible; OCR: \(result.recognizedText.map(\.text))"
+        )
+        XCTAssertTrue(
+            joined.contains("volveravincular"),
+            "The re-link action is not visible; OCR: \(result.recognizedText.map(\.text))"
+        )
+    }
+
     // MARK: - Invariants
 
     private func assertLayout(
@@ -193,6 +241,20 @@ final class ResearchSnapshotTests: XCTestCase {
             joined.contains(sampleText),
             "\(expectedName): missing Spanish sample text \(sampleText); OCR: \(recognized.map(\.text).prefix(50))"
         )
+
+        if tab == .claims {
+            // VW5: the two research actions must read as buttons. OCR proves
+            // the labels are on-canvas; the style itself is asserted by the
+            // shared style tests.
+            XCTAssertTrue(
+                joined.contains("nuevaafirmacion"),
+                "\(expectedName): missing Nueva afirmación; OCR: \(recognized.map(\.text).prefix(50))"
+            )
+            XCTAssertTrue(
+                joined.contains("vincular"),
+                "\(expectedName): missing Vincular; OCR: \(recognized.map(\.text).prefix(50))"
+            )
+        }
 
         // Key labels must be fully on-canvas and must not overlap each other.
         var framesByLabel: [String: NSRect] = [:]

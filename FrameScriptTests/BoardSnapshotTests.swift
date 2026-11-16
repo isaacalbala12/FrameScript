@@ -22,6 +22,9 @@ final class BoardSnapshotTests: XCTestCase {
         try super.setUpWithError()
         harness = try BoardTestHarness()
         let harness = harness!
+        // Snapshot renders must be deterministic: the fixture is already
+        // scanned, so opening the view must not start a second scan (NEW-4).
+        harness.board.scansOnAppear = false
         addTeardownBlock { harness.tearDown() }
     }
 
@@ -45,13 +48,17 @@ final class BoardSnapshotTests: XCTestCase {
                 )
                 assertInvariants(
                     result,
-                    expectedSpanish: ["Tablero", "Estado", "Juego", "carpeta"]
+                    expectedSpanish: [
+                        "Tablero", "Estado", "Juego", "carpeta",
+                        "Editar clasificación", "Exportar pendientes a Plane"
+                    ]
                 )
             }
         }
 
         harness.board.layout = .list
         harness.board.grouping = .topic
+        harness.board.selectedProjectID = harness.board.summaries.first?.id
 
         for appearance in appearances {
             for variant in sizes {
@@ -188,6 +195,49 @@ final class BoardSnapshotTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testW3FixEGIBoardSettingsWarnAboutPlainHTTP() throws {
+        harness.plane.settings.baseURL = "http://192.168.1.20:8080"
+        let result = try render(
+            BoardSettingsCanvas {
+                BoardSettingsView(
+                    store: harness.board,
+                    catalog: harness.catalog,
+                    plane: harness.plane
+                )
+            },
+            size: sizes[0].size,
+            appearance: .light,
+            name: "board-settings-insecure"
+        )
+        assertInvariants(result, expectedSpanish: ["HTTP sin cifrar"])
+    }
+
+    func testW3FixEGIBoardSnapshotDoesNotStartAScanOnRender() async throws {
+        try await harness.prepareSampleBoard()
+        harness.board.selectedProjectID = harness.board.summaries.first?.id
+
+        XCTAssertFalse(harness.board.isScanning)
+        let result = try render(
+            BoardRootView(
+                store: harness.board,
+                catalog: harness.catalog,
+                plane: harness.plane
+            ),
+            size: sizes[0].size,
+            appearance: .light,
+            name: "board-no-rescan"
+        )
+
+        XCTAssertFalse(harness.board.isScanning)
+        let joined = result.labels.joined(separator: " ").folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "es_ES")
+        )
+        XCTAssertFalse(joined.contains("scanning"), "labels: \(joined)")
+        XCTAssertFalse(joined.contains("analizando"), "labels: \(joined)")
+        assertInvariants(result, expectedSpanish: ["Tablero", "Estado"])
     }
 
     // MARK: Helpers

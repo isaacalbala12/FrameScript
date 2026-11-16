@@ -110,7 +110,7 @@ extension FrameProject {
             rhythmThresholdsOverride: rhythmThresholdsOverride,
             sources: sources.map { $0.copied(context: context) },
             claims: claims.map { $0.copied(context: context) },
-            comparisonTables: comparisonTables.map { $0.copied() },
+            comparisonTables: comparisonTables.map { $0.copied(context: &context) },
             glossary: glossary.map { $0.copied() },
             clips: clips.map { $0.copied(context: context) },
             versionHistory: versionHistory.map { $0.copied() },
@@ -336,8 +336,14 @@ extension ProjectClaim {
 }
 
 extension ComparisonTable {
-    func copied() -> ComparisonTable {
-        ComparisonTable(id: UUID(), title: title, header: header, rows: rows, sceneID: sceneID)
+    func copied(context: inout ModelCopyContext) -> ComparisonTable {
+        ComparisonTable(
+            id: UUID(),
+            title: title,
+            header: header,
+            rows: rows,
+            sceneID: context.sceneID(sceneID)
+        )
     }
 }
 

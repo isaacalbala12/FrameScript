@@ -200,7 +200,8 @@ public struct BoardLibraryScanner: Sendable {
                     BoardProjectSummaryBuilder.makeSummary(
                         document: document,
                         fileURL: fileURL,
-                        fingerprint: fingerprint
+                        fingerprint: fingerprint,
+                        labels: request.labels
                     )
                 )
                 decoded += 1

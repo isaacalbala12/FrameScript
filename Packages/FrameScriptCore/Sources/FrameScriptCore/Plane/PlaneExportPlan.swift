@@ -59,6 +59,7 @@ public struct PlaneExportLabels: Sendable, Equatable {
         .conseguirBroll: "Get B-roll",
         .editar: "Edit",
         .investigar: "Research",
+        .publicar: "Publish",
         .manual: "Manual"
     ]
 }

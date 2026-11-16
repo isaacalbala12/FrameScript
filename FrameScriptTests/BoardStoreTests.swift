@@ -181,7 +181,7 @@ final class BoardStoreTests: XCTestCase {
         XCTAssertEqual(disk.project.productionStatus, .published)
     }
 
-    func testOpenProjectWriteUsesTheAppSavePathAndKeepsTheDocumentInSync() async throws {
+    func testOpenProjectWriteOnlyMarksTheProjectDirtyAndLeavesTheDiskUntouched() async throws {
         let url = try harness.writeProject(
             BoardTestHarness.makeDocument(
                 title: "Abierto",
@@ -198,6 +198,10 @@ final class BoardStoreTests: XCTestCase {
             harness.appState.projectStore.currentFileURL?.standardizedFileURL,
             url.standardizedFileURL
         )
+        let diskBefore = try Data(contentsOf: url)
+
+        // Unrelated unsaved edit that a board write must not persist (NEW-2).
+        harness.appState.project.title = "Título sin guardar"
 
         await harness.refresh()
         let summary = try XCTUnwrap(harness.board.index.summary(forFileAt: url))
@@ -207,19 +211,25 @@ final class BoardStoreTests: XCTestCase {
             appState: harness.appState
         )
 
-        guard case .saved = outcome else {
+        guard case .saved(let updated) = outcome else {
             return XCTFail("Expected a saved outcome, got \(outcome)")
         }
         XCTAssertEqual(harness.appState.project.topic, "Vantare")
         XCTAssertEqual(harness.appState.project.productionStatus, .recorded)
-        XCTAssertFalse(harness.appState.projectStore.hasUnsavedFileChanges)
+        XCTAssertTrue(harness.appState.projectStore.hasUnsavedFileChanges)
+        XCTAssertEqual(updated.topic, "Vantare")
+        XCTAssertEqual(updated.productionStatus, .recorded)
 
+        // The board edit and the unrelated title stay in memory; the file is
+        // written later by the normal save or autosave path.
+        XCTAssertEqual(harness.appState.project.title, "Título sin guardar")
+        XCTAssertEqual(try Data(contentsOf: url), diskBefore)
         let disk = try FrameScriptDocumentCodec.read(from: url)
-        XCTAssertEqual(disk.project.topic, "Vantare")
-        XCTAssertEqual(disk.project.productionStatus, .recorded)
+        XCTAssertEqual(disk.project.topic, "iRacing")
+        XCTAssertEqual(disk.project.productionStatus, .script)
     }
 
-    func testOpenProjectReloadPromptIsNotReportedAsASavedBoardEdit() async throws {
+    func testOpenProjectBoardEditLeavesTheExternalFileForTheNormalSavePath() async throws {
         let url = try harness.writeProject(
             BoardTestHarness.makeDocument(
                 title: "Original",
@@ -254,11 +264,15 @@ final class BoardStoreTests: XCTestCase {
             appState: harness.appState
         )
 
-        guard case .conflict(let refreshed) = outcome else {
-            return XCTFail("A reload prompt must not look like a successful save: \(outcome)")
+        // The board edit is an in-memory edit of the open project. The app's
+        // normal save path (not the board) detects the external change and asks
+        // the user before overwriting anything.
+        guard case .saved(let updated) = outcome else {
+            return XCTFail("Expected the open-project edit to stay in memory: \(outcome)")
         }
-        XCTAssertEqual(refreshed?.title, "Versión externa")
-        XCTAssertEqual(harness.appState.project.topic, "Vantare")
+        XCTAssertEqual(updated.topic, "No debe quedar")
+        XCTAssertEqual(harness.appState.project.topic, "No debe quedar")
+        XCTAssertTrue(harness.appState.projectStore.hasUnsavedFileChanges)
         let disk = try FrameScriptDocumentCodec.read(from: url)
         XCTAssertEqual(disk.project.topic, "Vantare")
         XCTAssertEqual(disk.project.title, "Versión externa")
@@ -279,7 +293,7 @@ final class BoardStoreTests: XCTestCase {
         await harness.refresh()
         let summary = try XCTUnwrap(harness.board.index.summary(forFileAt: url))
 
-        XCTAssertTrue(harness.appState.openBoardProject(summary, activatesApplication: false))
+        XCTAssertEqual(harness.appState.openBoardProject(summary, activatesApplication: false), .opened)
         XCTAssertEqual(
             harness.appState.projectStore.currentFileURL?.standardizedFileURL,
             url.standardizedFileURL
@@ -378,7 +392,7 @@ final class BoardStoreTests: XCTestCase {
             harness.board.summaries.first { $0.title.contains("Análisis de la actualización") }
         )
 
-        let plan = harness.board.planePlan(for: summary, appState: harness.appState)
+        let plan = await harness.board.planePlan(for: summary, appState: harness.appState)
         XCTAssertEqual(plan.entries.count, summary.pending.total)
         XCTAssertTrue(plan.entries.contains { $0.task.title.contains("Grabar ·") })
         XCTAssertTrue(plan.entries.contains { $0.task.title.contains("Conseguir B-roll ·") })

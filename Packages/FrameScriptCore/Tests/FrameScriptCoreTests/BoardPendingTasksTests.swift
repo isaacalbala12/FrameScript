@@ -26,7 +26,7 @@ struct BoardPendingTasksTests {
             ]
         )
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(for: document.project, labels: .english)
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(for: document.project, labels: .english)
 
         #expect(tasks.count == 1)
         #expect(tasks[0].kind == .grabar)
@@ -34,7 +34,7 @@ struct BoardPendingTasksTests {
         #expect(tasks[0].sceneTitle == "Con texto")
     }
 
-    @Test func goodTakeRemovesTheRecordingTaskAndRecordedStageNeverAsksToRecord() {
+    @Test func goodTakeRemovesTheRecordingTaskEvenAfterTheScriptStage() {
         let text = "Texto del guion."
         let hash = FrameScriptDocument.TextHash.hash(text)
         let scene = boardScene(
@@ -43,13 +43,20 @@ struct BoardPendingTasksTests {
             text: text,
             takes: [boardTake(duration: 40, rating: .good, sceneTextHash: hash)]
         )
-        let deriver = BoardPendingTaskDeriver()
+        let provider = ProductionBoardPendingTaskProvider()
 
-        #expect(deriver.pendingTasks(for: document(status: .script, scenes: [scene]).project).isEmpty)
+        #expect(provider.pendingTasks(for: document(status: .script, scenes: [scene]).project).isEmpty)
+        #expect(provider.pendingTasks(for: document(status: .recorded, scenes: [scene]).project).isEmpty)
+    }
 
-        let unrecorded = boardScene(order: 0, title: "Sin grabar", text: text)
-        let recorded = deriver.pendingTasks(for: document(status: .recorded, scenes: [unrecorded]).project)
-        #expect(recorded.isEmpty)
+    @Test func recordedStageStillAsksForAMissingTake() {
+        // Production, the board and Plane share one rule: the status alone does
+        // not prove that a usable take exists (G-2).
+        let unrecorded = boardScene(order: 0, title: "Sin grabar", text: "Texto.")
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
+            for: document(status: .recorded, scenes: [unrecorded]).project
+        )
+        #expect(tasks.map(\.kind) == [.grabar])
     }
 
     @Test func staleTakeDoesNotCountAsRecorded() {
@@ -60,7 +67,7 @@ struct BoardPendingTasksTests {
             takes: [boardTake(duration: 40, rating: .good, sceneTextHash: "hash-viejo")]
         )
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
             for: document(status: .script, scenes: [scene]).project
         )
         #expect(tasks.map(\.kind) == [.grabar])
@@ -81,13 +88,14 @@ struct BoardPendingTasksTests {
             ]
         )
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
             for: document(status: .recorded, scenes: [scene]).project
         )
 
-        #expect(tasks.map(\.kind) == [.conseguirBroll, .editar])
-        #expect(tasks[0].title.contains("Plano de podio"))
-        #expect(tasks[1].title.contains("Zoom"))
+        #expect(tasks.map(\.kind) == [.grabar, .conseguirBroll, .conseguirBroll, .editar])
+        #expect(tasks[1].title.contains("Plano de podio"))
+        #expect(tasks[2].title.contains("Plano ya listo"))
+        #expect(tasks[3].title.contains("Zoom"))
     }
 
     @Test func checklistTasksMapToPlaneKindsAndUseTheirOwnText() {
@@ -101,11 +109,11 @@ struct BoardPendingTasksTests {
             FrameScriptDocument.ChecklistTask(text: "Hecho", kind: .other, isDone: true)
         ]
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
             for: document(status: .edited, scenes: [scene], checklist: checklist).project
         )
 
-        #expect(tasks.map(\.kind) == [.grabar, .conseguirBroll, .editar, .investigar, .manual])
+        #expect(tasks.map(\.kind) == [.grabar, .grabar, .conseguirBroll, .editar, .investigar, .manual])
         #expect(tasks.first?.sceneTitle == "Escena")
         #expect(tasks.last?.title == "Publicar")
     }
@@ -123,7 +131,7 @@ struct BoardPendingTasksTests {
             checklist: [FrameScriptDocument.ChecklistTask(text: "Pendiente", kind: .other)]
         )
 
-        #expect(BoardPendingTaskDeriver().pendingTasks(for: document.project).isEmpty)
+        #expect(ProductionBoardPendingTaskProvider().pendingTasks(for: document.project).isEmpty)
     }
 
     @Test func customLabelsAreUsedInGeneratedTitles() {
@@ -137,7 +145,7 @@ struct BoardPendingTasksTests {
         )
         let scene = boardScene(order: 0, title: "Intro", text: "Texto.")
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
             for: document(status: .script, scenes: [scene]).project,
             labels: labels
         )
@@ -166,6 +174,72 @@ struct BoardPendingTasksTests {
         #expect(plane.projectID == "project-id")
         #expect(plane.kind == .editar)
         #expect(plane.dueDate?.iso8601 == "2027-01-15")
+    }
+
+    @Test func boardPendingCountsExactlyMatchTheProductionChecklist() {
+        let scene = boardScene(
+            order: 0,
+            title: "Escena",
+            text: "Texto sin grabar.",
+            bRollItems: [
+                FrameScriptDocument.BRollItem(descriptionText: "Sin material", status: .idea),
+                FrameScriptDocument.BRollItem(descriptionText: "Hecho sin archivo", status: .done)
+            ],
+            editingItems: [FrameScriptDocument.EditingItem(cutStyle: "Montar")]
+        )
+        let claims = [
+            FrameScriptDocument.Claim(text: "Dato uno", status: .probable, needsVerification: true),
+            FrameScriptDocument.Claim(text: "Dato dos", status: .probable, needsVerification: true)
+        ]
+        let checklist = [
+            FrameScriptDocument.ChecklistTask(text: "Dato uno", kind: .research),
+            FrameScriptDocument.ChecklistTask(text: "Dato dos", kind: .research),
+            FrameScriptDocument.ChecklistTask(text: "Hecho", kind: .other, isDone: true),
+            FrameScriptDocument.ChecklistTask(
+                text: PublishingChecklistItem.endScreen.taskToken,
+                kind: .other
+            )
+        ]
+        let document = boardDocument(
+            status: .recorded,
+            publishingPacks: ["es": FrameScriptDocument.PublishingPack(description: "Descripción")],
+            checklistTasks: checklist,
+            claims: claims,
+            scenes: [scene]
+        )
+
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
+            for: document.project,
+            labels: BoardPendingLabels(
+                record: "Grabar",
+                bRoll: "Conseguir B-roll",
+                edit: "Montar",
+                research: "Investigar",
+                manual: "Tarea",
+                publish: "Publicar",
+                publishingChecklistTitles: [
+                    PublishingChecklistItem.endScreen.rawValue: "Pantalla final"
+                ]
+            )
+        )
+        let production = ProductionChecklist.summary(for: document.project)
+
+        #expect(tasks.count == production.totalPending)
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.grabar }.count == production.pendingCount(for: .record))
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.conseguirBroll }.count == production.pendingCount(for: .acquire))
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.editar }.count == production.pendingCount(for: .edit))
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.investigar }.count == production.pendingCount(for: .research))
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.publicar }.count == production.pendingCount(for: .publish))
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.manual }.count == production.pendingCount(for: .other))
+        // Recorded status with no usable take still asks for the recording.
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.grabar }.count == 1)
+        // A done B-roll item without a linked asset still asks for the file.
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.conseguirBroll }.count == 2)
+        // The duplicated claim task is not counted twice.
+        #expect(tasks.filter { $0.kind == PlaneTaskKind.investigar }.count == 2)
+        // The publishing token becomes a human label, not a raw token.
+        #expect(tasks.contains { $0.kind == PlaneTaskKind.publicar && $0.title == "Publicar · Pantalla final" })
+        #expect(!tasks.contains { $0.title.hasPrefix("publishing.checklist.") })
     }
 
     @Test func summaryBuilderFallsBackToMarkupEstimateWhenTheStoredEstimateIsMissing() {

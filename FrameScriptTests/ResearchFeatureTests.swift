@@ -53,7 +53,7 @@ final class ResearchFeatureTests: XCTestCase {
         XCTAssertEqual(counts.confirmed, 1)
         XCTAssertEqual(counts.probable, 1)
         XCTAssertEqual(counts.communityOpinion, 1)
-        XCTAssertEqual(counts.pending, 1)
+        XCTAssertEqual(counts.pending, 2)
         XCTAssertEqual(appState.researchUnconfirmedCount(for: first.id), 1)
         XCTAssertEqual(appState.researchUnconfirmedCount(for: second.id), 1)
     }
@@ -248,12 +248,12 @@ final class ResearchFeatureTests: XCTestCase {
         _ = appState.addResearchSource(title: "Timing oficial", url: "https://example.com/timing")
         _ = appState.addResearchClaim(text: "El récord es 1:42.3", needsVerification: true)
 
-        XCTAssertTrue(appState.appendResearchToPublishingDescription())
+        XCTAssertEqual(appState.appendResearchToPublishingDescription(language: "es"), .createdPack)
         let description = appState.project.publishingPacks["es"]?.description ?? ""
         XCTAssertTrue(description.hasPrefix("Fuentes y verificación"))
         XCTAssertTrue(description.contains("Timing oficial"))
 
-        XCTAssertFalse(appState.appendResearchToPublishingDescription())
+        XCTAssertEqual(appState.appendResearchToPublishingDescription(language: "es"), .alreadyPresent)
         XCTAssertEqual(appState.project.publishingPacks["es"]?.description, description)
     }
 

@@ -5,6 +5,14 @@ import Observation
 
 // MARK: - Presentation state
 
+/// Result of "Add to description" in the research panel.
+enum ResearchDescriptionAppendOutcome: Equatable {
+    case added
+    case createdPack
+    case alreadyPresent
+    case empty
+}
+
 enum ResearchTab: String, CaseIterable, Identifiable {
     case sources
     case claims
@@ -91,7 +99,7 @@ extension AppState {
     func openResearchPanel(sceneID: UUID? = nil) {
         guard hasOpenProject else { return }
         ResearchPresentation.shared.open(sceneID: sceneID)
-        ResearchWindowPresenter.shared.show(appState: self)
+        researchWindowPresenter(self)
     }
 
     var coreResearchProject: FrameScriptDocument.Project {
@@ -117,8 +125,14 @@ extension AppState {
     func researchPendingItems() -> [ResearchPendingItem] {
         ResearchSummary.pendingItems(
             claims: coreResearchClaims,
-            sourceTitlesByID: Dictionary(uniqueKeysWithValues: project.sources.map { ($0.id, $0.title) }),
-            sceneTitlesByID: Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0.title) })
+            sourceTitlesByID: Dictionary(
+                project.sources.map { ($0.id, $0.title) },
+                uniquingKeysWith: { first, _ in first }
+            ),
+            sceneTitlesByID: Dictionary(
+                project.scenes.map { ($0.id, $0.title) },
+                uniquingKeysWith: { first, _ in first }
+            )
         )
     }
 
@@ -152,7 +166,7 @@ extension AppState {
         let presentation = ResearchPresentation.shared
         return project.claims.filter { claim in
             guard presentation.statusFilter.contains(claim.status) else { return false }
-            if presentation.onlyPending, !claim.needsVerification { return false }
+            if presentation.onlyPending, !claim.needsResearch { return false }
             if let sceneID = presentation.focusedSceneID, !claim.sceneIDs.contains(sceneID) {
                 return false
             }
@@ -241,7 +255,7 @@ extension AppState {
         )
         project.claims.append(claim)
         ResearchPresentation.shared.selectedClaimID = claim.id
-        if claim.needsVerification {
+        if claim.needsResearch {
             _ = syncPendingClaimsToChecklist()
         } else {
             touchProject()
@@ -267,14 +281,26 @@ extension AppState {
         }
         if updated.status == .confirmed, !wasConfirmed {
             project.checklistTasks = markingChecklistResolved(for: updated)
-        } else if previous.needsVerification, !updated.needsVerification {
+        } else if previous.needsResearch, !updated.needsResearch {
             project.checklistTasks = markingChecklistResolved(for: updated)
+        } else if !previous.needsResearch, updated.needsResearch {
+            _ = syncPendingClaimsToChecklist()
         }
         touchProject()
     }
 
     func deleteResearchClaim(id: UUID) {
+        let deleted = project.claims.first { $0.id == id }
         project.claims.removeAll { $0.id == id }
+        if let deleted {
+            // The delete confirmation promises the claim also leaves the
+            // checklist. Only its open research task is removed; a completed
+            // task keeps the history of work that did happen (I-2).
+            let coreTasks = project.checklistTasks.map(FrameScriptDocument.ChecklistTask.init(task:))
+            project.checklistTasks = ResearchChecklist
+                .removing(claimText: deleted.text, in: coreTasks)
+                .map { $0.makeTask() }
+        }
         if ResearchPresentation.shared.selectedClaimID == id {
             ResearchPresentation.shared.selectedClaimID = project.claims.first?.id
         }
@@ -287,6 +313,8 @@ extension AppState {
         if status == .confirmed {
             project.claims[index].needsVerification = false
             project.checklistTasks = markingChecklistResolved(for: project.claims[index])
+        } else if project.claims[index].needsResearch {
+            _ = syncPendingClaimsToChecklist()
         }
         touchProject()
     }
@@ -295,7 +323,7 @@ extension AppState {
         guard let index = project.claims.firstIndex(where: { $0.id == id }) else { return }
         project.claims[index].needsVerification.toggle()
         touchProject()
-        if project.claims[index].needsVerification {
+        if project.claims[index].needsResearch {
             _ = syncPendingClaimsToChecklist()
         } else {
             project.checklistTasks = markingChecklistResolved(for: project.claims[index])
@@ -349,6 +377,27 @@ extension AppState {
             project.claims[index].sourceIDs = unique(project.claims[index].sourceIDs)
         }
         touchProject()
+    }
+
+    /// Resolves the claim's stored anchor against the current scene text. The
+    /// card uses this instead of trusting `anchor.selectedText` (I-4).
+    func researchClaimAnchorState(_ claim: ProjectClaim) -> ResearchClaimAnchorState {
+        guard let anchor = claim.anchor else { return .none }
+        guard let sceneID = claim.anchorSceneID,
+              let scene = project.scenes.first(where: { $0.id == sceneID }) else {
+            return .missingScene
+        }
+        let coreAnchor = FrameScriptDocument.TextAnchor(
+            startUTF16: anchor.startUTF16,
+            lengthUTF16: anchor.lengthUTF16,
+            selectedText: anchor.selectedText,
+            prefixContext: anchor.prefixContext,
+            suffixContext: anchor.suffixContext
+        )
+        if let current = FrameScriptDocument.TextAnchorRepair.current(coreAnchor, in: scene.scriptText) {
+            return .current(text: current.selectedText)
+        }
+        return .stale(storedText: anchor.selectedText)
     }
 
     /// Creates or repairs the claim anchor from a typed fragment. Returns false
@@ -421,24 +470,29 @@ extension AppState {
             .map { $0.makeTask() }
     }
 
-    /// Appends the "Fuentes y verificación" block to the current-language
-    /// publishing description. Returns false when the block is empty or already
-    /// present.
+    /// Appends the "Fuentes y verificación" block to the publishing description
+    /// for the language the Publishing panel is showing. A missing pack is
+    /// created deliberately and reported, so the user is never surprised by
+    /// three new publishing rows (I-6).
     @discardableResult
-    func appendResearchToPublishingDescription() -> Bool {
+    func appendResearchToPublishingDescription(language: String) -> ResearchDescriptionAppendOutcome {
         let block = ResearchExport.descriptionBlock(project: coreResearchProject)
-        guard !block.isEmpty else { return false }
-        let language = project.primaryLanguage
-        var pack = project.publishingPacks[language] ?? PublishingPack()
+        guard !block.isEmpty else { return .empty }
+        let key = publishingStorageKey(for: language)
+        guard var pack = project.publishingPacks[key] else {
+            project.publishingPacks[key] = PublishingPack(description: block)
+            touchProject()
+            return .createdPack
+        }
         guard !pack.description.localizedCaseInsensitiveContains(ResearchExport.appendixHeading) else {
-            return false
+            return .alreadyPresent
         }
         pack.description = pack.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? block
             : pack.description + "\n\n" + block
-        project.publishingPacks[language] = pack
+        project.publishingPacks[key] = pack
         touchProject()
-        return true
+        return .added
     }
 
     func researchAppendix() -> String {

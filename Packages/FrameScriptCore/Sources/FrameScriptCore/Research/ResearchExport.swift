@@ -88,8 +88,8 @@ public enum ResearchExport {
 
         if !project.claims.isEmpty {
             lines.append("### Afirmaciones")
-            let scenesByID = Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0) })
-            let sourcesByID = Dictionary(uniqueKeysWithValues: project.sources.map { ($0.id, $0) })
+            let scenesByID = Dictionary(project.scenes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let sourcesByID = Dictionary(project.sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for claim in project.claims {
                 let status = claimStatusLabel(claim.status)
                 let marker = claim.needsVerification && !claim.personalExperience ? " · pendiente de verificación" : ""

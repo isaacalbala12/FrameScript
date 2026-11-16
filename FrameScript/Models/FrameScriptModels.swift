@@ -458,6 +458,11 @@ struct ProjectClaim: Identifiable, Codable, Hashable, Sendable {
     var personalExperience: Bool
     var resolutionNote: String
 
+    /// Shared pending rule with `ResearchSummary.isPending` (E-3, NEW-5).
+    var needsResearch: Bool {
+        !personalExperience && (status != .confirmed || needsVerification)
+    }
+
     init(
         id: UUID = UUID(),
         text: String,

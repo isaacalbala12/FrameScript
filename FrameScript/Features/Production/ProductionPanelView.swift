@@ -422,14 +422,8 @@ struct ProductionPanelView: View {
             return indexedTitle(appState.localized("production.item.editing"), index: item.sourceIndex)
         case .claimNeedsVerification:
             return appState.localized("production.item.claim")
-        case .publishingNeedsTitle:
-            return appState.localized("production.field.title")
-        case .publishingNeedsDescription:
-            return appState.localized("production.field.description")
-        case .publishingNeedsTags:
-            return appState.localized("production.field.tags")
-        case .publishingNeedsThumbnail:
-            return appState.localized("production.field.thumbnail")
+        case .publishingChecklist(let checklistItem):
+            return appState.localized(checklistItem.titleKey)
         case .manualTask:
             return appState.localized("production.item.task")
         }
@@ -535,6 +529,11 @@ private struct ProductionRow: View {
     let isManual: Bool
     let kindIcon: String
     let kindColor: Color
+
+    /// 4.5:1 at 10 pt on every surface; the icon keeps the original kind tint.
+    private var reasonColor: Color {
+        theme.ensuredText(kindColor)
+    }
     let onNavigate: () -> Void
     let onToggleDone: () -> Void
     let onEdit: () -> Void
@@ -562,7 +561,7 @@ private struct ProductionRow: View {
                 HStack(spacing: 5) {
                     Text(reason)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(kindColor)
+                        .foregroundStyle(reasonColor)
                     if let detail, !detail.isEmpty {
                         Text("·")
                             .font(.system(size: 10))

@@ -78,6 +78,14 @@ struct NewProjectRequest: Identifiable, Equatable {
     var showsTemplateBrowser = false
 }
 
+/// Result of a project-open attempt. Cancelling the unsaved-changes prompt is
+/// not a failure, and a real read failure already presents its own error (G-4).
+enum OpenProjectResult: Equatable {
+    case opened
+    case cancelled
+    case failed
+}
+
 /// What the user chose when the project file changed outside FrameScript.
 enum ExternalProjectChangeResolution {
     case reload
@@ -134,8 +142,13 @@ final class AppState {
     var recordingTeleprompter: any RecordingTeleprompterPresenting = LiveRecordingTeleprompter()
     /// Integration seam for production destinations whose panels live on
     /// another branch (publishing, research). Local destinations are handled by
-    /// `AppState+Production`.
+    /// `AppState+Production`. Assigned in `init` to the real adapter.
     var productionNavigator: (any ProductionNavigator)?
+    /// Test seam: the research navigator never orders a window front in tests.
+    /// Production leaves the default presenter in place.
+    var researchWindowPresenter: @MainActor (AppState) -> Void = { appState in
+        ResearchWindowPresenter.shared.show(appState: appState)
+    }
     /// Last accepted teleprompter learning sample, used to drop duplicate
     /// reports of the same reading.
     var lastTeleprompterLearningSignature: TeleprompterLearningSignature?
@@ -279,6 +292,7 @@ final class AppState {
         if projectStore.hasOpenProject {
             ProductionChecklistCenter.shared.refreshNow(project: project)
         }
+        self.productionNavigator = AppProductionNavigator(appState: self)
     }
 
     func configure() {
@@ -532,8 +546,9 @@ final class AppState {
         openProject(at: url)
     }
 
-    func openProject(at url: URL) {
-        guard prepareForProjectReplacement() else { return }
+    @discardableResult
+    func openProject(at url: URL) -> OpenProjectResult {
+        guard prepareForProjectReplacement() else { return .cancelled }
         do {
             let opened = try securityScope.withAccess(to: url) {
                 try FrameScriptFileStore.readWithData(from: url)
@@ -554,10 +569,12 @@ final class AppState {
             setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
             startTrackingProjectFile(at: url, data: opened.data)
             failedOpenProjectFileURL = nil
+            return .opened
         } catch {
             Self.projectFilesLogger.error("Operation project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             failedOpenProjectFileURL = url
             errorCenter.present(AppError.project(error, fileURL: url, operation: .read))
+            return .failed
         }
     }
 
@@ -2333,11 +2350,47 @@ final class ProjectStore {
               let storageIndex = project.scenes.firstIndex(where: { $0.id == scene.id }) else {
             return
         }
+        let removedID = scene.id
         project.scenes.remove(at: storageIndex)
         segmentedTextHashes[scene.id] = nil
         EditorMarkupSessionCaches.removeScene(scene.id)
+        removeReferences(to: removedID)
         normalizeSceneOrder()
         markProjectDirty()
+    }
+
+    /// Drops every cross-reference to a deleted scene so the document never
+    /// carries dangling claim, table, clip or task links into the next save
+    /// (I-7). v4 reads used to keep them forever because the legacy
+    /// normalization only ran for v1-v3.
+    private func removeReferences(to sceneID: UUID) {
+        for index in project.claims.indices {
+            project.claims[index].sceneIDs.removeAll { $0 == sceneID }
+            if project.claims[index].anchorSceneID == sceneID {
+                project.claims[index].anchorSceneID = nil
+                project.claims[index].anchor = nil
+            }
+        }
+        for index in project.comparisonTables.indices
+        where project.comparisonTables[index].sceneID == sceneID {
+            project.comparisonTables[index].sceneID = nil
+        }
+        for index in project.clips.indices {
+            project.clips[index].sourceSceneIDs.removeAll { $0 == sceneID }
+            if project.clips[index].anchorSceneID == sceneID {
+                project.clips[index].anchorSceneID = nil
+                project.clips[index].anchor = nil
+            }
+            let remaining = Set(project.clips[index].sourceSceneIDs)
+            project.clips[index].sceneSourceHashes.removeAll { !remaining.contains($0.sceneID) }
+        }
+        for index in project.checklistTasks.indices
+        where project.checklistTasks[index].sceneID == sceneID {
+            project.checklistTasks[index].sceneID = nil
+        }
+        for index in project.assets.indices {
+            project.assets[index].linkedSceneIDs.removeAll { $0 == sceneID }
+        }
     }
 
     func moveScene(at sortedIndex: Int, by delta: Int, wordsPerMinute: Int) {
