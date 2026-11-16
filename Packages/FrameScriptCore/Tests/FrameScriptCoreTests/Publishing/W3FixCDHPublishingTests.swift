@@ -176,12 +176,44 @@ struct W3FixCDHPublishingTests {
 
     private func resolveOptions(
         includeChapters: Bool = true,
-        writeInvalidChapters: Bool = false
+        writeInvalidChapters: Bool = false,
+        includeFCPXML: Bool = true,
+        includeChapterMarkersInFCPXML: Bool = true
     ) -> ResolvePackOptions {
         ResolvePackOptions(
+            includeFCPXML: includeFCPXML,
             includeChapters: includeChapters,
+            includeChapterMarkersInFCPXML: includeChapterMarkersInFCPXML,
             writeInvalidChapters: writeInvalidChapters
         )
+    }
+
+    private func publishingChapterList(
+        _ entries: [(seconds: Int, title: String)]
+    ) -> ChapterList {
+        let chapters = entries.enumerated().map { index, entry in
+            Chapter(
+                startFrame: Timecode(seconds: TimeInterval(entry.seconds), rate: .fps25).frames,
+                startSeconds: entry.seconds,
+                title: entry.title,
+                position: index + 1
+            )
+        }
+        return ChapterList(
+            chapters: chapters,
+            text: chapters.map { "\(DurationFormat.clock(seconds: $0.startSeconds)) \($0.title)" }
+                .joined(separator: "\n"),
+            warnings: [],
+            videoEndSeconds: 120
+        )
+    }
+
+    private var threeScenes: [ExportScene] {
+        [
+            ExportScene(title: "Uno", start: 0, duration: 20),
+            ExportScene(title: "Dos", start: 20, duration: 20),
+            ExportScene(title: "Tres", start: 40, duration: 20)
+        ]
     }
 
     @Test("W3FixCDH fewer than three chapters does not write a chapters file")
@@ -271,11 +303,103 @@ struct W3FixCDHPublishingTests {
         #expect(warning?.otherTitle == "Prueba")
         #expect(warning?.timestamp == "0:00")
     }
+    @Test("W3FixCDH chapter lists differ only when both outputs are written")
+    func chapterListsDifferOnlyWhenBothOutputsAreWritten() {
+        let publishingList = publishingChapterList([
+            (0, "Uno"), (25, "Dos"), (45, "Tres")
+        ])
+
+        let bothWritten = ResolveDeliveryPack.plan(
+            scenes: threeScenes,
+            projectName: "Prueba",
+            options: resolveOptions(),
+            chapters: publishingList
+        )
+        #expect(bothWritten.warningItems.contains { $0.kind.isChapterListsDiffer })
+
+        let fileNotWritten = ResolveDeliveryPack.plan(
+            scenes: threeScenes,
+            projectName: "Prueba",
+            options: resolveOptions(includeChapters: false),
+            chapters: publishingList
+        )
+        #expect(!fileNotWritten.warningItems.contains { $0.kind.isChapterListsDiffer })
+
+        let noFCPXMLMarkers = ResolveDeliveryPack.plan(
+            scenes: threeScenes,
+            projectName: "Prueba",
+            options: resolveOptions(includeChapterMarkersInFCPXML: false),
+            chapters: publishingList
+        )
+        #expect(!noFCPXMLMarkers.warningItems.contains { $0.kind.isChapterListsDiffer })
+
+        let identical = ResolveDeliveryPack.plan(
+            scenes: threeScenes,
+            projectName: "Prueba",
+            options: resolveOptions(),
+            chapters: nil
+        )
+        #expect(!identical.warningItems.contains { $0.kind.isChapterListsDiffer })
+    }
+
+    @Test("W3FixCDH chapter comparison ignores order but not content")
+    func chapterListComparisonUsesContent() {
+        let first = publishingChapterList([(0, "Uno"), (20, "Dos")])
+        let reordered = publishingChapterList([(20, "Dos"), (0, "Uno")])
+        let reworded = publishingChapterList([(0, "Uno"), (20, "Dos editado")])
+        let extra = publishingChapterList([(0, "Uno"), (20, "Dos"), (30, "Extra")])
+
+        #expect(!ResolveDeliveryPack.chapterListsDiffer(first, reordered))
+        #expect(ResolveDeliveryPack.chapterListsDiffer(first, reworded))
+        #expect(ResolveDeliveryPack.chapterListsDiffer(first, extra))
+    }
+
+    @Test("W3FixCDH sceneless chapters survive unless time and title are identical")
+    func scenelessChaptersAreOnlyDeduplicatedExactly() {
+        let plan = PublishingChapters.plan(
+            scenes: [
+                ChapterSceneInput(sceneID: UUID(), title: "Uno", duration: 30),
+                ChapterSceneInput(sceneID: UUID(), title: "Dos", duration: 30),
+                ChapterSceneInput(sceneID: UUID(), title: "Tres", duration: 30)
+            ]
+        )
+        let overrides = [
+            FrameScriptDocument.ChapterOverride(
+                sceneID: nil,
+                title: "Uno",
+                startSeconds: 0
+            ),
+            FrameScriptDocument.ChapterOverride(
+                sceneID: nil,
+                title: "Otra versión del gancho",
+                startSeconds: 0
+            ),
+            FrameScriptDocument.ChapterOverride(
+                sceneID: nil,
+                title: "Antes de la primera escena",
+                startSeconds: 10
+            )
+        ]
+
+        let chapters = PublishingChapters.escaletaChapters(
+            plan: plan,
+            importedOverrides: overrides
+        )
+
+        #expect(chapters.filter { $0.seconds == 0 && $0.title == "Uno" }.count == 1)
+        #expect(chapters.contains { $0.seconds == 0 && $0.title == "Otra versión del gancho" })
+        #expect(chapters.contains { $0.seconds == 10 && $0.title == "Antes de la primera escena" })
+    }
 }
 
 private extension ResolvePackWarning.Kind {
     var isChaptersOmitted: Bool {
         if case .chaptersOmitted = self { return true }
+        return false
+    }
+
+    var isChapterListsDiffer: Bool {
+        if case .chapterListsDiffer = self { return true }
         return false
     }
 }

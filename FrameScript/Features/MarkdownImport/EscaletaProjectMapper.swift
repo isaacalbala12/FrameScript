@@ -536,7 +536,13 @@ enum EscaletaProjectMapper {
             claimedScenes.insert(sceneID)
             sceneIDs[index] = sceneID
         }
-        for index in document.chapters.indices where sceneIDs[index] == nil {
+        let rangeOrder = document.chapters.indices.sorted { lhs, rhs in
+            let left = document.chapters[lhs].seconds
+            let right = document.chapters[rhs].seconds
+            if left == right { return lhs < rhs }
+            return left < right
+        }
+        for index in rangeOrder where sceneIDs[index] == nil {
             let chapter = document.chapters[index]
             guard let sceneID = sceneID(
                 for: chapter.seconds,

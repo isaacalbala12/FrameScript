@@ -425,6 +425,66 @@ final class W3FixCDHPublishingTests: XCTestCase {
         XCTAssertTrue(state.publishingStudioDescription(language: "es").contains("1:30 Vuelta rápida"))
     }
 
+    func testW3FixCDHUnsortedImportedChaptersClaimTheSceneInTimeOrder() {
+        let markdown = """
+        # Prueba
+
+        ## Escaleta
+
+        1. Gancho
+        2. Prueba
+        3. Cierre
+
+        ---
+
+        # Guion
+
+        ## 0:00 — Gancho
+
+        Texto de gancho con varias palabras para que dure lo suficiente.
+
+        ## 1:00 — Prueba
+
+        Texto de prueba con varias palabras para que dure lo suficiente.
+
+        ## 3:00 — Cierre
+
+        Texto de cierre con varias palabras para que dure lo suficiente.
+
+        ---
+
+        # Paquete SEO
+
+        ## Título recomendado
+
+        Prueba de capítulos
+
+        ## Descripción
+
+        Descripción de prueba.
+
+        ## Capítulos
+
+        00:00 Gancho
+        02:00 Segunda
+        01:30 Primera
+        03:00 Cierre
+        """
+        let parsed = EscaletaParser.parse(markdown)
+        let mapping = EscaletaProjectMapper.map(
+            parsed,
+            options: EscaletaMappingOptions(primaryLanguage: "es", wordsPerMinute: 150)
+        )
+        let overrides = mapping.project.publishingPacks["es"]?.chapterOverrides ?? []
+        let primera = overrides.first { Int(($0.startSeconds ?? 0).rounded()) == 90 }
+        let segunda = overrides.first { Int(($0.startSeconds ?? 0).rounded()) == 120 }
+
+        XCTAssertEqual(primera?.title, "Primera")
+        XCTAssertNotNil(primera?.sceneID, "the earliest range chapter must claim the scene")
+        XCTAssertEqual(segunda?.title, "Segunda")
+        XCTAssertNil(segunda?.sceneID, "the later chapter in the same scene must stay imported")
+    }
+
     func testW3FixCDHFooterIsNotReadyWithAnEmptyPackAndTwoOfEightChecks() {
         let project = makeProject()
         let state = fixture.makeState(project: project)

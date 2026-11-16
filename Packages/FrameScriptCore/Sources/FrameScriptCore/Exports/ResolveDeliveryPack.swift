@@ -375,6 +375,19 @@ public struct ResolvePackPlan: Sendable {
 }
 
 public enum ResolveDeliveryPack {
+    /// Compares chapter content, not formatting. Two lists with the same
+    /// (start second, title) entries in any order are the same list; a title
+    /// override, a different start or an extra imported chapter is a real
+    /// difference.
+    public static func chapterListsDiffer(_ lhs: ChapterList, _ rhs: ChapterList) -> Bool {
+        func signature(_ list: ChapterList) -> [String] {
+            list.chapters
+                .map { "\($0.startSeconds)|\($0.title)" }
+                .sorted()
+        }
+        return signature(lhs) != signature(rhs)
+    }
+
     /// Builds the plan and every warning the sheet shows before exporting.
     ///
     /// `extraWarnings` carries scene-mapping issues from the app (missing
@@ -432,7 +445,7 @@ public enum ResolveDeliveryPack {
                 ResolvePackWarning(kind: .chapter($0), message: $0.message)
             })
             if options.includeFCPXML && options.includeChapterMarkersInFCPXML,
-               timelineChapters.text != chapterList.text {
+               Self.chapterListsDiffer(timelineChapters, chapterList) {
                 warningItems.append(contentsOf: timelineChapters.warnings.map {
                     ResolvePackWarning(kind: .chapter($0), message: $0.message)
                 })
@@ -455,13 +468,17 @@ public enum ResolveDeliveryPack {
             )
         }
 
-        if chapterList.text != timelineChapters.text,
-           options.includeChapters
-            || (options.includeFCPXML && options.includeChapterMarkersInFCPXML) {
+        let chaptersFileWillBeWritten = options.includeChapters
+            && (chapterList.isValidForYouTube || options.writeInvalidChapters)
+        let fcpxmlHasChapterMarkers = options.includeFCPXML
+            && options.includeChapterMarkersInFCPXML
+        if chaptersFileWillBeWritten,
+           fcpxmlHasChapterMarkers,
+           Self.chapterListsDiffer(chapterList, timelineChapters) {
             warningItems.append(
                 ResolvePackWarning(
                     kind: .chapterListsDiffer,
-                    message: "El archivo de capítulos y los marcadores del FCPXML no coinciden: el archivo usa las duraciones de Publicación y el FCPXML la duración elegida en Resolve."
+                    message: "El archivo de capítulos y los marcadores del FCPXML no coinciden. Puede venir de las duraciones de las tomas frente a las estimaciones, o de capítulos importados sin escena que solo existen en el archivo."
                 )
             )
         }

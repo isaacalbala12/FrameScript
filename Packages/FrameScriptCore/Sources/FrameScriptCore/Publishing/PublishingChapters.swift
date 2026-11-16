@@ -281,8 +281,13 @@ public enum PublishingChapters {
                 title: chapter.title
             )
         }
-        let starts = Set(result.map(\.seconds))
-        for imported in importedChapters(importedOverrides) where !starts.contains(imported.seconds) {
+        // Only an exact (time, title) duplicate is dropped. A sceneless
+        // chapter at the same second but with a different title (or one before
+        // the first scene) must still reach the export.
+        var seen = Set(result.map { "\($0.seconds)|\($0.title)" })
+        for imported in importedChapters(importedOverrides) {
+            let key = "\(imported.seconds)|\(imported.title)"
+            guard seen.insert(key).inserted else { continue }
             result.append(imported)
         }
         return result.sorted { lhs, rhs in
