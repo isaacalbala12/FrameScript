@@ -568,7 +568,7 @@ private struct HookCard: View {
                 Button(appState.localized("hooks.insert")) {
                     onInsert()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.framePrimary)
                 .tint(theme.accent.color)
                 .disabled(!hook.isWithinLimit)
 
@@ -645,7 +645,7 @@ private struct RehookCard: View {
                 Button(appState.localized("hooks.insertRehook")) {
                     onInsert()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.framePrimary)
                 .tint(theme.accent.color)
                 .disabled(!suggestion.isWithinLimit)
 

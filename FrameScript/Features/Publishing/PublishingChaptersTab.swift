@@ -82,7 +82,7 @@ struct PublishingChaptersTab: View {
                 : "publishing.chapters.regenerate")) {
                 regenerate()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.framePrimary)
             .tint(theme.accent.color)
             .disabled(scenes.isEmpty)
             .accessibilityIdentifier("publishing-regenerate-chapters")
@@ -429,7 +429,7 @@ struct ChapterRegenerationSheet: View {
                 Button(appState.localized("publishing.chapters.diff.keep"), action: onKeep)
                     .buttonStyle(.bordered)
                 Button(appState.localized("publishing.chapters.diff.replace"), action: onReplace)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.framePrimary)
                     .tint(theme.accent.color)
             }
         }

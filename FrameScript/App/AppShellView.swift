@@ -984,7 +984,7 @@ private struct EmptyProjectView: View {
             Button(appState.localized("scene.add")) {
                 appState.addScene()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.framePrimary)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .clickableCursor()

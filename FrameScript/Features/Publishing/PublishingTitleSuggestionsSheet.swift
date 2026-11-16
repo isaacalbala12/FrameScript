@@ -68,7 +68,7 @@ struct PublishingTitleSuggestionsSheet: View {
                     appState.addPublishingTitleSuggestions(Array(selected), language: language)
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.framePrimary)
                 .tint(theme.accent.color)
                 .disabled(selected.isEmpty)
             }

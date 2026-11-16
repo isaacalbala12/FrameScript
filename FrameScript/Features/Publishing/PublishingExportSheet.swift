@@ -91,7 +91,7 @@ struct PublishingExportSheet: View {
                 Button(appState.localized("publishing.export.save")) {
                     saveFile()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.framePrimary)
                 .tint(theme.accent.color)
             }
         }

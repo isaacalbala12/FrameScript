@@ -579,7 +579,7 @@ struct ClipEditorView: View {
                         )
                         .font(.system(size: 12, weight: .medium))
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.framePrimary)
                     .controlSize(.small)
                     .disabled(isGenerating)
 
