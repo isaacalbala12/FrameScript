@@ -134,7 +134,8 @@ struct FullScriptEditorView: View {
             textColor: NSColor(theme.primaryText),
             secondaryTextColor: NSColor(theme.secondaryText),
             accentColor: NSColor(theme.accentText),
-            backgroundColor: NSColor(theme.editorSurface)
+            backgroundColor: NSColor(theme.editorSurface),
+            dividerColor: NSColor(theme.divider)
         )
     }
 

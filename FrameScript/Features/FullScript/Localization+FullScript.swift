@@ -19,7 +19,9 @@ extension L10n {
             "fullScript.collapse": "Collapse scene",
             "fullScript.expand": "Expand scene",
             "fullScript.headerClickHelp": "Click a scene header to collapse or expand it.",
-            "fullScript.undoTyping": "Typing"
+            "fullScript.undoTyping": "Typing",
+            "fullScript.deleteScene.message": "This removes scene \"%@\" (the one with the caret) and its Visuals and editing notes.",
+            "fullScript.renameScene.message": "Enter a new name for scene \"%@\" (the one with the caret)."
         ],
         .spanish: [
             "fullScript.sidebarEntry": "Guion completo",
@@ -38,7 +40,9 @@ extension L10n {
             "fullScript.collapse": "Contraer escena",
             "fullScript.expand": "Expandir escena",
             "fullScript.headerClickHelp": "Haz clic en la cabecera de una escena para contraerla o expandirla.",
-            "fullScript.undoTyping": "Escribir"
+            "fullScript.undoTyping": "Escribir",
+            "fullScript.deleteScene.message": "Se eliminará la escena \"%@\" (la que tiene el cursor), sus visuales y sus notas de edición.",
+            "fullScript.renameScene.message": "Introduce un nombre nuevo para la escena \"%@\" (la que tiene el cursor)."
         ],
         .russian: [
             "fullScript.sidebarEntry": "Полный сценарий",
@@ -57,7 +61,9 @@ extension L10n {
             "fullScript.collapse": "Свернуть сцену",
             "fullScript.expand": "Развернуть сцену",
             "fullScript.headerClickHelp": "Нажмите на заголовок сцены, чтобы свернуть или развернуть её.",
-            "fullScript.undoTyping": "Ввод текста"
+            "fullScript.undoTyping": "Ввод текста",
+            "fullScript.deleteScene.message": "Будет удалена сцена \"%@\" (с курсором), ее видеоряд и заметки монтажа.",
+            "fullScript.renameScene.message": "Введите новое название сцены \"%@\" (с курсором)."
         ]
     ]
 }

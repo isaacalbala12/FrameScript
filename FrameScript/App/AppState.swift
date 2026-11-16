@@ -170,6 +170,8 @@ final class AppState {
     /// Test/QA seam for the generic yes/no alert. Production leaves it `nil` and
     /// the alert runs modally.
     private let confirmationHandler: ConfirmationHandler?
+    /// Test/QA seam for the rename prompt. Production leaves it `nil`.
+    var promptHandler: (@MainActor (_ title: String, _ message: String, _ defaultValue: String) -> String?)?
     let saveProjectCopyHandler: (@MainActor () -> Bool)?
     let saveAsDestinationProvider: SaveAsDestinationProvider?
 
@@ -388,8 +390,10 @@ final class AppState {
         set { selectMode(newValue) }
     }
 
+    /// Scene every scene-scoped command acts on. In full-script mode that is
+    /// the scene that holds the caret (see `effectiveSelectedSceneID`).
     var selectedScene: Scene? {
-        projectStore.selectedScene(id: editorState.selectedSceneID)
+        projectStore.selectedScene(id: effectiveSelectedSceneID)
     }
 
     var hasOpenProject: Bool {
@@ -401,7 +405,7 @@ final class AppState {
     }
 
     var selectedSceneIndex: Int? {
-        projectStore.selectedSceneIndex(id: editorState.selectedSceneID)
+        projectStore.selectedSceneIndex(id: effectiveSelectedSceneID)
     }
 
     var totalDuration: TimeInterval {
@@ -822,6 +826,7 @@ final class AppState {
         settlePendingSaveForLifecycle()
         let copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
         editorState.resetScriptEditorStates()
+        discardFullScriptUndoHistory()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(copy.scenes.sortedByOrder.first?.id))
         notifyBoardOfProjectFileStateChange(at: replacedURL)
@@ -849,6 +854,7 @@ final class AppState {
         }
         projectStore.closeProject()
         editorState.resetScriptEditorStates()
+        discardFullScriptUndoHistory()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(nil))
         notifyBoardOfProjectFileStateChange(at: closedURL)
@@ -912,6 +918,7 @@ final class AppState {
             projectStore.deleteCurrentProject()
         }
         editorState.resetScriptEditorStates()
+        discardFullScriptUndoHistory()
         resetProjectFileTracking()
         notifyBoardOfProjectFileStateChange(at: deletedURL)
     }
@@ -968,6 +975,7 @@ final class AppState {
     private func willReplaceOpenProject() {
         aiState.isAnalyzing = false
         editorState.resetScriptEditorStates()
+        discardFullScriptUndoHistory()
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
     }
 
@@ -1200,7 +1208,7 @@ final class AppState {
         if hadActiveScriptEditor {
             projectStore.markProjectDirty()
         }
-        if let sceneID = editorState.selectedSceneID ?? selectedScene?.id {
+        if let sceneID = effectiveSelectedSceneID ?? selectedScene?.id {
             flushSegmentRebuild(for: sceneID)
         }
         if saveImmediately {
@@ -1391,7 +1399,7 @@ final class AppState {
         // Nothing to delete: do not ask for confirmation for a no-op.
         guard let selectedSceneIndex else { return }
         if settings.generalPreferences.confirmBeforeDeleting,
-           !confirm(title: localized("dialog.deleteScene.title"), message: localized("dialog.deleteScene.message")) {
+           !confirm(title: localized("dialog.deleteScene.title"), message: deleteSceneConfirmationMessage()) {
             return
         }
         // `selectedSceneIndex` is an index into visual (sorted) order, while
@@ -1403,8 +1411,10 @@ final class AppState {
             : orderedScenes.indices.contains(selectedSceneIndex - 1)
                 ? orderedScenes[selectedSceneIndex - 1].id
                 : orderedScenes.indices.contains(selectedSceneIndex) ? orderedScenes[selectedSceneIndex].id : nil
+        let wasFullScript = isFullScriptSelected
         transitionEditorContext(sceneID: .some(nextID)) {
             projectStore.deleteScene(at: selectedSceneIndex, wordsPerMinute: currentDurationWordsPerMinute)
+            if wasFullScript { editorState.fullScriptCaretSceneID = nextID }
             scheduleAutosaveIfNeeded()
         }
     }
@@ -1425,7 +1435,7 @@ final class AppState {
 
     func renameSelectedScene() {
         guard let scene = selectedScene,
-              let newName = prompt(title: localized("scene.rename"), message: localized("dialog.renameScene.message"), defaultValue: scene.title),
+              let newName = prompt(title: localized("scene.rename"), message: renameSceneMessage(for: scene), defaultValue: scene.title),
               !newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
@@ -2046,6 +2056,9 @@ final class AppState {
     }
 
     private func prompt(title: String, message: String, defaultValue: String) -> String? {
+        if let promptHandler {
+            return promptHandler(title, message, defaultValue)
+        }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message

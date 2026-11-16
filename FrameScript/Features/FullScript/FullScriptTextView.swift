@@ -39,6 +39,8 @@ struct FullScriptEditorAppearance: Equatable {
     var secondaryTextColor: NSColor
     var accentColor: NSColor
     var backgroundColor: NSColor
+    /// Hairline drawn above every scene header except the first.
+    var dividerColor: NSColor = .separatorColor
 }
 
 extension NSAttributedString.Key {
@@ -142,6 +144,9 @@ struct FullScriptTextView: NSViewRepresentable {
             view.textView.headerSceneProvider = { [weak self] location in
                 self?.headerSceneID(atUTF16Location: location)
             }
+            view.textView.headerRangesProvider = { [weak self] in
+                self?.layout.segments.map(\.headerRange) ?? []
+            }
             view.textView.headerClickAction = { [weak self] sceneID in
                 self?.parent.onToggleCollapse(sceneID)
             }
@@ -179,6 +184,7 @@ struct FullScriptTextView: NSViewRepresentable {
             ActiveScriptEditorSession.shared.unregister(self)
             if view.coordinator === self { view.coordinator = nil }
             view.textView.headerSceneProvider = nil
+            view.textView.headerRangesProvider = nil
             view.textView.headerClickAction = nil
             if view.textView.delegate === self { view.textView.delegate = nil }
             if self.view === view { self.view = nil }
@@ -212,6 +218,13 @@ struct FullScriptTextView: NSViewRepresentable {
             deferredExternalScenes = nil
             let selection = currentSceneSelection()
             let scroll = currentScrollOrigin()
+            // Text written by someone else (AI insert, reload, single-scene
+            // editor) ends the current typing group. Header-only refreshes
+            // (duration, title) must not, or typing would never coalesce.
+            if incoming.count != sceneSnapshots.count
+                || zip(incoming, sceneSnapshots).contains(where: { $0.scriptText != $1.scriptText || $0.id != $1.id }) {
+                FullScriptUndoHub.shared.breakCoalescing()
+            }
             sceneSnapshots = incoming
             layout = Self.makeLayout(scenes: incoming)
             pendingEdit = nil
@@ -270,6 +283,7 @@ struct FullScriptTextView: NSViewRepresentable {
             view.textView.defaultParagraphStyle = paragraph
             view.textView.typingAttributes = bodyAttributes()
             view.textView.placeholder = parent.placeholder
+            view.textView.headerSeparatorColor = appearance.dividerColor
             view.textView.placeholderColor = appearance.secondaryTextColor.withAlphaComponent(0.58)
             view.textView.setAccessibilityLabel(parent.accessibilityLabel)
             view.textView.setAccessibilityHelp(parent.accessibilityHint)
@@ -307,6 +321,9 @@ struct FullScriptTextView: NSViewRepresentable {
                 ?? layout.resolveEdit(in: affectedCharRange)
             guard let target else {
                 pendingEdit = nil
+                if applyClampedEdit(in: affectedCharRange, replacementString: replacementString, textView: textView) {
+                    return false
+                }
                 rejectEdit()
                 return false
             }
@@ -314,6 +331,48 @@ struct FullScriptTextView: NSViewRepresentable {
                 target: target,
                 documentLength: layout.utf16Length
             )
+            return true
+        }
+
+        /// A triple-click on the last paragraph of a scene selects it together
+        /// with the protected separator newline. Instead of rejecting the edit,
+        /// clamp the range to the scene body and apply it ourselves (AppKit is
+        /// told "no" because it cannot change the range). Returns true when the
+        /// edit was handled.
+        private func applyClampedEdit(
+            in range: NSRange,
+            replacementString: String?,
+            textView: NSTextView
+        ) -> Bool {
+            guard let replacementString,
+                  !textView.hasMarkedText(),
+                  range.location >= 0, range.length > 0,
+                  let segment = layout.segments.first(where: { segment in
+                      !segment.isCollapsed
+                          && range.location >= segment.bodyRange.location
+                          && range.location <= NSMaxRange(segment.bodyRange)
+                          && NSMaxRange(range) == NSMaxRange(segment.separatorRange)
+                  }) else { return false }
+            let body = segment.bodyRange
+            let clamped = NSRange(
+                location: range.location,
+                length: NSMaxRange(body) - range.location
+            )
+            guard let target = layout.resolveEdit(in: clamped) else { return false }
+            if clamped.length == 0, replacementString.isEmpty { return true }
+            guard let storage = textView.textStorage else { return false }
+            let pending = PendingEdit(target: target, documentLength: layout.utf16Length)
+            isApplyingProgrammaticUpdate = true
+            storage.replaceCharacters(
+                in: clamped,
+                with: NSAttributedString(string: replacementString, attributes: bodyAttributes())
+            )
+            textView.setSelectedRange(NSRange(
+                location: clamped.location + (replacementString as NSString).length,
+                length: 0
+            ))
+            isApplyingProgrammaticUpdate = false
+            applyAuthorizedChange(pending, in: textView)
             return true
         }
 
@@ -447,6 +506,16 @@ struct FullScriptTextView: NSViewRepresentable {
                 rebuildDocument(preserving: nil, scroll: currentScrollOrigin(), restyleBodies: true)
                 return
             }
+            // Stale write-back guard: the model owns the text. If the view's
+            // pre-edit body differs from the model, another writer (single
+            // scene editor, AI insert, reload) changed it since the last
+            // rebuild. Rebuild from the model and reject this keystroke.
+            if let modelText = parent.currentSceneText(pending.target.sceneID),
+               modelText != sceneSnapshots[index].scriptText {
+                resyncFromModel()
+                rejectEdit()
+                return
+            }
             let previousBody = sceneSnapshots[index].scriptText
             guard newBody != previousBody else { return }
 
@@ -465,13 +534,33 @@ struct FullScriptTextView: NSViewRepresentable {
             let selectionAfterEdit = currentSceneSelection()
             FullScriptUndoHub.shared.register(
                 sceneID: pending.target.sceneID,
-                targetText: previousBody,
-                targetSelection: selectionBeforeUndo,
-                inverseSelection: selectionAfterEdit,
+                previousText: previousBody,
+                newText: newBody,
+                selectionBeforeEdit: selectionBeforeUndo,
+                selectionAfterEdit: selectionAfterEdit,
                 currentText: parent.currentSceneText,
                 commit: parent.onSceneTextCommitted,
                 actionName: parent.undoActionName.isEmpty ? nil : parent.undoActionName,
                 in: textView.window?.undoManager ?? textView.undoManager
+            )
+        }
+
+        /// Replaces every scene body the view holds with the model's text and
+        /// rebuilds the document. Used when a write-back would have used a
+        /// stale snapshot.
+        private func resyncFromModel() {
+            for index in sceneSnapshots.indices {
+                if let text = parent.currentSceneText(sceneSnapshots[index].id) {
+                    sceneSnapshots[index].scriptText = text
+                }
+            }
+            layout = Self.makeLayout(scenes: sceneSnapshots)
+            pendingEdit = nil
+            FullScriptUndoHub.shared.breakCoalescing()
+            rebuildDocument(
+                preserving: currentSceneSelection(),
+                scroll: currentScrollOrigin(),
+                restyleBodies: true
             )
         }
 
@@ -591,55 +680,90 @@ struct FullScriptTextView: NSViewRepresentable {
             return result
         }
 
+        /// Header look follows the single-scene editor's scene header: a
+        /// semibold primary title with a quiet secondary meta line. Only the
+        /// scene label takes the accent color. Every run uses the system font
+        /// (no monospaced face) so number, title and duration read as one line.
         private func headerAttributedString(for scene: FullScriptSceneSnapshot) -> NSAttributedString {
             let appearance = parent.appearance
             let text = scene.headerText
+            let isFirst = scene.id == sceneSnapshots.first?.id
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineSpacing = 2
-            paragraph.paragraphSpacingBefore = 22
-            paragraph.paragraphSpacing = 7
+            paragraph.paragraphSpacingBefore = isFirst ? 4 : Self.headerSpacingBefore
+            paragraph.paragraphSpacing = 8
             let titleFont = NSFont.systemFont(
-                ofSize: max(15, appearance.fontSize * 0.82),
+                ofSize: max(17, appearance.fontSize * 0.9),
                 weight: .semibold
             )
-            let metaFont = NSFont.monospacedSystemFont(
-                ofSize: max(10, appearance.fontSize * 0.52),
-                weight: .semibold
+            let metaFont = NSFont.systemFont(
+                ofSize: max(11, appearance.fontSize * 0.6),
+                weight: .medium
             )
+            let sceneID = scene.id.uuidString
             let attributed = NSMutableAttributedString(string: text, attributes: [
-                .font: titleFont,
-                .foregroundColor: appearance.textColor,
+                .font: metaFont,
+                .foregroundColor: appearance.secondaryTextColor,
                 .paragraphStyle: paragraph,
-                .fullScriptHeaderSceneID: scene.id.uuidString
+                .fullScriptHeaderSceneID: sceneID
             ])
             let nsText = text as NSString
-            let sceneID = scene.id.uuidString
+            guard nsText.length > 0 else { return attributed }
+
+            // Chevron.
+            attributed.addAttribute(.foregroundColor, value: appearance.accentColor,
+                                    range: NSRange(location: 0, length: 1))
 
             let numberRange = nsText.range(of: scene.numberText)
-            if numberRange.location != NSNotFound {
-                attributed.addAttributes([
-                    .font: metaFont,
-                    .foregroundColor: appearance.accentColor,
-                    .fullScriptHeaderSceneID: sceneID
-                ], range: numberRange)
-            }
             let durationRange = nsText.range(of: scene.durationText, options: .backwards)
+            if numberRange.location != NSNotFound {
+                // "ESCENA 01": the label starts at the first letter after the chevron.
+                var labelStart = 1
+                while labelStart < numberRange.location,
+                      CharacterSet.whitespaces.contains(UnicodeScalar(nsText.character(at: labelStart)) ?? " ") {
+                    labelStart += 1
+                }
+                attributed.addAttributes([
+                    .foregroundColor: appearance.accentColor,
+                    .font: NSFont.systemFont(ofSize: metaFont.pointSize, weight: .semibold)
+                ], range: NSRange(location: labelStart, length: NSMaxRange(numberRange) - labelStart))
+
+                // Title: between the dot after the number and the dot before the duration.
+                var titleStart = NSMaxRange(numberRange)
+                let tail = NSRange(location: titleStart, length: nsText.length - titleStart)
+                let dot = nsText.range(of: "·", range: tail)
+                if dot.location != NSNotFound {
+                    titleStart = NSMaxRange(dot)
+                    while titleStart < nsText.length,
+                          CharacterSet.whitespaces.contains(UnicodeScalar(nsText.character(at: titleStart)) ?? "x") {
+                        titleStart += 1
+                    }
+                    var titleEnd = durationRange.location != NSNotFound && durationRange.location > titleStart
+                        ? durationRange.location
+                        : nsText.length
+                    while titleEnd > titleStart {
+                        let scalar = UnicodeScalar(nsText.character(at: titleEnd - 1)) ?? "x"
+                        if CharacterSet.whitespaces.contains(scalar) || scalar == "·" { titleEnd -= 1 } else { break }
+                    }
+                    if titleEnd > titleStart {
+                        attributed.addAttributes([
+                            .font: titleFont,
+                            .foregroundColor: appearance.textColor
+                        ], range: NSRange(location: titleStart, length: titleEnd - titleStart))
+                    }
+                }
+            }
             if durationRange.location != NSNotFound {
                 attributed.addAttributes([
-                    .font: metaFont,
-                    .foregroundColor: appearance.secondaryTextColor,
-                    .fullScriptHeaderSceneID: sceneID
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: metaFont.pointSize, weight: .medium),
+                    .foregroundColor: appearance.secondaryTextColor
                 ], range: durationRange)
-            }
-            if nsText.length > 0 {
-                attributed.addAttributes([
-                    .font: NSFont.systemFont(ofSize: max(10, appearance.fontSize * 0.58), weight: .bold),
-                    .foregroundColor: appearance.accentColor,
-                    .fullScriptHeaderSceneID: sceneID
-                ], range: NSRange(location: 0, length: min(1, nsText.length)))
             }
             return attributed
         }
+
+        /// Space above every scene header except the first.
+        static let headerSpacingBefore: CGFloat = 30
 
         private func headerNewlineAttributes() -> [NSAttributedString.Key: Any] {
             [
@@ -944,6 +1068,37 @@ final class FullScriptTextContainerView: NSView {
 final class FullScriptEditableTextView: PlaceholderTextView {
     var headerSceneProvider: ((Int) -> UUID?)?
     var headerClickAction: ((UUID) -> Void)?
+    /// Header ranges in document order; the first one never gets a hairline.
+    var headerRangesProvider: (() -> [NSRange])?
+    var headerSeparatorColor: NSColor?
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawHeaderHairlines(in: dirtyRect)
+    }
+
+    /// Subtle hairline above each scene header (not the first), centred in the
+    /// extra space the header's paragraph spacing creates.
+    private func drawHeaderHairlines(in dirtyRect: NSRect) {
+        guard let color = headerSeparatorColor,
+              let ranges = headerRangesProvider?(),
+              ranges.count > 1,
+              let layoutManager, let textContainer else { return }
+        let length = (string as NSString).length
+        color.setFill()
+        for range in ranges.dropFirst() where range.location < length {
+            let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+            let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            let y = used.minY + textContainerOrigin.y - FullScriptTextView.Coordinator.headerSpacingBefore * 0.5
+            let rect = NSRect(
+                x: textContainerOrigin.x,
+                y: y.rounded() - 0.5,
+                width: textContainer.size.width,
+                height: 1
+            )
+            if rect.intersects(dirtyRect) { rect.fill() }
+        }
+    }
 
     /// `allowsUndo` is false because native text undo would replay raw storage
     /// ranges instead of scene text. These actions keep the standard Edit menu

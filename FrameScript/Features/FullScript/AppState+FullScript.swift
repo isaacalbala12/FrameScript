@@ -20,10 +20,43 @@ extension AppState {
     /// full-script mode, the normal selection everywhere else.
     var activeEditorScene: Scene? {
         guard hasOpenProject else { return nil }
-        if isFullScriptSelected {
-            return fullScriptCaretScene ?? selectedScene
-        }
         return selectedScene
+    }
+
+    /// ID that `selectedScene` / `selectedSceneIndex` resolve against. While the
+    /// full script is open the sidebar selection is stale (nothing updates it
+    /// as the caret moves), so every scene command (delete, duplicate, rename,
+    /// move, re-hooks, clips, recording) follows the caret scene instead.
+    var effectiveSelectedSceneID: UUID? {
+        if isFullScriptSelected, let caretID = fullScriptCaretScene?.id {
+            return caretID
+        }
+        return editorState.selectedSceneID
+    }
+
+    /// Drops the full-script undo steps. Called when the project is reloaded,
+    /// closed or replaced so a stale step can never touch the new content.
+    func discardFullScriptUndoHistory() {
+        FullScriptUndoHub.shared.discardAllSteps()
+    }
+
+    /// Scene named in the delete confirmation. In full-script mode the dialog
+    /// must say which scene the caret-targeted command will remove.
+    func deleteSceneConfirmationMessage() -> String {
+        guard isFullScriptSelected, let scene = selectedScene else {
+            return localized("dialog.deleteScene.message")
+        }
+        return String(format: localized("fullScript.deleteScene.message"), sceneLabel(scene))
+    }
+
+    func renameSceneMessage(for scene: Scene) -> String {
+        guard isFullScriptSelected else { return localized("dialog.renameScene.message") }
+        return String(format: localized("fullScript.renameScene.message"), sceneLabel(scene))
+    }
+
+    private func sceneLabel(_ scene: Scene) -> String {
+        let number = String(format: "%02d", scene.order + 1)
+        return "\(number) \(scene.title)"
     }
 
     /// Fixed sidebar entry: show every scene on one continuous page.

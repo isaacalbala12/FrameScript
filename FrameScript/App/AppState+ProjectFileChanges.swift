@@ -247,6 +247,7 @@ extension AppState {
             } else {
                 targetSceneID = orderedScenes.first?.id
             }
+            discardFullScriptUndoHistory()
             setEditorContextAfterFlush(sceneID: .some(targetSceneID), mode: previousMode)
             // The baseline is the hash of the bytes we actually decoded. A later
             // external write is detected on the next check instead of being

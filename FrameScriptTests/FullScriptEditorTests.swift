@@ -6,6 +6,27 @@ import XCTest
 
 @MainActor
 final class FullScriptEditorTests: FrameScriptTestCase {
+    private var clock = Date(timeIntervalSinceReferenceDate: 1_000)
+
+    override func setUp() async throws {
+        try await super.setUp()
+        clock = Date(timeIntervalSinceReferenceDate: 1_000)
+        FullScriptUndoHub.shared.discardAllSteps()
+        FullScriptUndoHub.shared.now = { [unowned self] in self.clock }
+        FullScriptUndoHub.shared.coalescingInterval = FullScriptUndoHub.defaultCoalescingInterval
+    }
+
+    override func tearDown() async throws {
+        FullScriptUndoHub.shared.discardAllSteps()
+        FullScriptUndoHub.shared.now = { Date() }
+        FullScriptUndoHub.shared.coalescingInterval = FullScriptUndoHub.defaultCoalescingInterval
+        try await super.tearDown()
+    }
+
+    private func advanceClock(_ seconds: TimeInterval) {
+        clock = clock.addingTimeInterval(seconds)
+    }
+
     // MARK: - Typing
 
     func testTypingCommitsOnlyTheEditedScene() throws {
@@ -213,6 +234,7 @@ final class FullScriptEditorTests: FrameScriptTestCase {
 
         try caretEnd(of: scenes[0], in: harness)
         harness.textView.insertText("1", replacementRange: harness.textView.selectedRange())
+        advanceClock(5)
         harness.textView.insertText("2", replacementRange: harness.textView.selectedRange())
         assertTexts(scenes, ["uno12", "dos"])
 
@@ -657,6 +679,403 @@ final class FullScriptEditorTests: FrameScriptTestCase {
         assertTexts(scenes, expected)
     }
 
+    // MARK: - Undo safety (external text is never overwritten)
+
+    func testUndoNeverDiscardsTextTypedInTheSingleSceneEditor() throws {
+        let scenes = makeScenes(["aaa", "bbb"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        try caretEnd(of: scenes[0], in: harness)
+        harness.textView.insertText("A", replacementRange: harness.textView.selectedRange())
+        // The single-scene editor appends "B" to the same scene.
+        harness.appState.commitScriptTextChange(sceneID: scenes[0].id, text: "aaaAB")
+        harness.syncParentFromModel()
+        harness.applyModelTextIfNeeded()
+
+        manager.undo()
+        XCTAssertEqual(scenes[0].scriptText, "aaaAB", "B must survive the first undo")
+        manager.undo()
+        XCTAssertEqual(scenes[0].scriptText, "aaaAB", "B must survive the second undo")
+        XCTAssertEqual(harness.textView.string, harness.layout.text)
+        manager.redo()
+        XCTAssertEqual(scenes[0].scriptText, "aaaAB", "a stale redo must not overwrite external text either")
+    }
+
+    func testRedoIsASafeNoOpAfterTheSceneChangedExternally() throws {
+        let scenes = makeScenes(["uno", "dos"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        try caretEnd(of: scenes[1], in: harness)
+        harness.textView.insertText("X", replacementRange: harness.textView.selectedRange())
+        manager.undo()
+        assertTexts(scenes, ["uno", "dos"])
+
+        harness.appState.commitScriptTextChange(sceneID: scenes[1].id, text: "dos EXTERNO")
+        harness.syncParentFromModel()
+        harness.applyModelTextIfNeeded()
+        XCTAssertTrue(manager.canRedo)
+        manager.redo()
+        assertTexts(scenes, ["uno", "dos EXTERNO"])
+    }
+
+    func testUndoAfterReloadFromDiskKeepsTheExternalTextAndClearsTheHistory() throws {
+        let ids = [UUID(), UUID()]
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FullScriptUndoReload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Project.fscr")
+        func project(_ texts: [String]) -> FrameProject {
+            FrameProject(title: "Local", scenes: ids.enumerated().map { index, id in
+                Scene(id: id, order: index, sectionType: .custom, title: "Escena \(index + 1)", scriptText: texts[index])
+            })
+        }
+        try FrameScriptFileStore.write(project: project(["uno", "dos"]), to: url)
+        let defaults = makeDefaults()
+        var settings = AppSettings.defaults
+        settings.generalPreferences.language = .spanish
+        settings.generalPreferences.autosaveEnabled = false
+        let appState = AppState(
+            projectStore: ProjectStore(project: project(["uno", "dos"]), projectWriter: FrameScriptFileStore.write),
+            recentProjectStore: RecentProjectStore(userDefaults: defaults),
+            settingsStore: SettingsStore(settings: settings, userDefaults: defaults, key: "settings"),
+            customTemplates: []
+        )
+        appState.openProject(at: url)
+        defer { appState.resetProjectFileTracking() }
+        appState.selectFullScript()
+        let harness = makeHarness(appState: appState)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        let second = try XCTUnwrap(appState.project.scenes.first { $0.id == ids[1] })
+        try caretEnd(of: second, in: harness)
+        harness.textView.insertText("A", replacementRange: harness.textView.selectedRange())
+        XCTAssertTrue(manager.canUndo)
+
+        try FrameScriptFileStore.write(project: project(["uno", "DOS EXTERNO REESCRITO"]), to: url)
+        XCTAssertTrue(appState.reloadProjectFromDisk())
+        harness.syncParentFromModel()
+        harness.applyModelTextIfNeeded()
+        XCTAssertEqual(second.scriptText, "dosA", "precondition: the old object is replaced")
+        let reloaded = try XCTUnwrap(appState.project.scenes.first { $0.id == ids[1] })
+        XCTAssertEqual(reloaded.scriptText, "DOS EXTERNO REESCRITO")
+        XCTAssertFalse(manager.canUndo, "reload must clear the full-script steps")
+
+        manager.undo()
+        XCTAssertEqual(reloaded.scriptText, "DOS EXTERNO REESCRITO")
+    }
+
+    func testUndoStepOnlyAppliesWhenTheSceneHoldsTheTextItProduced() throws {
+        // An unregistered change of the same scene (no reload) must also win.
+        let scenes = makeScenes(["uno", "dos"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        try caretEnd(of: scenes[1], in: harness)
+        harness.textView.insertText("A", replacementRange: harness.textView.selectedRange())
+        harness.appState.commitScriptTextChange(sceneID: scenes[1].id, text: "dosA + texto externo")
+        manager.undo()
+        XCTAssertEqual(scenes[1].scriptText, "dosA + texto externo")
+    }
+
+    // MARK: - Undo granularity
+
+    func testTypingCoalescesIntoOneUndoGroupAndStoresDiffs() throws {
+        let scenes = makeScenes(["uno", "dos"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        try caretEnd(of: scenes[0], in: harness)
+        for character in ["h", "o", "l", "a"] {
+            harness.textView.insertText(character, replacementRange: harness.textView.selectedRange())
+            advanceClock(0.2)
+        }
+        assertTexts(scenes, ["unohola", "dos"])
+        manager.undo()
+        assertTexts(scenes, ["uno", "dos"])
+        XCTAssertFalse(manager.canUndo, "four keystrokes must be one group")
+        manager.redo()
+        assertTexts(scenes, ["unohola", "dos"])
+    }
+
+    func testBackspaceRunCoalescesToo() throws {
+        let scenes = makeScenes(["abcdef"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        try caretEnd(of: scenes[0], in: harness)
+        harness.textView.deleteBackward(nil)
+        harness.textView.deleteBackward(nil)
+        harness.textView.deleteBackward(nil)
+        assertTexts(scenes, ["abc"])
+        manager.undo()
+        assertTexts(scenes, ["abcdef"])
+        XCTAssertFalse(manager.canUndo)
+    }
+
+    func testPauseCaretJumpAndSceneChangeBreakTheUndoGroup() throws {
+        let scenes = makeScenes(["uno", "dos"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let manager = try XCTUnwrap(harness.window.undoManager)
+
+        // Pause.
+        try caretEnd(of: scenes[0], in: harness)
+        harness.textView.insertText("1", replacementRange: harness.textView.selectedRange())
+        advanceClock(0.3)
+        harness.textView.insertText("2", replacementRange: harness.textView.selectedRange())
+        advanceClock(3)
+        harness.textView.insertText("3", replacementRange: harness.textView.selectedRange())
+        assertTexts(scenes, ["uno123", "dos"])
+        manager.undo()
+        assertTexts(scenes, ["uno12", "dos"])
+        manager.undo()
+        assertTexts(scenes, ["uno", "dos"])
+        XCTAssertFalse(manager.canUndo)
+        manager.redo()
+        manager.redo()
+        assertTexts(scenes, ["uno123", "dos"])
+
+        // Caret jump inside the same scene.
+        try caret(scenes[0], offset: 0, in: harness)
+        harness.textView.insertText("<", replacementRange: harness.textView.selectedRange())
+        assertTexts(scenes, ["<uno123", "dos"])
+        manager.undo()
+        assertTexts(scenes, ["uno123", "dos"])
+
+        // Scene change.
+        try caretEnd(of: scenes[0], in: harness)
+        harness.textView.insertText("x", replacementRange: harness.textView.selectedRange())
+        try caretEnd(of: scenes[1], in: harness)
+        harness.textView.insertText("y", replacementRange: harness.textView.selectedRange())
+        manager.undo()
+        assertTexts(scenes, ["uno123x", "dos"])
+        manager.undo()
+        assertTexts(scenes, ["uno123", "dos"])
+    }
+
+    func testTextEditDiffHandlesSurrogatePairsAndRoundTrips() throws {
+        let edit = try XCTUnwrap(FullScriptTextEdit.diff(old: "a😀c", new: "a😎c"))
+        XCTAssertEqual(edit.location, 1)
+        XCTAssertEqual(edit.removed, "😀")
+        XCTAssertEqual(edit.inserted, "😎")
+        XCTAssertEqual(edit.applied(to: "a😎c"), "a😀c")
+        XCTAssertNil(edit.applied(to: "a😀c"), "the inserted run must be present")
+        XCTAssertNil(FullScriptTextEdit.diff(old: "same", new: "same"))
+        let insertion = try XCTUnwrap(FullScriptTextEdit.diff(old: "ab", new: "aXXb"))
+        XCTAssertEqual(insertion, FullScriptTextEdit(location: 1, removed: "", inserted: "XX"))
+    }
+
+    // MARK: - Stale write-back
+
+    func testKeystrokeWithAStaleViewRebuildsFromTheModelInsteadOfOverwritingIt() throws {
+        let scenes = makeScenes(["aaa", "bbb"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+
+        try caretEnd(of: scenes[1], in: harness)
+        // Another writer changes the model; SwiftUI has not refreshed the view.
+        harness.appState.commitScriptTextChange(sceneID: scenes[1].id, text: "bbb DEL MODELO")
+        harness.textView.insertText("Z", replacementRange: harness.textView.selectedRange())
+
+        assertTexts(scenes, ["aaa", "bbb DEL MODELO"])
+        XCTAssertEqual(harness.textView.string, harness.layout.text)
+        XCTAssertTrue(harness.textView.string.contains("bbb DEL MODELO"))
+        XCTAssertFalse(harness.textView.string.contains("bbbZ"))
+    }
+
+    // MARK: - Triple-click on the last paragraph
+
+    func testTypingOverATripleClickedLastParagraphReplacesItInsteadOfBeeping() throws {
+        let scenes = makeScenes(["primera linea\nsegunda linea", "otra"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let segment = try XCTUnwrap(harness.layout.segment(for: scenes[0].id))
+        let paragraphStart = segment.bodyRange.location + ("primera linea\n" as NSString).length
+
+        // A triple-click selects the paragraph plus the protected separator.
+        let tripleClick = NSRange(
+            location: paragraphStart,
+            length: NSMaxRange(segment.separatorRange) - paragraphStart
+        )
+        harness.textView.setSelectedRange(tripleClick)
+        harness.textView.insertText("nueva", replacementRange: harness.textView.selectedRange())
+
+        assertTexts(scenes, ["primera linea\nnueva", "otra"])
+        XCTAssertEqual(harness.textView.string, harness.layout.text)
+        XCTAssertEqual(harness.layout.sceneID(atUTF16Location: harness.textView.selectedRange().location), scenes[0].id)
+
+        // Deleting the same kind of selection works as well, and the header
+        // of the next scene is untouched.
+        let after = try XCTUnwrap(harness.layout.segment(for: scenes[0].id))
+        let start = after.bodyRange.location + ("primera linea\n" as NSString).length
+        let again = NSRange(location: start, length: NSMaxRange(after.separatorRange) - start)
+        harness.textView.setSelectedRange(again)
+        harness.textView.deleteBackward(nil)
+        assertTexts(scenes, ["primera linea\n", "otra"])
+        XCTAssertEqual(harness.textView.string, harness.layout.text)
+    }
+
+    func testSelectionReachingIntoTheNextHeaderIsStillRejected() throws {
+        let scenes = makeScenes(["aaa", "bbb"])
+        let harness = makeHarness(scenes: scenes)
+        defer { harness.teardown() }
+        let first = try XCTUnwrap(harness.layout.segment(for: scenes[0].id))
+        let second = try XCTUnwrap(harness.layout.segment(for: scenes[1].id))
+        let before = harness.textView.string
+        harness.textView.setSelectedRange(NSRange(
+            location: first.bodyRange.location,
+            length: second.headerRange.location + 3 - first.bodyRange.location
+        ))
+        harness.textView.insertText("X", replacementRange: harness.textView.selectedRange())
+        assertTexts(scenes, ["aaa", "bbb"])
+        XCTAssertEqual(harness.textView.string, before)
+    }
+
+    // MARK: - Scene commands follow the caret scene
+
+    private func harnessWithCaretInSceneThree(
+        confirmationHandler: AppState.ConfirmationHandler? = nil
+    ) throws -> (FullScriptHarness, [Scene]) {
+        let scenes = makeScenes(["uno importante", "dos", "tres. cuatro. cinco."])
+        let harness = makeHarness(scenes: scenes, confirmationHandler: confirmationHandler)
+        try caretEnd(of: scenes[2], in: harness)
+        XCTAssertEqual(harness.appState.editorState.selectedSceneID, scenes[0].id, "sidebar selection is stale on purpose")
+        XCTAssertEqual(harness.appState.activeEditorScene?.id, scenes[2].id)
+        XCTAssertEqual(harness.appState.selectedScene?.id, scenes[2].id)
+        return (harness, scenes)
+    }
+
+    func testDeleteSceneRemovesTheCaretSceneAndNamesItInTheConfirmation() throws {
+        var messages: [String] = []
+        let (harness, scenes) = try harnessWithCaretInSceneThree { _, message in
+            messages.append(message)
+            return true
+        }
+        defer { harness.teardown() }
+
+        harness.appState.deleteSelectedScene()
+
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertTrue(messages[0].contains("03 Escena 3"), messages[0])
+        let remaining = harness.appState.project.scenes.sortedByOrder.map(\.id)
+        XCTAssertEqual(remaining, [scenes[0].id, scenes[1].id])
+        XCTAssertEqual(scenes[0].scriptText, "uno importante")
+    }
+
+    func testDeleteSceneConfirmationCancelKeepsEverything() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree { _, _ in false }
+        defer { harness.teardown() }
+        harness.appState.deleteSelectedScene()
+        XCTAssertEqual(harness.appState.project.scenes.count, scenes.count)
+    }
+
+    func testDuplicateSceneCopiesTheCaretScene() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+
+        harness.appState.duplicateSelectedScene()
+
+        let texts = harness.appState.project.scenes.map(\.scriptText)
+        XCTAssertEqual(texts.count, 4)
+        XCTAssertEqual(texts.filter { $0 == "tres. cuatro. cinco." }.count, 2)
+        XCTAssertEqual(texts.filter { $0 == "uno importante" }.count, 1)
+        XCTAssertEqual(scenes[0].scriptText, "uno importante")
+    }
+
+    func testRenameSceneTargetsTheCaretSceneAndNamesItInThePrompt() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+        var promptMessage = ""
+        var promptDefault = ""
+        harness.appState.promptHandler = { _, message, defaultValue in
+            promptMessage = message
+            promptDefault = defaultValue
+            return "Cierre"
+        }
+
+        harness.appState.renameSelectedScene()
+
+        XCTAssertTrue(promptMessage.contains("03 Escena 3"), promptMessage)
+        XCTAssertEqual(promptDefault, "Escena 3")
+        XCTAssertEqual(scenes[2].title, "Cierre")
+        XCTAssertEqual(scenes[0].title, "Escena 1")
+    }
+
+    func testMoveSceneUpAndDownMoveTheCaretScene() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+
+        harness.appState.moveSelectedSceneUp()
+        XCTAssertEqual(
+            harness.appState.project.scenes.sortedByOrder.map(\.id),
+            [scenes[0].id, scenes[2].id, scenes[1].id]
+        )
+        harness.appState.moveSelectedSceneUp()
+        XCTAssertEqual(
+            harness.appState.project.scenes.sortedByOrder.map(\.id),
+            [scenes[2].id, scenes[0].id, scenes[1].id]
+        )
+        harness.appState.moveSelectedSceneDown()
+        XCTAssertEqual(
+            harness.appState.project.scenes.sortedByOrder.map(\.id),
+            [scenes[0].id, scenes[2].id, scenes[1].id]
+        )
+    }
+
+    func testRehookSuggestionsTargetAndInsertIntoTheCaretScene() async throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+        // A long first scene pushes the short last scene out of the re-hook
+        // window, so no positions are planned and no provider is called.
+        let longText = Array(repeating: "Frase con diez palabras de relleno para el guion.", count: 40).joined(separator: " ")
+        scenes[0].scriptText = longText
+        harness.syncParentFromModel()
+        harness.applyModelTextIfNeeded()
+        let result: RehookGenerationResult
+        do {
+            result = try await harness.appState.generateRehookSuggestions()
+        } catch {
+            XCTFail("generate threw \(error)")
+            return
+        }
+        XCTAssertEqual(result.sceneID, scenes[2].id)
+        XCTAssertNotEqual(result.sceneID, scenes[0].id)
+
+        scenes[2].scriptText = "Uno. Dos. Tres."
+        harness.syncParentFromModel()
+        harness.applyModelTextIfNeeded()
+
+        let range = try XCTUnwrap(HookInsertion.anchorRange(for: "Dos.", in: scenes[2].scriptText))
+        let suggestion = RehookSuggestion(
+            text: "Puente.",
+            anchor: "Dos.",
+            anchorRange: range,
+            wordCount: 1,
+            estimatedSeconds: 0.4
+        )
+        XCTAssertTrue(harness.appState.insertRehookSuggestion(suggestion, sceneID: result.sceneID, undoManager: UndoManager()))
+        XCTAssertEqual(scenes[2].scriptText, "Uno.\n\n[RE-HOOK]\nPuente.\n\nDos. Tres.")
+        XCTAssertEqual(scenes[0].scriptText, longText)
+    }
+
+    func testSidebarSelectionIsUsedAgainOutsideFullScriptMode() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+        harness.appState.selectScene(scenes[1].id)
+        XCTAssertFalse(harness.appState.isFullScriptSelected)
+        XCTAssertEqual(harness.appState.selectedScene?.id, scenes[1].id)
+        XCTAssertEqual(harness.appState.activeEditorScene?.id, scenes[1].id)
+    }
+
     // MARK: - Helpers
 
     private func makeScenes(_ texts: [String]) -> [Scene] {
@@ -674,7 +1093,8 @@ final class FullScriptEditorTests: FrameScriptTestCase {
         scenes: [Scene],
         autosave: Bool = false,
         projectURL: URL? = nil,
-        projectWriter: ((FrameProject, URL) throws -> Void)? = nil
+        projectWriter: ((FrameProject, URL) throws -> Void)? = nil,
+        confirmationHandler: AppState.ConfirmationHandler? = nil
     ) -> AppState {
         let defaults = makeDefaults()
         let project = FrameProject(title: "Prueba de guion completo", scenes: scenes)
@@ -689,6 +1109,7 @@ final class FullScriptEditorTests: FrameScriptTestCase {
             projectStore: store,
             recentProjectStore: RecentProjectStore(userDefaults: defaults),
             settingsStore: SettingsStore(settings: settings, userDefaults: defaults, key: "settings"),
+            confirmationHandler: confirmationHandler,
             customTemplates: []
         )
         appState.editorState.selectedSceneID = scenes.first?.id
@@ -699,13 +1120,15 @@ final class FullScriptEditorTests: FrameScriptTestCase {
         scenes: [Scene],
         autosave: Bool = false,
         projectURL: URL? = nil,
-        projectWriter: ((FrameProject, URL) throws -> Void)? = nil
+        projectWriter: ((FrameProject, URL) throws -> Void)? = nil,
+        confirmationHandler: AppState.ConfirmationHandler? = nil
     ) -> FullScriptHarness {
         let appState = makeAppState(
             scenes: scenes,
             autosave: autosave,
             projectURL: projectURL,
-            projectWriter: projectWriter
+            projectWriter: projectWriter,
+            confirmationHandler: confirmationHandler
         )
         appState.selectFullScript()
         return makeHarness(appState: appState)
