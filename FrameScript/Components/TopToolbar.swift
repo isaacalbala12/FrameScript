@@ -36,12 +36,12 @@ struct TopToolbar: View {
             } label: {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(appState.project.title)
+                        Text(appState.isFullScriptSelected ? appState.toolbarContextTitle : appState.project.title)
                             .font(.system(size: 14, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .help(appState.project.title)
-                        Text(appState.displayName(appState.saveState))
+                        Text(appState.isFullScriptSelected ? appState.project.title : appState.displayName(appState.saveState))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.secondaryText)
                             .lineLimit(1)

@@ -46,6 +46,36 @@ final class MainWindowSnapshotTests: FrameScriptTestCase {
         }
     }
 
+    // MARK: - Full script
+
+    func testFullScriptModeSnapshots() {
+        let appState = makeSnapshotAppState(project: spanishDemoProject())
+        appState.editorState.selectedMode = .script
+        appState.selectFullScript()
+        renderAll("full-script-mode", appState: appState) {
+            AppShellView()
+        }
+    }
+
+    func testFullScriptSidebarSnapshots() {
+        let project = FrameProject(title: "Guion de prueba", scenes: [
+            Scene(order: 0, sectionType: .hook, title: "Gancho", scriptText: "Una promesa breve."),
+            Scene(order: 1, sectionType: .problem, title: "Problema", scriptText: "El conflicto."),
+            Scene(order: 2, sectionType: .cta, title: "Cierre", scriptText: "La despedida.")
+        ])
+        let appState = makeSnapshotAppState(project: project)
+        appState.selectFullScript()
+        renderAll("full-script-sidebar", appState: appState) {
+            HStack(spacing: 0) {
+                SceneSidebar()
+                    .frame(width: 280)
+                Divider()
+                Color.clear
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
     // MARK: - Settings
 
     func testSettingsTabSnapshots() {

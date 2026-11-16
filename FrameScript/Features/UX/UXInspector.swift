@@ -231,7 +231,7 @@ struct UXInspectorSceneTab: View {
 
     var body: some View {
         ScrollView {
-            if let scene = appState.selectedScene {
+            if let scene = appState.activeEditorScene {
                 VStack(alignment: .leading, spacing: 12) {
                     durationCard(scene)
                     takesCard(scene)

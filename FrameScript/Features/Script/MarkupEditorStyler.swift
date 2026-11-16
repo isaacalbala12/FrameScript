@@ -158,7 +158,9 @@ final class MarkupEditorStyler {
         apply(charactersIn: target, textView: textView)
     }
 
-    private func apply(charactersIn range: NSRange, textView: NSTextView) {
+    /// Re-highlights exactly `range`. The full-script editor passes one scene
+    /// body so a keystroke never parses or restyles the whole document.
+    func apply(charactersIn range: NSRange, textView: NSTextView) {
         let started = DispatchTime.now()
         defer {
             lastApplyDuration = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000

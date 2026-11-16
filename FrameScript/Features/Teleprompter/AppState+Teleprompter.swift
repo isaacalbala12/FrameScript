@@ -10,7 +10,8 @@ extension AppState {
         let scenes = teleprompterScenes()
         guard !scenes.isEmpty else { return }
 
-        let selectedIndex = project.scenes.sortedByOrder.firstIndex { $0.id == editorState.selectedSceneID } ?? 0
+        let focusSceneID = activeEditorScene?.id ?? editorState.selectedSceneID
+        let selectedIndex = project.scenes.sortedByOrder.firstIndex { $0.id == focusSceneID } ?? 0
         // The configured pauses matter here too: a reused window snapshots this
         // provider and never rebuilds it, so building with `.standard` would keep
         // the wrong pauses for the whole session (WP3 item 5).

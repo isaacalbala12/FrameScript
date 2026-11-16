@@ -20,7 +20,7 @@ struct UXInspectorResearchModel: Equatable {
 
     @MainActor
     init?(appState: AppState) {
-        guard let scene = appState.selectedScene else { return nil }
+        guard let scene = appState.activeEditorScene else { return nil }
         self.init(
             sceneID: scene.id,
             claims: appState.project.claims.filter { $0.sceneIDs.contains(scene.id) },
@@ -54,7 +54,7 @@ struct UXInspectorProductionModel: Equatable {
 
     @MainActor
     init?(appState: AppState) {
-        guard let scene = appState.selectedScene else { return nil }
+        guard let scene = appState.activeEditorScene else { return nil }
         self.init(
             sceneID: scene.id,
             tasks: Self.visibleSceneTasks(

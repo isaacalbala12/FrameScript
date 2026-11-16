@@ -34,7 +34,7 @@ extension AppState {
             }
             return
         }
-        guard let scene = selectedScene else { return }
+        guard let scene = activeEditorScene else { return }
         let language = recording.effectiveLanguage(for: scene)
         Task { [weak self] in
             await self?.recording.toggleRecording(sceneID: scene.id, languageCode: language)
