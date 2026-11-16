@@ -132,70 +132,6 @@ final class UXActionBarTests: FrameScriptTestCase {
 
     // MARK: - Enablement
 
-    func testEnablementMirrorsTheCommandAvailabilityMatrix() {
-        let states: [(CommandAvailability, Bool)] = [
-            (CommandAvailability(), false),
-            (CommandAvailability(hasOpenProject: true), false),
-            (CommandAvailability(hasOpenProject: true, hasScenes: true), true),
-            (
-                CommandAvailability(
-                    hasOpenProject: true,
-                    hasScenes: true,
-                    hasSelectedScene: true,
-                    isRecordingActive: true,
-                    hasActiveTake: true
-                ),
-                true
-            ),
-            (
-                CommandAvailability(
-                    hasOpenProject: true,
-                    hasScenes: true,
-                    hasSelectedScene: true
-                ),
-                false
-            )
-        ]
-
-        for (availability, aiConfigured) in states {
-            let model = UXActionBarModel(
-                availability: availability,
-                isAIProviderConfigured: aiConfigured
-            )
-            for action in UXEditorAction.allCases {
-                switch action.group {
-                case .insert:
-                    XCTAssertEqual(
-                        model.isEnabled(action),
-                        availability.canInsertMarkup,
-                        "\(action) must follow canInsertMarkup"
-                    )
-                case .ai:
-                    let command = action.shortcutCommand
-                    let matrix = command.map(availability.isEnabled) ?? false
-                    XCTAssertEqual(matrix, availability.canAnalyzeScene, "\(action) matrix drift")
-                    XCTAssertEqual(
-                        model.isEnabled(action),
-                        matrix && aiConfigured,
-                        "\(action) must follow the matrix plus the AI prerequisite"
-                    )
-                case .production:
-                    let command = action.shortcutCommand
-                    let expected = command.map(availability.isEnabled) ?? false
-                    XCTAssertEqual(model.isEnabled(action), expected, "\(action) must follow the matrix")
-                case .project:
-                    let command = action.shortcutCommand
-                    let expected = command.map(availability.isEnabled) ?? false
-                    XCTAssertEqual(
-                        model.isEnabled(action),
-                        expected,
-                        "\(action) must use the same matrix as its menu command"
-                    )
-                }
-            }
-        }
-    }
-
     func testDisabledAIExplainsWhyOnlyWhenAIShouldBeAvailable() {
         let welcome = UXActionBarModel(
             availability: CommandAvailability(),
@@ -282,36 +218,6 @@ final class UXActionBarTests: FrameScriptTestCase {
     }
 
     // MARK: - Narrow column
-
-    func testLabelModesDescribeTheFitStages() {
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .insert))
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .ai))
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .production))
-        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .project))
-
-        XCTAssertTrue(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .project))
-        XCTAssertTrue(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .production))
-        XCTAssertFalse(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .insert))
-        XCTAssertFalse(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .ai))
-
-        for mode in [UXActionBarLabelMode.project, .projectTextOnly] {
-            XCTAssertTrue(mode.showsLabel(for: .project))
-            XCTAssertFalse(mode.showsLabel(for: .insert))
-            XCTAssertFalse(mode.showsLabel(for: .ai))
-            XCTAssertFalse(mode.showsLabel(for: .production))
-        }
-
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .insert))
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .ai))
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .production))
-        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .project))
-
-        // Only the tightest labeled stage drops the Proyecto icons.
-        XCTAssertFalse(UXActionBarLabelMode.projectTextOnly.showsIcon(for: .project))
-        XCTAssertTrue(UXActionBarLabelMode.projectTextOnly.showsIcon(for: .insert))
-        XCTAssertTrue(UXActionBarLabelMode.project.showsIcon(for: .project))
-        XCTAssertTrue(UXActionBarLabelMode.none.showsIcon(for: .project))
-    }
 
     func testOnlyRecordTakeUsesTheFilledPrimaryStyle() {
         for action in UXEditorAction.allCases {

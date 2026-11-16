@@ -176,30 +176,24 @@ struct UXActionBarModel: Equatable {
 }
 
 enum UXActionBarLabelMode {
+    /// Everything labeled.
     case all
-    /// Producción and Proyecto keep their labels; Insertar and IA collapse.
-    /// This is the state of a 1440 pt window with the inspector open, or a
-    /// 1180 pt window without it.
-    case projectAndProduction
-    /// Only the new Proyecto group keeps labels (980 pt window).
-    case project
-    /// Tightest labeled stage: the Proyecto buttons keep their text and drop
-    /// the icon, so the five new features stay named even at 1180 pt with the
-    /// inspector open.
-    case projectTextOnly
+    /// Proyecto collapses first: its buttons become icons and keep the badges.
+    case allButProject
+    /// IA collapses next.
+    case insertAndProduction
+    /// Producción collapses next; Insertar is the last group with labels.
+    case insertOnly
     case none
 
     func showsLabel(for group: UXActionGroup) -> Bool {
         switch self {
         case .all: true
-        case .projectAndProduction: group == .project || group == .production
-        case .project, .projectTextOnly: group == .project
+        case .allButProject: group != .project
+        case .insertAndProduction: group == .insert || group == .production
+        case .insertOnly: group == .insert
         case .none: false
         }
-    }
-
-    func showsIcon(for group: UXActionGroup) -> Bool {
-        self == .projectTextOnly ? group != .project : true
     }
 }
 
@@ -274,17 +268,16 @@ struct UXEditorActionBar: View {
     var previewHoveredAction: UXEditorAction?
 
     var body: some View {
-        // Real measurement instead of fixed width thresholds. The Proyecto
-        // group is the newest visual entry point, so it keeps its labels
-        // longest: everything labeled first, then Proyecto + Producción, then
-        // only Proyecto (980 pt), then Proyecto text-only when the inspector
-        // leaves the column very narrow, then icons with tooltips.
+        // Real measurement instead of fixed width thresholds. Insertar is the
+        // group the writer clicks constantly, so it keeps its labels longest.
+        // As the column shrinks: Proyecto first turns into icon buttons (the
+        // badges stay), then IA, then Producción, and only then Insertar.
         let badges = UXProjectBadges(appState: appState)
         return ViewThatFits(in: .horizontal) {
             barContent(labelMode: .all, badges: badges)
-            barContent(labelMode: .projectAndProduction, badges: badges)
-            barContent(labelMode: .project, compactMetrics: true, badges: badges)
-            barContent(labelMode: .projectTextOnly, compactMetrics: true, badges: badges)
+            barContent(labelMode: .allButProject, badges: badges)
+            barContent(labelMode: .insertAndProduction, compactMetrics: true, badges: badges)
+            barContent(labelMode: .insertOnly, compactMetrics: true, badges: badges)
             barContent(labelMode: .none, badges: badges)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -322,11 +315,14 @@ struct UXEditorActionBar: View {
                             action: action,
                             title: appState.localized(action.titleKey),
                             showsLabel: labelMode.showsLabel(for: group),
-                            showsIcon: labelMode.showsIcon(for: group),
                             isEnabled: model.isEnabled(action),
                             tooltip: tooltip(for: action, model: model),
                             emphasis: UXActionEmphasisPolicy.emphasis(for: action),
                             badgeCount: badges.count(for: action),
+                            badgeAccessibility: badges.accessibilityText(
+                                for: action,
+                                language: appState.currentLanguage
+                            ),
                             labelHorizontalPadding: compactMetrics ? 3 : 4,
                             isPreviewHovered: previewHoveredAction == action
                         ) {
@@ -373,16 +369,15 @@ enum UXActionEmphasisPolicy {
 /// One bar button. Deliberately not focusable: clicking it must leave the
 /// script text view as first responder so the insertion lands at the caret.
 struct UXActionButton: View {
-    @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
 
     let action: UXEditorAction
     let title: String
     let showsLabel: Bool
-    let showsIcon: Bool
     let tooltip: String
     let emphasis: UXActionEmphasis
     var badgeCount: Int?
+    var badgeAccessibility: String?
     var isPreviewHovered = false
     let perform: () -> Void
     private let isEnabledOverride: Bool
@@ -394,11 +389,11 @@ struct UXActionButton: View {
         action: UXEditorAction,
         title: String,
         showsLabel: Bool,
-        showsIcon: Bool = true,
         isEnabled: Bool,
         tooltip: String,
         emphasis: UXActionEmphasis = .standard,
         badgeCount: Int? = nil,
+        badgeAccessibility: String? = nil,
         labelHorizontalPadding: CGFloat = 4,
         isPreviewHovered: Bool = false,
         perform: @escaping () -> Void
@@ -406,10 +401,10 @@ struct UXActionButton: View {
         self.action = action
         self.title = title
         self.showsLabel = showsLabel
-        self.showsIcon = showsIcon
         self.tooltip = tooltip
         self.emphasis = emphasis
         self.badgeCount = badgeCount
+        self.badgeAccessibility = badgeAccessibility
         self.labelHorizontalPadding = labelHorizontalPadding
         self.isPreviewHovered = isPreviewHovered
         self.perform = perform
@@ -421,19 +416,16 @@ struct UXActionButton: View {
     }
 
     private var accessibilityTitle: String {
-        guard let badgeCount else { return title }
-        let format = appState.localized("ux.action.badge.accessibility")
-        return "\(title), \(String(format: format, badgeCount))"
+        guard let badgeAccessibility else { return title }
+        return "\(title), \(badgeAccessibility)"
     }
 
     var body: some View {
         Button(action: perform) {
             HStack(spacing: 4) {
-                if showsIcon {
-                    Image(systemName: action.systemImage)
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 13)
-                }
+                Image(systemName: action.systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 13)
                 if showsLabel {
                     Text(title)
                         .font(.system(size: 11, weight: .medium))
@@ -512,7 +504,10 @@ struct UXSceneMetaChips: View {
 
     var body: some View {
         let takes = appState.recording.takes(in: scene)
-        let pendingResearch = appState.researchUnconfirmedCount(for: scene.id)
+        let pendingResearch = UXResearchPending.sceneCount(
+            in: appState.project.claims,
+            sceneID: scene.id
+        )
         if scene.targetDuration != nil || !takes.isEmpty || pendingResearch > 0 {
             HStack(spacing: 6) {
                 if pendingResearch > 0 {

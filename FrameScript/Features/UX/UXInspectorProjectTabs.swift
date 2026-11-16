@@ -24,13 +24,21 @@ struct UXInspectorResearchModel: Equatable {
         self.init(
             sceneID: scene.id,
             claims: appState.project.claims.filter { $0.sceneIDs.contains(scene.id) },
-            pendingCount: appState.researchUnconfirmedCount(for: scene.id)
+            pendingCount: UXResearchPending.sceneCount(
+                in: appState.project.claims,
+                sceneID: scene.id
+            )
         )
     }
 }
 
-/// What the Producción tab needs for the current scene: the stored checklist
-/// rows the panel can toggle, not the derived read-only items.
+/// What the Producción tab needs for the current scene.
+///
+/// The rows come from the same `ProductionChecklist` snapshot the full panel
+/// renders, filtered to its toggleable manual rows for this scene. That keeps
+/// the inspector from re-introducing the E-2 research copy (the snapshot hides
+/// a stored `.research` task that mirrors a claim) and from showing publishing
+/// rows twice.
 struct UXInspectorProductionModel: Equatable {
     let sceneID: UUID
     let tasks: [ChecklistTask]
@@ -49,8 +57,33 @@ struct UXInspectorProductionModel: Equatable {
         guard let scene = appState.selectedScene else { return nil }
         self.init(
             sceneID: scene.id,
-            tasks: appState.project.checklistTasks.filter { $0.sceneID == scene.id }
+            tasks: Self.visibleSceneTasks(
+                appState: appState,
+                sceneID: scene.id,
+                snapshot: ProductionChecklistCenter.shared.snapshot
+            )
         )
+    }
+
+    /// Manual rows the production panel can toggle, in panel order.
+    @MainActor
+    static func visibleSceneTasks(
+        appState: AppState,
+        sceneID: UUID,
+        snapshot: ProductionSnapshot
+    ) -> [ChecklistTask] {
+        let tasksByID = Dictionary(
+            appState.project.checklistTasks.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return snapshot.items.compactMap { item in
+            guard item.reason == .manualTask,
+                  item.sceneID == sceneID,
+                  case let .manualTask(taskID) = item.target,
+                  let task = tasksByID[taskID]
+            else { return nil }
+            return task
+        }
     }
 }
 
@@ -293,6 +326,11 @@ struct UXInspectorProductionTab: View {
             }
         }
         .background(theme.background)
+        .onAppear {
+            // Same cache the production panel reads; refresh on open so a
+            // just-created claim copy cannot survive in the snapshot.
+            appState.refreshProductionChecklist()
+        }
     }
 
     private func summaryCard(_ model: UXInspectorProductionModel) -> some View {
@@ -348,7 +386,7 @@ struct UXInspectorProductionTab: View {
             UXProjectCommandDispatcher.perform(.productionChecklist, appState: appState)
         } label: {
             Label(
-                appState.localized("ux.inspector.production.open"),
+                appState.localized("ux.inspector.production.openPanel"),
                 systemImage: "arrow.up.forward.square"
             )
         }

@@ -60,17 +60,19 @@ final class UXSnapshotTests: FrameScriptTestCase {
 
         switch sizeCase.label {
         case "1440x900":
-            XCTAssertTrue(text.contains { $0.contains("Investigación") }, "\(name): project labels missing")
-            XCTAssertTrue(text.contains { $0.contains("Grabar toma") }, "\(name): production label missing")
+            // 1440 with the inspector open collapses Proyecto; Insertar keeps
+            // its labels. The layout test covers the exact stage boundaries.
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
             XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
+            XCTAssertFalse(text.contains { $0.contains("Resolve") }, "\(name): Proyecto must be icons")
         case "1180x760":
-            // The inspector narrows the text column: only the Proyecto group
-            // keeps text, and it drops the icons to fit.
-            XCTAssertTrue(text.contains { $0.contains("Investigación") }, "\(name): project labels missing")
-            XCTAssertTrue(text.contains { $0.contains("Publicación") }, "\(name): project labels missing")
+            // The inspector narrows the text column: Insertar is the group that
+            // keeps its labels; IA, Producción and Proyecto are icon buttons.
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
+            XCTAssertFalse(text.contains { $0.contains("Resolve") }, "\(name): Proyecto must be icons")
             XCTAssertTrue(text.contains { $0.contains("Panel lateral") }, "\(name): inspector missing")
         default:
-            XCTAssertTrue(text.contains { $0.contains("Investigación") }, "\(name): project labels missing")
+            XCTAssertTrue(text.contains { $0.contains("Pausa corta") }, "\(name): Insert labels missing")
             XCTAssertFalse(text.contains { $0.contains("Panel lateral") }, "\(name): inspector must hide")
             return
         }
@@ -279,8 +281,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 )
                 assertRendered(result, name: name)
                 XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Investigación") },
-                    "\(name): the Proyecto labels should survive at this width"
+                    result.textFragments.contains { $0.contains("Pausa corta") },
+                    "\(name): Insertar should keep its labels at this width"
                 )
                 XCTAssertTrue(
                     result.textFragments.contains { $0.contains("Grabar toma") },
@@ -328,8 +330,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 )
                 assertRendered(result, name: name)
                 XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Investigación") },
-                    "\(name): the Proyecto group should stay labeled without AI"
+                    result.textFragments.contains { $0.contains("Pausa corta") },
+                    "\(name): Insertar should stay labeled without AI"
                 )
             }
         }
@@ -337,7 +339,7 @@ final class UXSnapshotTests: FrameScriptTestCase {
 
     // MARK: - Proyecto label stage
 
-    func testActionBarKeepsProjectLabelsWhenEverythingElseCollapses() {
+    func testActionBarKeepsInsertAndProductionLabelsAt760() {
         let project = makeProject()
         let (appState, _) = makeSnapshotAppState(project: project, inspectorTab: .ai)
         let scene = project.scenes.sortedByOrder[0]
@@ -347,7 +349,7 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 colorScheme: appearance.colorScheme,
                 accent: appState.settings.accentColor
             )
-            let name = "ux-action-bar-project-labels-1180x760-\(appearance.rawValue)"
+            let name = "ux-action-bar-insert-production-1180x760-\(appearance.rawValue)"
             let result = SnapshotRenderer.render(
                 VStack(alignment: .leading, spacing: 10) {
                     Text(scene.title)
@@ -355,8 +357,8 @@ final class UXSnapshotTests: FrameScriptTestCase {
                     Text("1:15 estimado · 186 palabras")
                         .font(.system(size: 13))
                         .foregroundStyle(theme.secondaryText)
-                    // Too narrow for Producción and Insertar, wide enough for
-                    // the five Proyecto labels. The older groups become icons.
+                    // Proyecto and IA have collapsed; Insertar and Producción
+                    // keep their labels.
                     UXEditorActionBar(sceneID: scene.id)
                         .frame(width: 760)
                     Spacer()
@@ -372,20 +374,20 @@ final class UXSnapshotTests: FrameScriptTestCase {
             )
             assertRendered(result, name: name)
             XCTAssertTrue(
-                result.textFragments.contains { $0.contains("Investigación") },
-                "\(name): the Proyecto group must keep its label"
+                result.textFragments.contains { $0.contains("Pausa corta") },
+                "\(name): Insertar must keep its label"
             )
             XCTAssertTrue(
-                result.textFragments.contains { $0.contains("Publicación") },
-                "\(name): the Proyecto group must keep its label"
-            )
-            XCTAssertFalse(
-                result.textFragments.contains { $0.contains("Pausa corta") },
-                "\(name): Insert should be icon-only in this stage"
+                result.textFragments.contains { $0.contains("Grabar toma") },
+                "\(name): Producción must keep its label"
             )
             XCTAssertFalse(
                 result.textFragments.contains { $0.contains("Analizar escena") },
-                "\(name): AI should be icon-only in this stage"
+                "\(name): IA should be icon-only in this stage"
+            )
+            XCTAssertFalse(
+                result.textFragments.contains { $0.contains("Investigación") },
+                "\(name): Proyecto should be icon-only in this stage"
             )
         }
     }
@@ -461,16 +463,16 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 )
                 assertRendered(result, name: name)
                 XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Investigación") },
-                    "\(name): the Proyecto group must be labeled"
+                    result.textFragments.contains { $0.contains("Pausa corta") },
+                    "\(name): Insertar must keep its labels"
                 )
-                XCTAssertTrue(
-                    result.textFragments.contains { $0.contains("Publicación") },
-                    "\(name): the Proyecto group must be labeled"
+                XCTAssertFalse(
+                    result.textFragments.contains { $0.contains("Grabar toma") },
+                    "\(name): Producción must have collapsed to icons"
                 )
-                XCTAssertTrue(
+                XCTAssertFalse(
                     result.textFragments.contains { $0.contains("Resolve") },
-                    "\(name): the Proyecto group must be labeled"
+                    "\(name): Proyecto must have collapsed to icons"
                 )
                 // The scene header keeps a single research chip, not a badge
                 // plus a chip.
@@ -550,6 +552,10 @@ final class UXSnapshotTests: FrameScriptTestCase {
                         XCTAssertTrue(
                             result.textFragments.contains { $0.contains("Grabar el gancho") },
                             "\(name): scene task missing"
+                        )
+                        XCTAssertFalse(
+                            result.textFragments.contains { $0.contains("El circuito se reasfaltó en 2025") },
+                            "\(name): E-2 research copy leaked into the production tab"
                         )
                         XCTAssertTrue(
                             result.textFragments.contains { $0.contains("Abrir Producción") },
@@ -728,6 +734,13 @@ final class UXSnapshotTests: FrameScriptTestCase {
                 text: "Guardar el material de la cámara lenta",
                 kind: .acquire,
                 isDone: true,
+                sceneID: scene.id
+            ),
+            // Mirror copy created for the pending claim above. The production
+            // snapshot hides it (E-2); the inspector must not resurrect it.
+            ChecklistTask(
+                text: "El circuito se reasfaltó en 2025",
+                kind: .research,
                 sceneID: scene.id
             ),
             ChecklistTask(text: "Publicar el jueves", kind: .other)

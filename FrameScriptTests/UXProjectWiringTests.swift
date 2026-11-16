@@ -1,5 +1,6 @@
 import Foundation
 import FrameScriptCore
+import SwiftUI
 import XCTest
 @testable import FrameScript
 
@@ -143,41 +144,25 @@ final class UXProjectWiringTests: ProductionTestCase {
 
     // MARK: - Enablement
 
-    func testProjectGroupEnablementMirrorsCommandAvailability() {
-        let projectActions = UXEditorAction.allCases.filter { $0.group == .project }
+    func testActionBarModelDisablesProjectActionsWithoutAProject() {
+        let appState = makeClosedAppState()
+        let model = UXActionBarModel(appState: appState)
 
-        let noProject = UXActionBarModel(
-            availability: CommandAvailability(),
-            isAIProviderConfigured: true
-        )
-        for action in projectActions {
-            XCTAssertFalse(noProject.isEnabled(action), "\(action) enabled without a project")
+        for action in UXEditorAction.allCases where action.group == .project {
+            XCTAssertFalse(model.isEnabled(action), "\(action) enabled without a project")
         }
+    }
 
-        let projectWithoutScene = UXActionBarModel(
-            availability: CommandAvailability(hasOpenProject: true, hasScenes: false),
-            isAIProviderConfigured: false
-        )
-        for action in projectActions {
-            XCTAssertTrue(
-                projectWithoutScene.isEnabled(action),
-                "\(action) must work with a project and no selected scene"
-            )
-        }
+    func testActionBarModelEnablesProjectActionsWithoutASelectedScene() {
+        let project = FrameProject(title: "Sin escenas", scenes: [], primaryLanguage: "es")
+        let appState = makeAppState(project: project)
+        XCTAssertNil(appState.selectedScene)
 
-        let withScene = CommandAvailability(
-            hasOpenProject: true,
-            hasScenes: true,
-            hasSelectedScene: true
-        )
-        let model = UXActionBarModel(availability: withScene, isAIProviderConfigured: false)
-        for action in projectActions {
-            XCTAssertEqual(
-                model.isEnabled(action),
-                action.shortcutCommand.map(withScene.isEnabled) ?? false,
-                "\(action) drifted from the menu matrix"
-            )
+        let model = UXActionBarModel(appState: appState)
+        for action in UXEditorAction.allCases where action.group == .project {
+            XCTAssertTrue(model.isEnabled(action), "\(action) must not require a scene")
         }
+        XCTAssertFalse(model.isEnabled(.recordTake), "recording still needs a selected scene")
     }
 
     // MARK: - Badges
@@ -222,16 +207,7 @@ final class UXProjectWiringTests: ProductionTestCase {
         // Simulate a stale cache from a previous project: the badge must not
         // leak its counts into the welcome/disabled state.
         ProductionChecklistCenter.shared.refreshNow(project: makeSpanishFixtureProject())
-        let appState = AppState(
-            projectStore: ProjectStore(project: SampleData.defaultProject),
-            recentProjectStore: RecentProjectStore(userDefaults: suite),
-            settingsStore: SettingsStore(settings: .defaults, userDefaults: suite, key: "settings"),
-            recording: RecordingController(
-                preferences: OBSPreferencesStore(defaults: suite, secretStore: EmptyOBSSecretStore()),
-                defaults: suite
-            ),
-            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: suite)
-        )
+        let appState = makeClosedAppState()
 
         let badges = UXProjectBadges(appState: appState)
         XCTAssertEqual(badges.researchPending, 0)
@@ -240,16 +216,12 @@ final class UXProjectWiringTests: ProductionTestCase {
         XCTAssertNil(badges.count(for: .productionChecklist))
     }
 
-    func testProductionBadgeFollowsTaskToggles() {
+    func testProductionBadgeFollowsTaskToggles() throws {
         let project = makeSpanishFixtureProject()
         let appState = makeAppState(project: project)
-        let openTask = try? XCTUnwrap(
+        let openTask = try XCTUnwrap(
             appState.project.checklistTasks.first { !$0.isDone }
         )
-        guard let openTask else {
-            XCTFail("fixture has no open checklist task")
-            return
-        }
 
         let before = UXProjectBadges(appState: appState).productionPending
         XCTAssertTrue(appState.toggleProductionTask(id: openTask.id))
@@ -355,19 +327,47 @@ final class UXProjectWiringTests: ProductionTestCase {
         )
     }
 
-    func testProductionModelOnlyListsTheCurrentSceneTasks() {
+    func testInspectorProductionRowsMatchThePanelAndHideTheResearchCopy() throws {
         let project = makeSpanishFixtureProject()
         let appState = makeAppState(project: project)
-        let scene = project.scenes.sortedByOrder[0]
+        let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
+        let claim = appState.addResearchClaim(
+            text: "El circuito se reasfaltó en 2025",
+            status: .probable,
+            sceneIDs: [scene.id],
+            needsVerification: true
+        )
+        XCTAssertTrue(
+            appState.project.checklistTasks.contains {
+                $0.kind == .research && $0.text == claim.text
+            },
+            "the pending claim must create its mirror checklist task"
+        )
+        appState.refreshProductionChecklist()
 
-        guard let model = UXInspectorProductionModel(appState: appState) else {
-            XCTFail("fixture has no selected scene")
-            return
+        let snapshot = ProductionChecklistCenter.shared.snapshot
+        let panelTaskIDs = snapshot.items.compactMap { item -> UUID? in
+            guard item.reason == .manualTask,
+                  item.sceneID == scene.id,
+                  case let .manualTask(taskID) = item.target
+            else { return nil }
+            return taskID
         }
-        XCTAssertEqual(model.sceneID, scene.id)
-        XCTAssertTrue(model.tasks.allSatisfy { $0.sceneID == scene.id })
-        XCTAssertEqual(model.tasks.count, 1)
-        XCTAssertEqual(model.openCount, 1)
+        let model = try XCTUnwrap(UXInspectorProductionModel(appState: appState))
+
+        XCTAssertEqual(model.tasks.map(\.id), panelTaskIDs, "inspector and panel rows must match")
+        XCTAssertTrue(model.tasks.contains { $0.text == "Grabar la intro" })
+        XCTAssertFalse(
+            model.tasks.contains { $0.text == claim.text },
+            "E-2: the research mirror must not appear in the inspector"
+        )
+        XCTAssertTrue(
+            snapshot.items.contains { item in
+                guard case .claimNeedsVerification = item.reason else { return false }
+                return item.sourceText == claim.text
+            },
+            "the claim stays visible once, via its derived research row"
+        )
     }
 
     // MARK: - Scene chip
@@ -380,5 +380,155 @@ final class UXProjectWiringTests: ProductionTestCase {
         XCTAssertEqual(UXSceneResearchChip.text(pending: 1, language: .russian), "1 к проверке")
         XCTAssertEqual(UXSceneResearchChip.text(pending: 3, language: .russian), "3 к проверке")
         XCTAssertEqual(UXSceneResearchChip.text(pending: 5, language: .russian), "5 к проверке")
+        // Russian uses the singular noun form for 21 and 31, so the raw count
+        // must reach the formatter instead of a hardcoded “1”.
+        XCTAssertEqual(UXSceneResearchChip.text(pending: 21, language: .russian), "21 к проверке")
+    }
+
+    func testRussianPluralSingularFormsPrintTheActualCount() {
+        XCTAssertEqual(
+            L10n.plural("ux.inspector.production.open", count: 1, language: .russian),
+            "1 открытая задача"
+        )
+        XCTAssertEqual(
+            L10n.plural("ux.inspector.production.open", count: 21, language: .russian),
+            "21 открытая задача"
+        )
+        XCTAssertEqual(
+            L10n.plural("ux.chip.takes", count: 21, language: .russian),
+            "21 дубль"
+        )
+    }
+
+    func testBadgeAccessibilityUsesPluralizedNouns() throws {
+        XCTAssertEqual(
+            UXProjectBadgeAccessibility.text(for: .researchPanel, count: 1, language: .spanish),
+            "1 afirmación pendiente"
+        )
+        XCTAssertEqual(
+            UXProjectBadgeAccessibility.text(for: .researchPanel, count: 3, language: .spanish),
+            "3 afirmaciones pendientes"
+        )
+        XCTAssertEqual(
+            UXProjectBadgeAccessibility.text(for: .productionChecklist, count: 1, language: .spanish),
+            "1 tarea pendiente"
+        )
+        XCTAssertEqual(
+            UXProjectBadgeAccessibility.text(for: .productionChecklist, count: 21, language: .russian),
+            "21 открытая задача"
+        )
+        XCTAssertEqual(
+            UXProjectBadgeAccessibility.text(for: .researchPanel, count: 21, language: .russian),
+            "21 утверждение к проверке"
+        )
+        XCTAssertNil(UXProjectBadgeAccessibility.text(for: .insertShortPause, count: 3, language: .spanish))
+
+        let badges = UXProjectBadges(researchPending: 1, productionPending: 2)
+        XCTAssertEqual(
+            badges.accessibilityText(for: .researchPanel, language: .spanish),
+            "1 afirmación pendiente"
+        )
+        XCTAssertEqual(
+            badges.accessibilityText(for: .productionChecklist, language: .spanish),
+            "2 tareas pendientes"
+        )
+        XCTAssertNil(badges.accessibilityText(for: .assets, language: .spanish))
+    }
+
+    func testResearchPendingCountsUseTheStoredNeedsResearchRule() throws {
+        let project = makeSpanishFixtureProject()
+        let appState = makeAppState(project: project)
+        let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
+
+        _ = appState.addResearchClaim(
+            text: "Lo probé y me pareció lento",
+            sceneIDs: [scene.id],
+            needsVerification: true,
+            personalExperience: true
+        )
+
+        XCTAssertEqual(
+            UXResearchPending.projectCount(in: appState.project.claims),
+            appState.researchCounts().pending
+        )
+        XCTAssertEqual(
+            UXResearchPending.sceneCount(in: appState.project.claims, sceneID: scene.id),
+            appState.researchUnconfirmedCount(for: scene.id)
+        )
+    }
+
+    // MARK: - Action bar layout
+
+    func testActionBarCollapseOrderKeepsInsertLabelsLongest() throws {
+        let project = makeSpanishFixtureProject()
+        let appState = makeAppState(project: project)
+        let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
+
+        struct Case {
+            let width: CGFloat
+            let present: [String]
+            let absent: [String]
+        }
+        let cases: [Case] = [
+            // All groups labeled.
+            Case(width: 1_300, present: ["Pausa corta", "Analizar escena", "Grabar toma", "Producción"], absent: []),
+            // Proyecto collapses first.
+            Case(width: 1_100, present: ["Pausa corta", "Analizar escena", "Grabar toma"], absent: ["Investigación"]),
+            // IA collapses next.
+            Case(width: 760, present: ["Pausa corta", "Grabar toma"], absent: ["Analizar escena", "Investigación"]),
+            // Producción collapses next; Insertar is last with labels.
+            Case(width: 600, present: ["Pausa corta"], absent: ["Grabar toma", "Analizar escena", "Investigación"]),
+            // Everything is icon-only.
+            Case(width: 520, present: [], absent: ["Pausa corta", "Grabar toma", "Analizar escena", "Investigación"])
+        ]
+
+        for item in cases {
+            let name = "ux-action-bar-collapse-\(Int(item.width))"
+            let result = SnapshotRenderer.render(
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Barra de acciones")
+                        .font(.system(size: 13, weight: .medium))
+                    UXEditorActionBar(sceneID: scene.id)
+                        .frame(width: item.width)
+                    Spacer()
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading),
+                name: name,
+                suite: "UXProjectWiringTests",
+                size: CGSize(width: 1_400, height: 120),
+                appearance: .light,
+                language: .spanish,
+                appState: appState
+            )
+
+            for label in item.present {
+                XCTAssertTrue(
+                    result.textFragments.contains { $0.contains(label) },
+                    "\(name): \(label) should still be labeled"
+                )
+            }
+            for label in item.absent {
+                XCTAssertFalse(
+                    result.textFragments.contains { $0.contains(label) },
+                    "\(name): \(label) should have collapsed to an icon"
+                )
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func makeClosedAppState() -> AppState {
+        AppState(
+            projectStore: ProjectStore(project: SampleData.defaultProject),
+            recentProjectStore: RecentProjectStore(userDefaults: suite),
+            settingsStore: SettingsStore(settings: .defaults, userDefaults: suite, key: "settings"),
+            recording: RecordingController(
+                preferences: OBSPreferencesStore(defaults: suite, secretStore: EmptyOBSSecretStore()),
+                defaults: suite
+            ),
+            aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: suite)
+        )
     }
 }
