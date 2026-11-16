@@ -101,6 +101,59 @@ final class W3FixABFTimelineTests: XCTestCase {
         )
     }
 
+    func testW3FixABFPlusZoomWorksThroughTheRealPhysicalRouter() throws {
+        let settings = AppSettings.defaults
+        let menu = NSMenu()
+        var performed: ShortcutCommand?
+
+        // Spanish ISO: the "+" key is keyCode 30 with characters "+".
+        let plus = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.command],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "+",
+                charactersIgnoringModifiers: "+",
+                isARepeat: false,
+                keyCode: 30
+            )
+        )
+        XCTAssertTrue(
+            PhysicalShortcutMenuDispatcher.dispatch(plus, settings: settings, menu: menu) { command in
+                performed = command
+                return true
+            }
+        )
+        XCTAssertEqual(performed, .timelineZoomIn)
+
+        // US: ⇧⌘= still reaches the same command through the ANSI key code.
+        performed = nil
+        let shiftEquals = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.command, .shift],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "=",
+                charactersIgnoringModifiers: "=",
+                isARepeat: false,
+                keyCode: 24
+            )
+        )
+        XCTAssertTrue(
+            PhysicalShortcutMenuDispatcher.dispatch(shiftEquals, settings: settings, menu: menu) { command in
+                performed = command
+                return true
+            }
+        )
+        XCTAssertEqual(performed, .timelineZoomIn)
+    }
+
     // MARK: - N-2
 
     func testW3FixABFTimelineUsesLocalizedSourceName() {

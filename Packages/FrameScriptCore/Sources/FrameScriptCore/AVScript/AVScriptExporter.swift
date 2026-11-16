@@ -241,7 +241,7 @@ public enum AVScriptExporter {
         anchor: String,
         escapeFormulas: Bool
     ) -> String {
-        [
+        let fields = [
             scene,
             paragraph,
             narration,
@@ -251,7 +251,15 @@ public enum AVScriptExporter {
             status,
             anchor,
         ]
-        .map { ShotListCSV.escape($0, escapeFormulas: escapeFormulas) }
-        .joined(separator: ",")
+        return fields.enumerated()
+            .map { index, field in
+                // A dialogue dash ("- ...") is prose, not a formula. Only the
+                // two prose columns get that exemption; a bare "-1" still is
+                // escaped because it has no space after the dash.
+                let isProse = index == 2 || index == 4
+                let shouldEscape = escapeFormulas && !(isProse && field.hasPrefix("- "))
+                return ShotListCSV.escape(field, escapeFormulas: shouldEscape)
+            }
+            .joined(separator: ",")
     }
 }

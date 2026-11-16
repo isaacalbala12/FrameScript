@@ -444,7 +444,7 @@ enum PhysicalShortcutMenuDispatcher {
     ) -> Bool {
         let modifiers = shortcutModifiers(from: event.modifierFlags)
         guard !modifiers.isEmpty,
-              let binding = ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers),
+              let binding = physicalBinding(for: event, modifiers: modifiers),
               binding.isValid,
               ShortcutRegistry.isAssignable(binding),
               let command = ShortcutRegistry.command(
@@ -463,6 +463,20 @@ enum PhysicalShortcutMenuDispatcher {
         }
         guard hasEnabledMatchingMenuItem(for: canonicalEvent, in: menu) else { return false }
         return menu.performKeyEquivalent(with: canonicalEvent)
+    }
+
+    /// Layout-aware binding. `+` is produced by different physical keys on a
+    /// US and a Spanish ISO keyboard, so the produced character wins over the
+    /// ANSI key-code table when it is unambiguous.
+    private static func physicalBinding(
+        for event: NSEvent,
+        modifiers: Set<ShortcutModifier>
+    ) -> ShortcutBinding? {
+        let characters = event.charactersIgnoringModifiers ?? event.characters
+        if characters == "+" {
+            return ShortcutBinding("+", modifiers: modifiers)
+        }
+        return ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers)
     }
 
     private static func hasEnabledMatchingMenuItem(for event: NSEvent, in menu: NSMenu) -> Bool {

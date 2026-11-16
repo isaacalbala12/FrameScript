@@ -312,6 +312,42 @@ final class W3FixABFClipsTests: XCTestCase {
         XCTAssertEqual(applicationState.clip(id: clip.id)?.hook, "Gancho escrito a mano")
     }
 
+    func testW3FixABFGenerateUndoKeepsLaterManualEdits() async throws {
+        let provider = W3FixABFGatedProvider(
+            response: #"{"hook":"Gancho IA","adaptedText":"Texto IA","onScreenText":"","description":"","hashtags":[]}"#
+        )
+        let applicationState = W3FixABFSupport.makeAppState(
+            project: try XCTUnwrap(project),
+            defaults: isolatedDefaults!.defaults,
+            provider: provider,
+            confirmationHandler: { _, _ in true }
+        )
+        let scene = try XCTUnwrap(scene)
+        var clip = try XCTUnwrap(applicationState.createClip(sceneIDs: [scene.id]))
+        clip.hook = "Gancho escrito a mano"
+        clip.adaptedText = "Texto escrito a mano"
+        applicationState.updateClip(clip)
+        let undoManager = UndoManager()
+
+        let task = Task {
+            await applicationState.generateClipAdaptation(id: clip.id, undoManager: undoManager)
+        }
+        await provider.waitUntilCalled()
+        provider.release()
+        await task.value
+
+        var later = try XCTUnwrap(applicationState.clip(id: clip.id))
+        later.hook = "Gancho posterior"
+        later.title = "Título posterior"
+        applicationState.updateClip(later)
+
+        undoManager.undo()
+        let afterUndo = try XCTUnwrap(applicationState.clip(id: clip.id))
+        XCTAssertEqual(afterUndo.hook, "Gancho posterior")
+        XCTAssertEqual(afterUndo.title, "Título posterior")
+        XCTAssertEqual(afterUndo.adaptedText, "Texto escrito a mano")
+    }
+
     func testW3FixABFUseSourceTextIsConfirmedAndUndoable() throws {
         var confirmations = 0
         let applicationState = W3FixABFSupport.makeAppState(
@@ -334,6 +370,38 @@ final class W3FixABFClipsTests: XCTestCase {
 
         undoManager.undo()
         XCTAssertEqual(applicationState.clip(id: clip.id)?.adaptedText, "Texto escrito a mano")
+    }
+
+    func testW3FixABFUndoOnlyRevertsTheFieldTheActionChanged() throws {
+        let applicationState = W3FixABFSupport.makeAppState(
+            project: try XCTUnwrap(project),
+            defaults: isolatedDefaults!.defaults,
+            confirmationHandler: { _, _ in true }
+        )
+        let scene = try XCTUnwrap(scene)
+        var clip = try XCTUnwrap(applicationState.createClip(sceneIDs: [scene.id]))
+        clip.adaptedText = "Texto escrito a mano"
+        applicationState.updateClip(clip)
+
+        let undoManager = UndoManager()
+        XCTAssertTrue(applicationState.useSourceTextForClip(id: clip.id, undoManager: undoManager))
+
+        var later = try XCTUnwrap(applicationState.clip(id: clip.id))
+        later.hook = "Gancho escrito después"
+        later.title = "Título nuevo"
+        applicationState.updateClip(later)
+
+        undoManager.undo()
+        let afterUndo = try XCTUnwrap(applicationState.clip(id: clip.id))
+        XCTAssertEqual(afterUndo.hook, "Gancho escrito después")
+        XCTAssertEqual(afterUndo.title, "Título nuevo")
+        XCTAssertEqual(afterUndo.adaptedText, "Texto escrito a mano")
+
+        undoManager.redo()
+        let afterRedo = try XCTUnwrap(applicationState.clip(id: clip.id))
+        XCTAssertEqual(afterRedo.hook, "Gancho escrito después")
+        XCTAssertEqual(afterRedo.title, "Título nuevo")
+        XCTAssertEqual(afterRedo.adaptedText, scene.scriptText)
     }
 
     // MARK: - N-3

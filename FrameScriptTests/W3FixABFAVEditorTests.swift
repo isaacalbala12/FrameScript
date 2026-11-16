@@ -6,9 +6,9 @@ import XCTest
 
 @testable import FrameScript
 
-/// A-1 / A-2: the AV paragraph editor must never commit a stale row's text
-/// over a different paragraph. These tests host the real editor offscreen and
-/// drive its `NSTextView`s; the window is never ordered front.
+/// A-1 / A-2 after the navigation redesign: AV narration is read-only and the
+/// Script workspace is the single narration editor. The right column remains
+/// editable.
 @MainActor
 final class W3FixABFAVEditorTests: XCTestCase {
     private var isolatedDefaults: TestDefaults!
@@ -22,6 +22,20 @@ final class W3FixABFAVEditorTests: XCTestCase {
         isolatedDefaults = W3FixABFSupport.makeDefaults()
         project = W3FixABFSupport.makeProject(sceneText: "P1\n\nP2")
         editorScene = project.scenes[0]
+        let anchor = try XCTUnwrap(
+            TextAnchorRepair.anchor(
+                in: editorScene.scriptText,
+                range: NSRange(location: 0, length: 2)
+            )
+        )
+        editorScene.bRollItems = [
+            BRollItem(
+                textAnchor: anchor,
+                templateType: "",
+                sourceType: .stockFootage,
+                descriptionText: "Plano de prueba"
+            )
+        ]
         appState = W3FixABFSupport.makeAppState(
             project: project,
             defaults: isolatedDefaults.defaults
@@ -32,6 +46,9 @@ final class W3FixABFAVEditorTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        if let pending = TimelineNavigation.shared.pendingRequest {
+            TimelineNavigation.shared.consume(pending.id)
+        }
         host?.window.contentView = nil
         host = nil
         isolatedDefaults?.cleanup()
@@ -42,127 +59,133 @@ final class W3FixABFAVEditorTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testW3FixABFReturnTwiceSplitsParagraphWithoutDuplicatingText() throws {
-        let first = try paragraphTextView(showing: "P1")
-        host.window.makeFirstResponder(first)
-        first.setSelectedRange(NSRange(location: 2, length: 0))
+    // MARK: - Read-only narration
 
-        first.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-        host.pump()
+    func testW3FixABFNarrationColumnHasNoEditableTextView() {
+        let views = narrationViews()
 
-        // Return at the end of a paragraph creates an empty draft row; the
-        // model itself stays untouched until the first character is typed.
-        XCTAssertEqual(editorScene.scriptText, "P1\n\nP2")
-        let draft = try XCTUnwrap(
-            paragraphTextViews().first { $0.string.isEmpty },
-            "Return at the end of a paragraph must create an empty paragraph row"
-        )
-        host.window.makeFirstResponder(draft)
-        draft.setSelectedRange(NSRange(location: 0, length: 0))
-        draft.doCommand(by: #selector(NSResponder.insertNewline(_:)))
-        host.pump()
-
-        draft.insertText("New", replacementRange: draft.selectedRange())
-        host.pump()
-
-        XCTAssertEqual(editorScene.scriptText, "P1\n\nNew\n\nP2")
-        XCTAssertEqual(paragraphTextViews().map(\.string), ["P1", "New", "P2"])
-    }
-
-    func testW3FixABFClearingParagraphThenTypingNeverOverwritesNextParagraph() throws {
-        let first = try paragraphTextView(showing: "P1")
-        host.window.makeFirstResponder(first)
-        first.setSelectedRange(NSRange(location: 0, length: (first.string as NSString).length))
-        first.doCommand(by: #selector(NSText.deleteBackward(_:)))
-        host.pump()
-
-        let current = try XCTUnwrap(paragraphTextViews().first)
-        current.insertText("X", replacementRange: current.selectedRange())
-        host.pump()
-
+        XCTAssertEqual(views.map(\.string), ["P1", "P2"])
         XCTAssertTrue(
-            editorScene.scriptText.contains("P2"),
-            "Deleting one paragraph and typing must never erase the next paragraph: \(editorScene.scriptText)"
+            views.allSatisfy { !$0.isEditable },
+            "AV narration must never expose an editable text view"
         )
-        XCTAssertFalse(
-            paragraphTextViews().contains { $0.string.contains("P1\n\nP2") },
-            "A paragraph row must never hold more than one model paragraph"
+        XCTAssertTrue(
+            views.allSatisfy(\.isSelectable),
+            "AV narration stays selectable and copyable"
+        )
+        XCTAssertTrue(
+            views.allSatisfy { !$0.allowsUndo },
+            "AV narration must not register undo actions"
         )
     }
 
-    func testW3FixABFUndoAfterRowShiftDoesNotTouchOtherParagraph() throws {
-        let first = try paragraphTextView(showing: "P1")
-        let undoManager = try XCTUnwrap(first.undoManager)
-        host.window.makeFirstResponder(first)
-        first.setSelectedRange(NSRange(location: 2, length: 0))
-        first.insertText("A", replacementRange: first.selectedRange())
-        host.pump()
-        XCTAssertEqual(editorScene.scriptText, "P1A\n\nP2")
-        XCTAssertTrue(undoManager.canUndo)
+    func testW3FixABFEditInScriptSwitchesModeAndSelectsTheParagraph() throws {
+        let paragraphRange = (editorScene.scriptText as NSString).range(of: "P2")
 
-        // An external edit removes paragraph 1; row 0 is now reused for P2.
+        appState.editAVParagraphInScript(
+            sceneID: editorScene.id,
+            range: paragraphRange
+        )
+
+        XCTAssertEqual(appState.selectedMode, .script)
+        XCTAssertEqual(appState.selectedScene?.id, editorScene.id)
+        XCTAssertEqual(TimelineNavigation.shared.pendingRequest?.sceneID, editorScene.id)
+        XCTAssertEqual(TimelineNavigation.shared.pendingRequest?.range, paragraphRange)
+    }
+
+    func testW3FixABFDoubleClickingNarrationOpensTheScriptEditor() throws {
+        let view = try XCTUnwrap(narrationViews().first { $0.string == "P2" })
+        let paragraphRange = (editorScene.scriptText as NSString).range(of: "P2")
+        let event = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: host.window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 2,
+                pressure: 1
+            )
+        )
+
+        view.mouseDown(with: event)
+
+        XCTAssertEqual(appState.selectedMode, .script)
+        XCTAssertEqual(TimelineNavigation.shared.pendingRequest?.range, paragraphRange)
+    }
+
+    func testW3FixABFEditActionIsVisibleInTheRow() {
+        let result = SnapshotRenderer.render(
+            AVScriptEditorView(scene: editorScene),
+            name: "av-editor-readonly-1180x760-light",
+            suite: "w3-fix-abf2",
+            size: CGSize(width: 1180, height: 760),
+            appearance: .light,
+            language: .spanish,
+            appState: appState
+        )
+
+        XCTAssertGreaterThan(result.pixelSize.width, 0)
+        XCTAssertTrue(
+            result.textFragments.contains { $0.contains("Editar en Guion") },
+            "each paragraph row must expose the edit action: \(result.textFragments)"
+        )
+    }
+
+    // MARK: - External edits
+
+    func testW3FixABFExternalScriptEditIsReflectedInAV() {
         appState.commitScriptTextChange(
             sceneID: editorScene.id,
             previousText: editorScene.scriptText,
-            text: "P2"
+            text: "P1 edited\n\nP2"
         )
         host.pump()
-        XCTAssertTrue(paragraphTextViews().contains { $0.string == "P2" })
 
-        undoManager.undo()
+        XCTAssertEqual(narrationViews().map(\.string), ["P1 edited", "P2"])
+    }
+
+    // MARK: - Annotations stay editable
+
+    func testW3FixABFAnnotationTextStaysEditable() throws {
+        let annotationView = try XCTUnwrap(
+            host.subviews(of: NSTextView.self).first { $0.string == "Plano de prueba" },
+            "the B-roll description editor is missing"
+        )
+        XCTAssertTrue(annotationView.isEditable)
+
+        host.window.makeFirstResponder(annotationView)
+        annotationView.setSelectedRange(
+            NSRange(location: (annotationView.string as NSString).length, length: 0)
+        )
+        annotationView.insertText(" ampliado", replacementRange: annotationView.selectedRange())
         host.pump()
 
-        XCTAssertTrue(
-            editorScene.scriptText.contains("P2"),
-            "⌘Z after a row shift must not write another paragraph's text: \(editorScene.scriptText)"
-        )
-        XCTAssertNotEqual(editorScene.scriptText, "A")
+        XCTAssertEqual(editorScene.bRollItems.first?.descriptionText, "Plano de prueba ampliado")
+        XCTAssertTrue(narrationViews().allSatisfy { !$0.isEditable })
     }
 
-    func testW3FixABFStaleParagraphCommitIsRefused() {
-        let original = editorScene.scriptText
-        let accepted = appState.commitAVParagraph(
-            sceneID: editorScene.id,
-            paragraphRange: NSRange(location: 0, length: 2),
-            previousText: "Texto que el modelo ya no tiene",
-            text: "No debe aplicarse"
-        )
+    // MARK: - A-6 CSV
 
-        XCTAssertFalse(accepted)
-        XCTAssertEqual(editorScene.scriptText, original)
-    }
-
-    func testW3FixABFParagraphCommitRegistersAppUndo() {
-        let undoManager = UndoManager()
-        let accepted = appState.commitAVParagraph(
-            sceneID: editorScene.id,
-            paragraphRange: NSRange(location: 0, length: 2),
-            previousText: "P1",
-            text: "Uno",
-            undoManager: undoManager
-        )
-
-        XCTAssertTrue(accepted)
-        XCTAssertEqual(editorScene.scriptText, "Uno\n\nP2")
-        XCTAssertTrue(undoManager.canUndo)
-
-        undoManager.undo()
-        XCTAssertEqual(editorScene.scriptText, "P1\n\nP2")
-    }
-
-    func testW3FixABFAVCSVExportEscapesFormulasAndAddsBOM() throws {
-        editorScene.scriptText = "=SUM(1)\n\nTexto normal"
+    func testW3FixABFAVCSVExemptsDashSpaceNarrationButEscapesFormulas() throws {
+        editorScene.scriptText = "- uno dos\n\n=SUM(1)"
         appState.touchProject()
 
-        let data = appState.avScriptExportData(format: .csv)
-        XCTAssertTrue(data.starts(with: [0xEF, 0xBB, 0xBF]), "accented CSV header needs a BOM")
-        let csv = try XCTUnwrap(String(data: data, encoding: .utf8))
-        XCTAssertTrue(csv.contains("'=SUM(1)"), "spreadsheet formulas must stay text")
+        let csv = appState.avScriptExportText(format: .csv, escapeFormulas: true)
+        XCTAssertTrue(csv.contains(",- uno dos,"), "dialogue dashes must not become apostrophes: \(csv)")
+        XCTAssertFalse(csv.contains("'- uno dos"), csv)
+        XCTAssertTrue(csv.contains("'=SUM(1)"), "formula-like narration stays neutralised")
+    }
 
-        let markdown = try XCTUnwrap(String(
-            data: appState.avScriptExportData(format: .markdown),
-            encoding: .utf8
-        ))
+    func testW3FixABFAVCSVExportAddsBOMForFileWrites() throws {
+        let data = appState.avScriptExportData(format: .csv)
+        XCTAssertTrue(data.starts(with: [0xEF, 0xBB, 0xBF]))
+
+        let markdown = try XCTUnwrap(
+            String(data: appState.avScriptExportData(format: .markdown), encoding: .utf8)
+        )
         XCTAssertFalse(markdown.hasPrefix("\u{FEFF}"))
     }
 
@@ -175,6 +198,7 @@ final class W3FixABFAVEditorTests: XCTestCase {
         XCTAssertTrue(
             L10n.tr("avScript.exportPanelMessage.csv", language: .spanish).contains("CSV")
         )
+        XCTAssertEqual(L10n.tr("avScript.editInScript", language: .spanish), "Editar en Guion")
     }
 
     // MARK: - Hosting
@@ -190,7 +214,7 @@ final class W3FixABFAVEditorTests: XCTestCase {
         return host
     }
 
-    private func paragraphTextViews() -> [NSTextView] {
+    private func narrationViews() -> [NSTextView] {
         host.subviews(of: NSTextView.self)
             .filter { $0 is PlaceholderTextView }
             .sorted { lhs, rhs in
@@ -201,12 +225,5 @@ final class W3FixABFAVEditorTests: XCTestCase {
                 }
                 return left.minX < right.minX
             }
-    }
-
-    private func paragraphTextView(showing string: String) throws -> NSTextView {
-        try XCTUnwrap(
-            paragraphTextViews().first { $0.string == string },
-            "No paragraph text view shows \(string): \(paragraphTextViews().map(\.string))"
-        )
     }
 }

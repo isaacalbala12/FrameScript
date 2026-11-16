@@ -25,16 +25,6 @@ enum AVScriptExportFormat: String, CaseIterable, Identifiable {
     }
 }
 
-/// Where an empty paragraph typed at a boundary goes. The editor inserts the
-/// two newlines together with the first character, so abandoning an empty
-/// draft never leaves stray blank lines in the script.
-enum AVParagraphBoundary {
-    /// The new paragraph starts before the current one.
-    case before
-    /// The new paragraph starts after the current one.
-    case after
-}
-
 @MainActor
 extension AppState {
     /// The current project as an AV script, with every visual and editing note
@@ -59,122 +49,12 @@ extension AppState {
         )
     }
 
-    /// Replaces one paragraph in the scene and runs the same commit path as the
-    /// script editor, so undo, autosave, metrics, rhythm and anchor repair keep
-    /// working. The range and previous text guard against a stale row: a commit
-    /// is only accepted while the model still contains exactly the text this
-    /// text view was showing.
-    @discardableResult
-    func commitAVParagraph(
-        sceneID: UUID,
-        paragraphRange: NSRange,
-        previousText: String,
-        text: String,
-        undoManager: UndoManager? = nil
-    ) -> Bool {
-        guard let scene = project.scenes.first(where: { $0.id == sceneID }) else { return false }
-        let source = scene.scriptText as NSString
-        guard paragraphRange.location >= 0,
-              paragraphRange.length >= 0,
-              paragraphRange.location <= source.length,
-              paragraphRange.length <= source.length - paragraphRange.location,
-              source.substring(with: paragraphRange) == previousText else {
-            return false
-        }
-        let updated = source.replacingCharacters(in: paragraphRange, with: text)
-        guard updated != scene.scriptText else { return true }
-        registerAVParagraphUndo(
-            sceneID: sceneID,
-            range: NSRange(location: paragraphRange.location, length: (text as NSString).length),
-            previousText: text,
-            nextText: previousText,
-            undoManager: undoManager
-        )
-        commitScriptTextChange(sceneID: sceneID, previousText: scene.scriptText, text: updated)
-        return true
-    }
-
-    /// Splits a paragraph at a caret offset by inserting the blank line that
-    /// separates two paragraphs. Used for Return inside a multi-line paragraph;
-    /// the caller then focuses the new row.
-    @discardableResult
-    func splitAVParagraph(
-        sceneID: UUID,
-        paragraphRange: NSRange,
-        previousText: String,
-        at caretOffset: Int,
-        undoManager: UndoManager? = nil
-    ) -> Bool {
-        let source = previousText as NSString
-        let clamped = min(max(0, caretOffset), source.length)
-        let replacement = source.replacingCharacters(
-            in: NSRange(location: clamped, length: 0),
-            with: "\n\n"
-        )
-        return commitAVParagraph(
-            sceneID: sceneID,
-            paragraphRange: paragraphRange,
-            previousText: previousText,
-            text: replacement,
-            undoManager: undoManager
-        )
-    }
-
-    /// Commits the first character of an empty paragraph created with Return
-    /// at a paragraph boundary. `previousText` is empty, so the insert can only
-    /// ever write at the boundary the draft was created for.
-    @discardableResult
-    func insertAVParagraph(
-        sceneID: UUID,
-        insertionOffset: Int,
-        boundary: AVParagraphBoundary,
-        text: String,
-        undoManager: UndoManager? = nil
-    ) -> Bool {
-        guard !text.isEmpty,
-              let scene = project.scenes.first(where: { $0.id == sceneID }) else { return false }
-        let source = scene.scriptText as NSString
-        guard insertionOffset >= 0, insertionOffset <= source.length else { return false }
-        // A stale draft must never write into the middle of a paragraph.
-        let boundaryIsValid: Bool = switch boundary {
-        case .before:
-            insertionOffset == 0
-                || (insertionOffset >= 2
-                    && source.substring(with: NSRange(location: insertionOffset - 2, length: 2)) == "\n\n")
-        case .after:
-            insertionOffset == source.length
-                || (insertionOffset + 2 <= source.length
-                    && source.substring(with: NSRange(location: insertionOffset, length: 2)) == "\n\n")
-        }
-        guard boundaryIsValid else { return false }
-        let replacement = boundary == .before ? text + "\n\n" : "\n\n" + text
-        return commitAVParagraph(
-            sceneID: sceneID,
-            paragraphRange: NSRange(location: insertionOffset, length: 0),
-            previousText: "",
-            text: replacement,
-            undoManager: undoManager
-        )
-    }
-
-    private func registerAVParagraphUndo(
-        sceneID: UUID,
-        range: NSRange,
-        previousText: String,
-        nextText: String,
-        undoManager: UndoManager?
-    ) {
-        guard let manager = undoManager ?? projectWindow?.undoManager else { return }
-        manager.registerUndo(withTarget: self) { target in
-            target.commitAVParagraph(
-                sceneID: sceneID,
-                paragraphRange: range,
-                previousText: previousText,
-                text: nextText,
-                undoManager: manager
-            )
-        }
-        manager.setActionName(localized("avScript.undoEdit"))
+    /// Narration is read-only in the AV workspace. This action opens the one
+    /// Script editor at the paragraph and selects its range.
+    func editAVParagraphInScript(sceneID: UUID, range: NSRange) {
+        TimelineNavigation.shared.requestJump(sceneID: sceneID, range: range)
+        selectScene(sceneID)
+        selectMode(.script)
     }
 
     func avScriptExportLabels() -> AVScriptExportLabels {

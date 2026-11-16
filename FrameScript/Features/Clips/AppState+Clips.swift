@@ -486,7 +486,7 @@ extension AppState {
             if updated.hashtags == snapshot.hashtags { updated.hashtags = generated.hashtags }
             if updated.status == .idea { updated.status = .draft }
             guard updated != project.clips[index] else { return }
-            applyClipReplacement(
+            applyClipFieldChanges(
                 updated,
                 undoManager: undoManager,
                 actionKey: "clips.generate.undoAction"
@@ -516,7 +516,7 @@ extension AppState {
         }
         var updated = clip
         updated.adaptedText = source
-        applyClipReplacement(
+        applyClipFieldChanges(
             updated,
             undoManager: undoManager,
             actionKey: "clips.useSource.undoAction"
@@ -524,19 +524,63 @@ extension AppState {
         return true
     }
 
-    /// One undoable model replacement shared by the AI merge and the
-    /// "use the source text" action.
-    private func applyClipReplacement(
-        _ clip: ShortClip,
+    /// Applies only the fields the AI/source action actually changed. Undo and
+    /// redo are field-level: a field edited afterwards is left alone.
+    private func applyClipFieldChanges(
+        _ updated: ShortClip,
         undoManager: UndoManager?,
         actionKey: String
     ) {
-        guard let index = clipIndex(id: clip.id) else { return }
-        let previous = project.clips[index]
-        guard previous != clip else { return }
+        guard let index = clipIndex(id: updated.id) else { return }
+        let changes = ClipFieldChange.changes(from: project.clips[index], to: updated)
+        guard !changes.isEmpty else { return }
         let manager = undoManager ?? projectWindow?.undoManager
         manager?.registerUndo(withTarget: self) { target in
-            target.applyClipReplacement(previous, undoManager: manager, actionKey: actionKey)
+            target.revertClipFieldChanges(
+                changes,
+                id: updated.id,
+                direction: .undo,
+                undoManager: manager,
+                actionKey: actionKey
+            )
+        }
+        manager?.setActionName(localized(actionKey))
+        project.clips[index] = updated
+        touchProject()
+    }
+
+    private func revertClipFieldChanges(
+        _ changes: [ClipFieldChange],
+        id: UUID,
+        direction: ClipFieldChangeDirection,
+        undoManager: UndoManager?,
+        actionKey: String
+    ) {
+        guard let index = clipIndex(id: id) else { return }
+        var clip = project.clips[index]
+        var didChange = false
+        for change in changes {
+            switch direction {
+            case .undo:
+                guard change.key.value(in: clip) == change.to else { continue }
+                change.key.set(change.from, in: &clip)
+                didChange = true
+            case .redo:
+                guard change.key.value(in: clip) == change.from else { continue }
+                change.key.set(change.to, in: &clip)
+                didChange = true
+            }
+        }
+        guard didChange else { return }
+        let manager = undoManager ?? projectWindow?.undoManager
+        manager?.registerUndo(withTarget: self) { target in
+            target.revertClipFieldChanges(
+                changes,
+                id: id,
+                direction: direction.inverse,
+                undoManager: manager,
+                actionKey: actionKey
+            )
         }
         manager?.setActionName(localized(actionKey))
         project.clips[index] = clip
@@ -718,6 +762,78 @@ extension AppState {
         }
         try content.write(to: url, atomically: true, encoding: .utf8)
         return content
+    }
+
+    // MARK: Field-level undo
+
+    private enum ClipFieldChangeDirection: Equatable {
+        case undo
+        case redo
+
+        var inverse: ClipFieldChangeDirection {
+            self == .undo ? .redo : .undo
+        }
+    }
+
+    private enum ClipFieldValue: Equatable {
+        case text(String)
+        case hashtags([String])
+        case status(ShortClipStatus)
+    }
+
+    private enum ClipFieldKey: CaseIterable {
+        case hook
+        case adaptedText
+        case onScreenText
+        case description
+        case hashtags
+        case status
+
+        func value(in clip: ShortClip) -> ClipFieldValue {
+            switch self {
+            case .hook: .text(clip.hook)
+            case .adaptedText: .text(clip.adaptedText)
+            case .onScreenText: .text(clip.onScreenText)
+            case .description: .text(clip.description)
+            case .hashtags: .hashtags(clip.hashtags)
+            case .status: .status(clip.status)
+            }
+        }
+
+        func set(_ value: ClipFieldValue, in clip: inout ShortClip) {
+            switch (self, value) {
+            case let (.hook, .text(text)), let (.adaptedText, .text(text)),
+                 let (.onScreenText, .text(text)), let (.description, .text(text)):
+                switch self {
+                case .hook: clip.hook = text
+                case .adaptedText: clip.adaptedText = text
+                case .onScreenText: clip.onScreenText = text
+                case .description: clip.description = text
+                case .hashtags, .status: break
+                }
+            case let (.hashtags, .hashtags(tags)):
+                clip.hashtags = tags
+            case let (.status, .status(status)):
+                clip.status = status
+            default:
+                break
+            }
+        }
+    }
+
+    private struct ClipFieldChange {
+        let key: ClipFieldKey
+        let from: ClipFieldValue
+        let to: ClipFieldValue
+
+        static func changes(from old: ShortClip, to new: ShortClip) -> [ClipFieldChange] {
+            ClipFieldKey.allCases.compactMap { key in
+                let before = key.value(in: old)
+                let after = key.value(in: new)
+                guard before != after else { return nil }
+                return ClipFieldChange(key: key, from: before, to: after)
+            }
+        }
     }
 
     // MARK: Helpers

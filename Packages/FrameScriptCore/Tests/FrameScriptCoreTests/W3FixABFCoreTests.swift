@@ -130,6 +130,25 @@ struct W3FixABFCoreTests {
         #expect(!withoutBOM.hasPrefix("\u{FEFF}"))
     }
 
+    @Test("W3FixABF: dialogue dashes are prose, formula-like cells stay escaped")
+    func avCSVKeepsDialogueDashesButEscapesFormulaTokens() {
+        let scene = AVScriptBuilder.scene(
+            AVScriptSceneInput(
+                id: UUID(),
+                title: "Escena",
+                scriptText: "- uno dos\n\n-1+2\n\nTexto normal",
+                annotations: []
+            )
+        )
+        let document = AVScriptDocument(title: "Prueba", scenes: [scene])
+
+        let csv = AVScriptExporter.csv(document: document, escapeFormulas: true)
+        #expect(csv.contains(",- uno dos,"))
+        #expect(!csv.contains("'- uno dos"))
+        #expect(csv.contains("'-1+2"))
+        #expect(csv.contains("Texto normal"))
+    }
+
     // MARK: - Helpers
 
     private func makeScene(order: Int, title: String, text: String) -> FrameScriptDocument.Scene {

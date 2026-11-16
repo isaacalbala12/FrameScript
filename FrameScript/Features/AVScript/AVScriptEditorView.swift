@@ -9,12 +9,6 @@ struct AVScriptEditorView: View {
     @Environment(\.frameTheme) private var theme
     let scene: Scene
     @State private var showsAllScenes: Bool
-    /// An empty paragraph created with Return at a paragraph boundary. It only
-    /// exists in the editor until the first character is typed, so abandoning
-    /// it leaves no stray blank lines in the script.
-    @State private var draftParagraph: AVDraftParagraph?
-    /// The row that must become first responder after a split.
-    @State private var focusRequest: AVFocusRequest?
 
     init(scene: Scene, initiallyShowsAllScenes: Bool = false) {
         self.scene = scene
@@ -50,18 +44,12 @@ struct AVScriptEditorView: View {
                                         annotationCount: annotationCount,
                                         contentInset: contentInset
                                     )
-                                case let .row(scene, row, draft, focusToken, focusOffset):
+                                case let .row(scene, row):
                                     AVScriptRowView(
                                         scene: scene,
                                         row: row,
                                         annotationWidth: annotationWidth,
-                                        contentInset: contentInset,
-                                        draft: draft,
-                                        focusToken: focusToken,
-                                        focusOffset: focusOffset,
-                                        onSplit: handleSplit,
-                                        onDraftCommitted: dismissDraft,
-                                        onBeginEditing: dismissDraftIfStillEmpty
+                                        contentInset: contentInset
                                     )
                                 }
                             }
@@ -86,9 +74,6 @@ struct AVScriptEditorView: View {
         }
         .onChange(of: scene.editingItems.count) { _, _ in
             appState.scheduleRhythmReview(for: scene)
-        }
-        .onChange(of: scene.id) { _, _ in
-            dismissDraft()
         }
         .accessibilityIdentifier("av-script-editor")
     }
@@ -188,173 +173,27 @@ struct AVScriptEditorView: View {
                     )
                 )
             }
-            let draft = draftParagraph?.sceneID == entry.model.id ? draftParagraph : nil
-            for row in rows(for: entry.model, av: entry.av, draft: draft) {
-                let rowID = "\(entry.model.id)-\(row.displayIndex ?? -1)"
-                let focus = focusRequest?.rowID == rowID ? focusRequest : nil
+            for row in entry.av.rows {
                 result.append(
                     AVDisplayRow(
-                        id: rowID,
-                        content: .row(
-                            scene: entry.model,
-                            row: row.row,
-                            draft: row.draft,
-                            focusToken: focus?.id,
-                            focusOffset: focus?.offset ?? 0
-                        )
+                        id: "\(entry.model.id)-\(row.paragraph?.index ?? -1)",
+                        content: .row(scene: entry.model, row: row)
                     )
                 )
             }
         }
         return result
     }
-
-    private struct DisplayedRow {
-        let row: AVScriptRow
-        let draft: AVDraftParagraph?
-        let displayIndex: Int?
-    }
-
-    /// Inserts the empty draft at its paragraph position and shifts the ids of
-    /// the paragraphs after it, so the text view that held focus keeps the same
-    /// identity when the first character turns the draft into a real paragraph.
-    private func rows(
-        for scene: Scene,
-        av: AVScriptScene,
-        draft: AVDraftParagraph?
-    ) -> [DisplayedRow] {
-        guard let draft else {
-            return av.rows.map { DisplayedRow(row: $0, draft: nil, displayIndex: $0.paragraph?.index) }
-        }
-        let draftRow = AVScriptRow(
-            sceneID: scene.id,
-            paragraph: AVScriptParagraph(
-                sceneID: scene.id,
-                index: draft.paragraphIndex,
-                text: "",
-                range: AVScriptTextRange(
-                    startUTF16: draft.insertionOffset,
-                    lengthUTF16: 0
-                )
-            ),
-            annotations: []
-        )
-        let insertionIndex = av.rows.firstIndex { row in
-            guard let index = row.paragraph?.index else { return true }
-            return index >= draft.paragraphIndex
-        } ?? av.rows.endIndex
-
-        var rows = av.rows
-        rows.insert(draftRow, at: insertionIndex)
-        return rows.enumerated().map { offset, row in
-            if offset == insertionIndex {
-                return DisplayedRow(row: draftRow, draft: draft, displayIndex: draft.paragraphIndex)
-            }
-            guard let index = row.paragraph?.index else {
-                return DisplayedRow(row: row, draft: nil, displayIndex: nil)
-            }
-            let displayIndex = index >= draft.paragraphIndex ? index + 1 : index
-            return DisplayedRow(row: row, draft: nil, displayIndex: displayIndex)
-        }
-    }
-
-    private func handleSplit(_ request: AVParagraphSplitRequest) {
-        let range = request.paragraphRange
-        let length = (request.previousText as NSString).length
-        let caret = min(max(0, request.caretOffset), length)
-
-        if caret == 0 {
-            let draft = AVDraftParagraph(
-                sceneID: request.sceneID,
-                paragraphIndex: request.paragraphIndex,
-                insertionOffset: range.location,
-                boundary: .before
-            )
-            draftParagraph = draft
-            focusRequest = AVFocusRequest(
-                id: UUID(),
-                rowID: "\(request.sceneID)-\(draft.paragraphIndex)",
-                offset: 0
-            )
-            return
-        }
-        if caret == length {
-            let draft = AVDraftParagraph(
-                sceneID: request.sceneID,
-                paragraphIndex: request.paragraphIndex + 1,
-                insertionOffset: range.location + range.length,
-                boundary: .after
-            )
-            draftParagraph = draft
-            focusRequest = AVFocusRequest(
-                id: UUID(),
-                rowID: "\(request.sceneID)-\(draft.paragraphIndex)",
-                offset: 0
-            )
-            return
-        }
-        guard appState.splitAVParagraph(
-            sceneID: request.sceneID,
-            paragraphRange: range,
-            previousText: request.previousText,
-            at: caret,
-            undoManager: request.undoManager
-        ) else { return }
-        focusRequest = AVFocusRequest(
-            id: UUID(),
-            rowID: "\(request.sceneID)-\(request.paragraphIndex + 1)",
-            offset: 0
-        )
-    }
-
-    private func dismissDraft() {
-        draftParagraph = nil
-        focusRequest = nil
-    }
-
-    private func dismissDraftIfStillEmpty() {
-        guard draftParagraph != nil else { return }
-        draftParagraph = nil
-        focusRequest = nil
-    }
 }
 
 private struct AVDisplayRow: Identifiable {
     enum Content {
         case header(scene: Scene, number: Int, annotationCount: Int)
-        case row(
-            scene: Scene,
-            row: AVScriptRow,
-            draft: AVDraftParagraph?,
-            focusToken: UUID?,
-            focusOffset: Int
-        )
+        case row(scene: Scene, row: AVScriptRow)
     }
 
     let id: String
     let content: Content
-}
-
-private struct AVDraftParagraph: Equatable {
-    let sceneID: UUID
-    let paragraphIndex: Int
-    let insertionOffset: Int
-    let boundary: AVParagraphBoundary
-}
-
-private struct AVFocusRequest: Equatable {
-    let id: UUID
-    let rowID: String
-    let offset: Int
-}
-
-private struct AVParagraphSplitRequest {
-    let sceneID: UUID
-    let paragraphIndex: Int
-    let paragraphRange: NSRange
-    let previousText: String
-    let caretOffset: Int
-    let undoManager: UndoManager?
 }
 
 private struct AVScriptSceneHeaderRow: View {
@@ -404,12 +243,6 @@ private struct AVScriptRowView: View {
     let row: AVScriptRow
     let annotationWidth: CGFloat
     let contentInset: CGFloat
-    let draft: AVDraftParagraph?
-    let focusToken: UUID?
-    let focusOffset: Int
-    let onSplit: (AVParagraphSplitRequest) -> Void
-    let onDraftCommitted: () -> Void
-    let onBeginEditing: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -440,49 +273,16 @@ private struct AVScriptRowView: View {
     @ViewBuilder
     private var leftColumn: some View {
         if let paragraph = row.paragraph {
-            AVParagraphEditor(
-                text: paragraph.text,
-                placeholder: appState.localized("avScript.paragraphPlaceholder"),
-                paragraphRange: paragraph.range.nsRange,
-                isDraft: draft != nil,
-                focusToken: focusToken,
-                focusOffset: focusOffset,
-                onSplit: { caretOffset, textLength, range, previousText, undoManager in
-                    onSplit(
-                        AVParagraphSplitRequest(
-                            sceneID: scene.id,
-                            paragraphIndex: paragraph.index,
-                            paragraphRange: range,
-                            previousText: previousText,
-                            caretOffset: min(max(0, caretOffset), textLength),
-                            undoManager: undoManager
-                        )
-                    )
-                },
-                onCommit: { text, range, previousText, undoManager in
-                    if let draft {
-                        let accepted = appState.insertAVParagraph(
-                            sceneID: scene.id,
-                            insertionOffset: draft.insertionOffset,
-                            boundary: draft.boundary,
-                            text: text,
-                            undoManager: undoManager
-                        )
-                        if accepted {
-                            onDraftCommitted()
-                        }
-                        return accepted
-                    }
-                    return appState.commitAVParagraph(
-                        sceneID: scene.id,
-                        paragraphRange: range,
-                        previousText: previousText,
-                        text: text,
-                        undoManager: undoManager
-                    )
-                },
-                onBeginEditing: draft == nil ? onBeginEditing : {}
-            )
+            let edit = {
+                appState.editAVParagraphInScript(
+                    sceneID: scene.id,
+                    range: paragraph.range.nsRange
+                )
+            }
+            // Narration is read-only here. The Script editor is the only place
+            // where narration is edited, so there is one owner for the text
+            // and one undo stack.
+            AVReadOnlyParagraph(text: paragraph.text, onEdit: edit)
         } else {
             VStack(alignment: .leading, spacing: 6) {
                 Label(appState.localized("avScript.unanchored"), systemImage: "exclamationmark.triangle")
@@ -499,27 +299,46 @@ private struct AVScriptRowView: View {
 
     @ViewBuilder
     private var rightColumn: some View {
-        if draft != nil {
-            Color.clear.frame(height: 1)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                if row.annotations.isEmpty, let paragraph = row.paragraph {
-                    Text(appState.localized("avScript.noAnnotations"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.tertiaryText)
-                        .padding(.top, 4)
-                    addMenu(for: paragraph)
-                } else {
-                    ForEach(row.annotations) { annotation in
-                        AVScriptAnnotationView(
-                            scene: scene,
-                            annotation: annotation,
-                            isUnanchored: row.isUnanchored
+        VStack(alignment: .leading, spacing: 8) {
+            if let paragraph = row.paragraph {
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    Button {
+                        appState.editAVParagraphInScript(
+                            sceneID: scene.id,
+                            range: paragraph.range.nsRange
                         )
+                    } label: {
+                        Label(
+                            appState.localized("avScript.editInScript"),
+                            systemImage: "pencil"
+                        )
+                        .font(.system(size: 10, weight: .medium))
                     }
-                    if let paragraph = row.paragraph {
-                        addMenu(for: paragraph)
-                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(theme.tertiaryText)
+                    .help(appState.localized("avScript.editInScriptHelp"))
+                    .accessibilityIdentifier(
+                        "av-script-edit-\(scene.id.uuidString)-\(paragraph.index)"
+                    )
+                }
+            }
+            if row.annotations.isEmpty, let paragraph = row.paragraph {
+                Text(appState.localized("avScript.noAnnotations"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.tertiaryText)
+                    .padding(.top, 4)
+                addMenu(for: paragraph)
+            } else {
+                ForEach(row.annotations) { annotation in
+                    AVScriptAnnotationView(
+                        scene: scene,
+                        annotation: annotation,
+                        isUnanchored: row.isUnanchored
+                    )
+                }
+                if let paragraph = row.paragraph {
+                    addMenu(for: paragraph)
                 }
             }
         }
@@ -768,7 +587,7 @@ private struct AVEditingCard: View {
     }
 }
 
-// MARK: - Paragraph editor
+// MARK: - Narration (read-only)
 
 enum AVScriptLayoutMetrics {
     static let dividerWidth: CGFloat = 1
@@ -790,59 +609,36 @@ enum AVScriptLayoutMetrics {
     }
 }
 
-private struct AVParagraphEditor: View {
+private struct AVReadOnlyParagraph: View {
     let text: String
-    let placeholder: String
-    let paragraphRange: NSRange
-    let isDraft: Bool
-    let focusToken: UUID?
-    let focusOffset: Int
-    let onSplit: (Int, Int, NSRange, String, UndoManager?) -> Void
-    let onCommit: (String, NSRange, String, UndoManager?) -> Bool
-    let onBeginEditing: () -> Void
+    let onEdit: () -> Void
 
     var body: some View {
-        AVParagraphTextRepresentable(
-            text: text,
-            placeholder: placeholder,
-            paragraphRange: paragraphRange,
-            isDraft: isDraft,
-            focusToken: focusToken,
-            focusOffset: focusOffset,
-            onSplit: onSplit,
-            onCommit: onCommit,
-            onBeginEditing: onBeginEditing
-        )
-        .frame(minHeight: 24)
+        AVReadOnlyParagraphRepresentable(text: text, onEdit: onEdit)
+            .frame(minHeight: 24)
     }
 }
 
-private struct AVParagraphTextRepresentable: NSViewRepresentable {
+/// Selectable, copyable narration. It deliberately has no delegate, no undo
+/// and no commit path: narration is edited in the Script workspace only.
+private struct AVReadOnlyParagraphRepresentable: NSViewRepresentable {
     let text: String
-    let placeholder: String
-    let paragraphRange: NSRange
-    let isDraft: Bool
-    let focusToken: UUID?
-    let focusOffset: Int
-    let onSplit: (Int, Int, NSRange, String, UndoManager?) -> Void
-    /// `(newText, rangeShownByThisView, modelTextShownByThisView, undoManager)`.
-    let onCommit: (String, NSRange, String, UndoManager?) -> Bool
-    let onBeginEditing: () -> Void
+    let onEdit: () -> Void
 
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
+        Coordinator()
     }
 
-    func makeNSView(context: Context) -> AVParagraphTextView {
-        let textView = AVParagraphTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+    func makeNSView(context: Context) -> AVReadOnlyTextView {
+        let textView = AVReadOnlyTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         textView.isRichText = true
         textView.importsGraphics = false
-        textView.isEditable = true
+        textView.isEditable = false
         textView.isSelectable = true
-        textView.allowsUndo = true
+        textView.allowsUndo = false
         textView.drawsBackground = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -852,28 +648,24 @@ private struct AVParagraphTextRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
-        textView.delegate = context.coordinator
-        textView.string = text
-        context.coordinator.attach(to: textView)
-        context.coordinator.configure(textView)
+        textView.onEdit = onEdit
+        context.coordinator.styler.attach(to: textView)
+        configure(textView, styler: context.coordinator.styler)
         return textView
     }
 
-    func updateNSView(_ textView: AVParagraphTextView, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.configure(textView)
+    func updateNSView(_ textView: AVReadOnlyTextView, context: Context) {
+        textView.onEdit = onEdit
+        configure(textView, styler: context.coordinator.styler)
     }
 
-    static func dismantleNSView(_ textView: AVParagraphTextView, coordinator: Coordinator) {
-        if textView.delegate === coordinator {
-            textView.delegate = nil
-        }
-        coordinator.detach()
+    static func dismantleNSView(_ textView: AVReadOnlyTextView, coordinator: Coordinator) {
+        coordinator.styler.textView = nil
     }
 
     func sizeThatFits(
         _ proposal: ProposedViewSize,
-        nsView textView: AVParagraphTextView,
+        nsView textView: AVReadOnlyTextView,
         context: Context
     ) -> CGSize? {
         let width = proposal.width ?? textView.bounds.width
@@ -888,290 +680,74 @@ private struct AVParagraphTextRepresentable: NSViewRepresentable {
         return CGSize(width: width, height: height)
     }
 
-    @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: AVParagraphTextRepresentable
-        let styler = MarkupEditorStyler()
-        private var isApplyingModelText = false
-        /// The paragraph text this view last displayed or committed. Commits
-        /// are refused when the model range no longer contains it, so an edit
-        /// can never leak into a different paragraph after a row shift.
-        private var boundText = ""
-        private var boundRange: NSRange
-        private var lastHandledFocusToken: UUID?
+    private func configure(_ textView: AVReadOnlyTextView, styler: MarkupEditorStyler) {
+        let preferences = appState.settings.editorPreferences
+        let theme = theme
+        let fontSize = CGFloat(max(14, min(18, preferences.fontSize * 0.8)))
 
-        init(parent: AVParagraphTextRepresentable) {
-            self.parent = parent
-            self.boundRange = parent.paragraphRange
+        if textView.font?.pointSize != fontSize {
+            textView.font = NSFont.systemFont(ofSize: fontSize)
         }
+        textView.textColor = NSColor(theme.primaryText)
+        textView.backgroundColor = NSColor(theme.editorSurface)
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
 
-        func attach(to textView: AVParagraphTextView) {
-            styler.attach(to: textView)
-            textView.pasteHandler = { [weak self, weak textView] pasteboard in
-                guard let self, let textView else { return false }
-                return self.handleMultilinePaste(in: textView, pasteboard: pasteboard)
-            }
-        }
+        let paragraphStyle = ScriptEditorLayout.paragraphStyle()
+        textView.defaultParagraphStyle = paragraphStyle
 
-        func detach() {
-            styler.textView = nil
-        }
-
-        func configure(_ textView: AVParagraphTextView) {
-            let preferences = parent.appState.settings.editorPreferences
-            let theme = parent.theme
-            let fontSize = CGFloat(max(14, min(18, preferences.fontSize * 0.8)))
-
-            if textView.font?.pointSize != fontSize {
-                textView.font = NSFont.systemFont(ofSize: fontSize)
-            }
-            textView.textColor = NSColor(theme.primaryText)
-            textView.insertionPointColor = NSColor(theme.accent.color)
-            textView.backgroundColor = NSColor(theme.editorSurface)
-            textView.isContinuousSpellCheckingEnabled = preferences.spellcheck
-            textView.isAutomaticQuoteSubstitutionEnabled = preferences.smartQuotes
-            textView.isAutomaticDashSubstitutionEnabled = false
-            textView.isAutomaticTextReplacementEnabled = false
-            textView.placeholder = parent.placeholder
-            textView.placeholderColor = NSColor(theme.secondaryText.opacity(0.58))
-
-            let paragraphStyle = ScriptEditorLayout.paragraphStyle()
-            textView.defaultParagraphStyle = paragraphStyle
-            textView.typingAttributes[.paragraphStyle] = paragraphStyle
-            applyParagraphStyle(paragraphStyle, to: textView)
-
-            styler.configure(
-                MarkupEditorStyler.Configuration(
-                    isEnabled: true,
-                    pauseDefaults: preferences.markupPauseDefaults,
-                    palette: MarkupEditorPalette(
-                        fontSize: Double(fontSize),
-                        textColor: NSColor(theme.primaryText),
-                        secondaryColor: NSColor(theme.secondaryText),
-                        accentColor: NSColor(theme.accent.color),
-                        rhythmColor: NSColor(theme.warning),
-                        backgroundColor: NSColor(theme.editorSurface)
-                    )
+        styler.configure(
+            MarkupEditorStyler.Configuration(
+                isEnabled: true,
+                pauseDefaults: preferences.markupPauseDefaults,
+                palette: MarkupEditorPalette(
+                    fontSize: Double(fontSize),
+                    textColor: NSColor(theme.primaryText),
+                    secondaryColor: NSColor(theme.secondaryText),
+                    accentColor: NSColor(theme.accent.color),
+                    rhythmColor: NSColor(theme.warning),
+                    backgroundColor: NSColor(theme.editorSurface)
                 )
             )
+        )
 
-            let modelText = parent.text
-            let shownText = Self.normalizedTrailingNewlines(textView.string)
-            if shownText == modelText {
-                // The text view is ahead of the model only by the user's own
-                // pending trailing newline; keep it and adopt the current range.
-                boundText = modelText
-                boundRange = parent.paragraphRange
-                requestFocusIfNeeded(textView)
-                return
-            }
-
-            let modelChanged = modelText != Self.normalizedTrailingNewlines(boundText)
-                || parent.paragraphRange != boundRange
-            guard modelChanged else {
-                requestFocusIfNeeded(textView)
-                return
-            }
-
-            // The row was reused for another paragraph or the model changed
-            // outside this editor. Resync even while focused and drop undo
-            // actions recorded against the old paragraph (A-2).
-            isApplyingModelText = true
-            let selection = textView.selectedRange()
-            textView.string = modelText
-            applyParagraphStyle(paragraphStyle, to: textView)
-            isApplyingModelText = false
-            let clamped = TextAnchorGeometry.clamp(
-                selection,
-                toLength: (modelText as NSString).length
-            )
-            textView.setSelectedRange(clamped)
+        guard textView.string != text else {
             styler.applyAll(in: textView)
-            textView.invalidateIntrinsicContentSize()
-            clearUndoHistory(in: textView)
-            boundText = modelText
-            boundRange = parent.paragraphRange
-            requestFocusIfNeeded(textView)
+            return
         }
+        textView.string = text
+        applyParagraphStyle(paragraphStyle, to: textView)
+        styler.applyAll(in: textView)
+        textView.invalidateIntrinsicContentSize()
+    }
 
-        func textDidBeginEditing(_ notification: Notification) {
-            guard !parent.isDraft else { return }
-            parent.onBeginEditing()
-        }
+    private func applyParagraphStyle(_ style: NSParagraphStyle, to textView: NSTextView) {
+        guard let storage = textView.textStorage, storage.length > 0 else { return }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: style,
+            range: NSRange(location: 0, length: storage.length)
+        )
+    }
 
-        func textDidChange(_ notification: Notification) {
-            guard !isApplyingModelText,
-                  let textView = notification.object as? AVParagraphTextView else {
-                return
-            }
-            styler.apply(around: textView.selectedRange(), in: textView)
-            commit(textView)
-            textView.invalidateIntrinsicContentSize()
-        }
-
-        func textDidEndEditing(_ notification: Notification) {
-            guard !isApplyingModelText,
-                  let textView = notification.object as? AVParagraphTextView else {
-                return
-            }
-            commit(textView)
-        }
-
-        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
-            guard let textView = textView as? AVParagraphTextView else { return false }
-            let text = textView.string
-            guard !text.isEmpty else { return true }
-            let selection = textView.selectedRange()
-            // Replacing a selection with Return is a normal replacement; only
-            // a collapsed caret becomes a paragraph split.
-            guard selection.length == 0 else { return false }
-
-            let nsText = text as NSString
-            let location = min(max(0, selection.location), nsText.length)
-            var lineStart = 0
-            var lineEnd = 0
-            var contentsEnd = 0
-            nsText.getLineStart(
-                &lineStart,
-                end: &lineEnd,
-                contentsEnd: &contentsEnd,
-                for: NSRange(location: location, length: 0)
-            )
-            let line = nsText.substring(
-                with: NSRange(location: lineStart, length: max(0, contentsEnd - lineStart))
-            )
-            // The AV model has no blank paragraphs, so Return on an empty line
-            // must never insert another one.
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return true }
-
-            let column = location - lineStart
-            let isBoundary = location == 0
-                || location == nsText.length
-                || column == 0
-                || location == contentsEnd
-            guard isBoundary else { return false }
-
-            parent.onSplit(
-                location,
-                nsText.length,
-                boundRange,
-                boundText,
-                textView.undoManager
-            )
-            return true
-        }
-
-        private func commit(_ textView: AVParagraphTextView) {
-            let accepted = parent.onCommit(
-                textView.string,
-                boundRange,
-                boundText,
-                textView.undoManager
-            )
-            if accepted {
-                boundText = Self.normalizedTrailingNewlines(textView.string)
-                boundRange = NSRange(
-                    location: boundRange.location,
-                    length: (textView.string as NSString).length
-                )
-            } else {
-                configure(textView)
-            }
-        }
-
-        private func requestFocusIfNeeded(_ textView: AVParagraphTextView) {
-            guard let token = parent.focusToken, token != lastHandledFocusToken else { return }
-            lastHandledFocusToken = token
-            let offset = parent.focusOffset
-            DispatchQueue.main.async { [weak self, weak textView] in
-                guard let self, let textView else { return }
-                if let window = textView.window, window.firstResponder !== textView {
-                    window.makeFirstResponder(textView)
-                }
-                let length = (textView.string as NSString).length
-                textView.setSelectedRange(
-                    NSRange(location: min(max(0, offset), length), length: 0)
-                )
-                self.parent.onBeginEditing()
-            }
-        }
-
-        /// One model commit, then the row resyncs from the model. A paste that
-        /// contains a blank line must never live inside a single paragraph row.
-        private func handleMultilinePaste(
-            in textView: AVParagraphTextView,
-            pasteboard: NSPasteboard
-        ) -> Bool {
-            guard let plain = pasteboard.string(forType: .string),
-                  plain.range(of: "\\n\\s*\\n", options: .regularExpression) != nil else {
-                return false
-            }
-            let selection = textView.selectedRange()
-            let updated = (textView.string as NSString).replacingCharacters(
-                in: selection,
-                with: plain
-            )
-            _ = parent.onCommit(updated, boundRange, boundText, textView.undoManager)
-            configure(textView)
-            return true
-        }
-
-        private func clearUndoHistory(in textView: NSTextView) {
-            guard let undoManager = textView.undoManager else { return }
-            undoManager.removeAllActions(withTarget: textView)
-            if let storage = textView.textStorage {
-                undoManager.removeAllActions(withTarget: storage)
-            }
-            // NSTextView's typing undo is registered through a private target,
-            // so clearing the manager is the only reliable way to guarantee a
-            // Cmd-Z can never write the previous paragraph into this row.
-            undoManager.removeAllActions()
-        }
-
-        private static func normalizedTrailingNewlines(_ text: String) -> String {
-            var end = text.endIndex
-            while end > text.startIndex {
-                let previous = text.index(before: end)
-                let character = text[previous]
-                guard character == "\n" || character == "\r" else { break }
-                end = previous
-            }
-            return String(text[..<end])
-        }
-
-        private func applyParagraphStyle(_ style: NSParagraphStyle, to textView: NSTextView) {
-            guard let storage = textView.textStorage, storage.length > 0 else { return }
-            if let existing = storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
-               existing.isEqual(style) {
-                return
-            }
-            let undoManager = textView.undoManager
-            undoManager?.disableUndoRegistration()
-            storage.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: storage.length))
-            undoManager?.enableUndoRegistration()
-        }
+    @MainActor
+    final class Coordinator {
+        let styler = MarkupEditorStyler()
     }
 }
 
-private final class AVParagraphTextView: PlaceholderTextView {
-    var pasteHandler: ((NSPasteboard) -> Bool)?
+private final class AVReadOnlyTextView: PlaceholderTextView {
+    var onEdit: (() -> Void)?
 
-    override func didChangeText() {
-        super.didChangeText()
-        invalidateIntrinsicContentSize()
-    }
-
-    /// The paragraph editor allows rich text so the markup styler can apply
-    /// fonts, but pasted content must stay plain. Multi-paragraph pastes are
-    /// routed through the model so blank lines never enter one row.
-    override func paste(_ sender: Any?) {
-        let pasteboard = NSPasteboard.general
-        if pasteHandler?(pasteboard) == true { return }
-        guard let plain = pasteboard.string(forType: .string) else {
-            super.paste(sender)
+    /// Double-click opens the paragraph in the Script workspace, where the
+    /// single narration editor lives.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            onEdit?()
             return
         }
-        insertText(plain, replacementRange: selectedRange())
+        super.mouseDown(with: event)
     }
 }
