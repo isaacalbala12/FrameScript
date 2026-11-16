@@ -103,8 +103,8 @@ final class WP5SnapshotTests: FrameScriptTestCase {
             appState: appState
         )
         XCTAssertTrue(
-            standard.textFragments.contains { $0.contains(L10n.tr("ai.review", language: .spanish)) },
-            "the AI panel must render at 1180 pt"
+            standard.textFragments.contains { $0.contains(L10n.tr("ux.inspector.title", language: .spanish)) },
+            "the inspector must render at 1180 pt"
         )
 
         let minimum = SnapshotRenderer.render(
@@ -117,8 +117,8 @@ final class WP5SnapshotTests: FrameScriptTestCase {
             appState: appState
         )
         XCTAssertFalse(
-            minimum.textFragments.contains { $0.contains(L10n.tr("ai.review", language: .spanish)) },
-            "the AI panel must hide below 1080 pt"
+            minimum.textFragments.contains { $0.contains(L10n.tr("ux.inspector.title", language: .spanish)) },
+            "the inspector must hide below 1080 pt"
         )
         XCTAssertTrue(
             minimum.textFragments.contains { $0.contains("Apexia") },

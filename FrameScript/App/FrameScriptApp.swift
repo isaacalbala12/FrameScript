@@ -253,7 +253,7 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("command.toggleSidebar"), isOn: $appState.isSidebarVisible)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleContentsPanel))
                 .disabled(!commands.canToggleContentsPanel)
-            Toggle(appState.localized("command.toggleAIReview"), isOn: aiReviewPanelBinding)
+            Toggle(appState.localized("ux.inspector.toggle"), isOn: aiReviewPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleAIReview))
                 .disabled(!commands.canToggleAIReview)
             Button(appState.localized("research.menu")) { appState.openResearchPanel() }

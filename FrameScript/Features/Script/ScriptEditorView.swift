@@ -16,7 +16,10 @@ struct ScriptEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            sceneHeader
+            VStack(alignment: .leading, spacing: 10) {
+                sceneHeader
+                UXEditorActionBar(sceneID: scene.id)
+            }
 
             scriptTextView
                 .frame(minHeight: appState.isFocusModeEnabled ? 430 : 390, maxHeight: .infinity)
@@ -175,7 +178,12 @@ struct ScriptEditorView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if appState.settings.editorPreferences.showSceneDuration {
-                    SceneDurationControl(scene: scene)
+                    SceneDurationControl(
+                        scene: scene,
+                        showsLegacyTargetGlyph: SceneTargetIndicatorPolicy.showsLegacyGlyph(
+                            hasTarget: scene.targetDuration != nil
+                        )
+                    )
                 }
                 if appState.settings.editorPreferences.showSceneDuration && appState.settings.editorPreferences.showWordCount { Text("·") }
                 if appState.settings.editorPreferences.showWordCount {
@@ -211,6 +219,7 @@ struct ScriptEditorView: View {
                         .foregroundStyle(theme.tertiaryText)
                 }
                 ResearchSceneBadge(sceneID: scene.id)
+                UXSceneMetaChips(scene: scene)
             }
             .font(.system(size: 13))
             .foregroundStyle(theme.secondaryText)
@@ -1134,6 +1143,7 @@ protocol ActiveScriptEditor: AnyObject {
     /// The current non-empty selection as an anchor, or nil when the caret is
     /// collapsed. Used by the "create clip" command.
     func currentSelectionAnchor() -> TextAnchor?
+    @discardableResult func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool
     var sceneID: UUID { get }
     var editorIdentity: UUID { get }
     var owningWindow: NSWindow? { get }
@@ -1145,6 +1155,8 @@ extension ActiveScriptEditor {
     func selectRange(_ range: NSRange) {}
 
     func currentSelectionAnchor() -> TextAnchor? { nil }
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool { false }
 }
 
 extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
@@ -1171,6 +1183,19 @@ extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
         let range = textView.selectedRange()
         guard range.length > 0 else { return nil }
         return TextAnchorRepair.anchor(in: textView.string, range: range)
+    }
+
+    /// Inserts a markup token through `NSTextView`'s normal typing path. The
+    /// text view keeps first-responder status; `insertText` notifies this
+    /// delegate, so the styler, autosave and anchors follow the usual path.
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion) -> Bool {
+        guard let textView = view?.textView else { return false }
+        cancelAutocomplete(clearStatus: true)
+        textView.ghostText = ""
+        guard UXMarkupInsertionEngine.insert(insertion, into: textView) != nil else { return false }
+        captureRestorationState(force: true)
+        return true
     }
 }
 
@@ -1246,6 +1271,16 @@ final class ActiveScriptEditorSession {
         let editor = liveEditors.first(where: { $0.sceneID == sceneID && $0.isActualFirstResponder })
             ?? liveEditors.first(where: { $0.sceneID == sceneID })
         return editor?.currentSelectionAnchor()
+    }
+
+    /// Inserts a markup token in the editor showing `sceneID`.
+    @discardableResult
+    func insertMarkup(_ insertion: UXMarkupInsertion, inScene sceneID: UUID) -> Bool {
+        editors.removeAll { $0.value == nil }
+        guard let editor = editors.compactMap(\.value).first(where: { $0.sceneID == sceneID }) else {
+            return false
+        }
+        return editor.insertMarkup(insertion)
     }
 }
 

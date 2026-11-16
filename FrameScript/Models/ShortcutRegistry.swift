@@ -362,7 +362,7 @@ enum ShortcutRegistry {
         .init(command: .createClip, localizationKey: "clips.command.create", category: .workspace, factoryDefault: .init("c", modifiers: [.command, .shift]), order: 6),
         .init(command: .commandPalette, localizationKey: "toolbar.commandPalette", category: .workspace, factoryDefault: .init("k", modifiers: [.command]), order: 7),
         .init(command: .toggleContentsPanel, localizationKey: "command.toggleSidebar", category: .workspace, factoryDefault: .init("\\", modifiers: [.command]), order: 8),
-        .init(command: .toggleAIReview, localizationKey: "command.toggleAIReview", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 9),
+        .init(command: .toggleAIReview, localizationKey: "ux.inspector.toggle", category: .workspace, factoryDefault: .init("r", modifiers: [.command, .shift]), order: 9),
         .init(command: .toggleFocusMode, localizationKey: "command.toggleFocus", category: .workspace, factoryDefault: .init("'", modifiers: [.command]), order: 10),
         .init(command: .teleprompter, localizationKey: "menu.teleprompter", category: .workspace, factoryDefault: .init("t", modifiers: [.command, .option]), order: 11),
         .init(command: .recordTake, localizationKey: "recording.menu.recordTake", category: .workspace, factoryDefault: .init("r", modifiers: [.command]), order: 12),

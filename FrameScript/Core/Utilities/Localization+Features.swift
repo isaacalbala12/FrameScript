@@ -35,6 +35,7 @@ extension L10n {
         publishingStrings,
         researchStrings,
         boardStrings,
-        resolvePackStrings
+        resolvePackStrings,
+        uxStrings
     ]
 }
