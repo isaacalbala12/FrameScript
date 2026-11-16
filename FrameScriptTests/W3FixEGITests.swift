@@ -622,13 +622,25 @@ final class W3FixEGITests: FrameScriptTestCase {
         XCTAssertEqual(FramePrimaryButtonStyle(compact: true).size, .compact)
     }
 
-    // MARK: - G-1 · Owned by the parallel publishing fixer
+    // MARK: - G-1 · Board topic survives publishing edits
 
     func testW3FixEGIPublishingPromisePreservesTheBoardTopic() throws {
-        throw XCTSkip(
-            "G-1 is owned by w3fix/cdh (publishing promise/thesis overwrite). "
-                + "Enable this regression once both branches are merged."
+        let project = FrameProject(
+            title: "Vídeo sintético",
+            scenes: [makeScene(order: 0, title: "Uno", text: "Texto de prueba.")],
+            primaryLanguage: "es"
         )
+        project.topic = "Tema del tablero"
+        let appState = makeAppState(project: project)
+
+        appState.setPublishingPromise("Promesa de prueba")
+        appState.setPublishingThesis("Tesis de prueba")
+
+        XCTAssertEqual(BoardProjectTopic.display(from: project.topic), "Tema del tablero")
+        XCTAssertEqual(EscaletaProjectNotes.decode(project.topic).promise, "Promesa de prueba")
+
+        appState.setPublishingPromise("")
+        XCTAssertEqual(BoardProjectTopic.display(from: project.topic), "Tema del tablero")
     }
 
     // MARK: - Helpers

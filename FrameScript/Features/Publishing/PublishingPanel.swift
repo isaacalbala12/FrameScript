@@ -180,8 +180,7 @@ struct PublishingPanel: View {
                 Label(appState.localized("publishing.export"), systemImage: "square.and.arrow.up")
                     .font(.system(size: 12, weight: .medium))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(theme.accent.color)
+            .buttonStyle(.framePrimary)
             .accessibilityIdentifier("publishing-export")
 
             Button(appState.localized("publishing.close")) {
@@ -200,38 +199,22 @@ struct PublishingPanel: View {
     private var validationSummary: some View {
         let errors = issues.filter { $0.severity == .error }.count
         let warnings = issues.filter { $0.severity == .warning }.count
+        let progress = appState.publishingChecklistProgress
+        let isReady = errors == 0 && warnings == 0 && progress.done == progress.total
         HStack(spacing: 6) {
-            Image(systemName: errors > 0 ? "exclamationmark.octagon.fill" : (warnings > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"))
+            Image(systemName: isReady
+                ? "checkmark.circle.fill"
+                : (errors > 0 ? "exclamationmark.octagon.fill" : "exclamationmark.triangle.fill"))
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(errors > 0 ? theme.destructive : (warnings > 0 ? theme.warning : theme.success))
-            Text(summaryText(errors: errors, warnings: warnings))
+                .foregroundStyle(isReady
+                    ? theme.success
+                    : (errors > 0 ? theme.destructive : theme.warning))
+            Text(appState.publishingFooterSummaryText(errors: errors, warnings: warnings))
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(errors > 0 ? theme.destructive : theme.secondaryText)
+                .foregroundStyle(errors > 0 ? theme.destructive : (isReady ? theme.secondaryText : theme.warning))
                 .lineLimit(1)
         }
         .accessibilityIdentifier("publishing-validation-summary")
-    }
-
-    private func summaryText(errors: Int, warnings: Int) -> String {
-        let errorText = errors == 1
-            ? appState.localized("publishing.validation.errorOne")
-            : String(
-                format: appState.localized("publishing.validation.errorsCount"),
-                errors
-            )
-        let warningText = warnings == 1
-            ? appState.localized("publishing.validation.warningOne")
-            : String(
-                format: appState.localized("publishing.validation.warningsCount"),
-                warnings
-            )
-        if errors > 0 {
-            return "\(errorText) · \(warningText)"
-        }
-        if warnings > 0 {
-            return warningText
-        }
-        return appState.localized("publishing.validation.ok")
     }
 
     private func selectDefaultLanguage() {

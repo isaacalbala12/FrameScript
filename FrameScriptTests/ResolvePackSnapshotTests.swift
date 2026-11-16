@@ -9,7 +9,7 @@ import XCTest
 ///
 /// The view is hosted in an `NSWindow` that is never ordered front, never made
 /// key and never activates the app. With `FS_SNAPSHOTS=1` in the test host the
-/// PNGs are written to `/tmp/fs-snapshots/w3-h-resolve-pack/`; without it the
+/// PNGs are written to `/tmp/fs-snapshots/w3fix-cdh-resolve-pack/`; without it the
 /// same render is checked for size, non-blank pixels, visible Spanish text and
 /// the layout contract.
 ///
@@ -18,7 +18,7 @@ import XCTest
 @MainActor
 final class ResolvePackSnapshotTests: XCTestCase {
     private let snapshotDirectory = URL(
-        fileURLWithPath: "/tmp/fs-snapshots/w3-h-resolve-pack",
+        fileURLWithPath: "/tmp/fs-snapshots/w3fix-cdh-resolve-pack",
         isDirectory: true
     )
 
@@ -97,6 +97,78 @@ final class ResolvePackSnapshotTests: XCTestCase {
             visibleText.localizedCaseInsensitiveContains("válido")
                 || visibleText.localizedCaseInsensitiveContains("valido"),
             "Missing inline timecode error. OCR text: \(visibleText)"
+        )
+    }
+
+    func testResolvePackInvalidChaptersWarnAndOfferTheOptIn() throws {
+        let scenes = [
+            ExportScene(title: "Uno", start: 0, duration: 20),
+            ExportScene(title: "Dos", start: 20, duration: 20)
+        ]
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let options = try XCTUnwrap(configuration.options())
+        let plan = ResolveDeliveryPack.plan(
+            scenes: scenes,
+            projectName: "Dos escenas",
+            options: options
+        )
+        XCTAssertFalse(plan.chapters.isValidForYouTube)
+
+        let rendered = render(
+            content(plan: plan, configuration: configuration),
+            size: CGSize(width: 980, height: 712),
+            scheme: .light
+        )
+        try assertRender(rendered, size: CGSize(width: 980, height: 712), name: "invalid chapters")
+        let visibleText = recognizedText(in: rendered.image)
+        XCTAssertTrue(
+            visibleText.localizedCaseInsensitiveContains("capítulos"),
+            "Missing invalid-chapters warning. OCR text: \(visibleText)"
+        )
+        XCTAssertTrue(
+            visibleText.localizedCaseInsensitiveContains("5 de 6"),
+            "The footer must count the omitted chapters file. OCR text: \(visibleText)"
+        )
+        XCTAssertTrue(
+            visibleText.localizedCaseInsensitiveContains("no se escribirá"),
+            "The chapter row must say it will not be written. OCR text: \(visibleText)"
+        )
+        if ProcessInfo.processInfo.environment["FS_SNAPSHOTS"] == "1" {
+            try writePNG(rendered.image, name: "resolve-pack-invalid-chapters-light-980x712.png")
+        }
+
+        configuration.writeInvalidChapters = true
+        XCTAssertNotNil(configuration.options())
+    }
+
+    func testResolveExportButtonStaysAccentFilledWhenTheWindowIsNotKey() throws {
+        let plan = try makePlan()
+        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let size = CGSize(width: 980, height: 712)
+        let sage = render(
+            content(plan: plan, configuration: configuration),
+            size: size,
+            scheme: .light,
+            accent: .sage
+        )
+        let rose = render(
+            content(plan: plan, configuration: configuration),
+            size: size,
+            scheme: .light,
+            accent: .rose
+        )
+        let scale = CGFloat(sage.image.pixelsWide) / size.width
+        let band = CGRect(
+            x: 0,
+            y: 0,
+            width: CGFloat(sage.image.pixelsWide),
+            height: ResolvePackSheetLayout.footerHeight * scale
+        )
+        let differing = differingPixels(sage.image, rose.image, in: band)
+        XCTAssertGreaterThan(
+            differing,
+            100,
+            "The Resolve export primary button is not accent-filled (\(differing) footer pixels changed)"
         )
     }
 
@@ -252,9 +324,10 @@ final class ResolvePackSnapshotTests: XCTestCase {
     private func render(
         _ view: ResolvePackSheetContent,
         size: CGSize,
-        scheme: ColorScheme
+        scheme: ColorScheme,
+        accent: AccentPalette = .sage
     ) -> Rendered {
-        let theme = FrameTheme(colorScheme: scheme, accent: .sage)
+        let theme = FrameTheme(colorScheme: scheme, accent: accent)
         let root = AnyView(
             view
                 .environment(\.frameTheme, theme)
@@ -318,6 +391,32 @@ final class ResolvePackSnapshotTests: XCTestCase {
         XCTAssertFalse(frames.options.intersects(frames.divider))
         XCTAssertFalse(frames.divider.intersects(frames.preview))
         XCTAssertFalse(frames.header.intersects(frames.footer))
+    }
+
+    private func differingPixels(
+        _ lhs: NSBitmapImageRep,
+        _ rhs: NSBitmapImageRep,
+        in band: CGRect
+    ) -> Int {
+        let width = min(lhs.pixelsWide, rhs.pixelsWide)
+        let height = min(lhs.pixelsHigh, rhs.pixelsHigh)
+        let minX = max(0, Int(band.minX))
+        let maxX = min(width, Int(band.maxX))
+        let minY = max(0, Int(band.minY))
+        let maxY = min(height, Int(band.maxY))
+        guard minX < maxX, minY < maxY else { return 0 }
+        var differing = 0
+        for x in stride(from: minX, to: maxX, by: 2) {
+            for y in stride(from: minY, to: maxY, by: 2) {
+                guard let left = lhs.colorAt(x: x, y: y),
+                      let right = rhs.colorAt(x: x, y: y) else { continue }
+                let dr = abs(left.redComponent - right.redComponent)
+                let dg = abs(left.greenComponent - right.greenComponent)
+                let db = abs(left.blueComponent - right.blueComponent)
+                if dr + dg + db > 0.05 { differing += 1 }
+            }
+        }
+        return differing
     }
 
     private func distinctColorCount(in image: NSBitmapImageRep) -> Int {

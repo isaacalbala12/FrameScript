@@ -125,6 +125,7 @@ enum EscaletaProjectMapper {
         var scenes: [Scene] = []
         var sceneMetadata: [EscaletaRoundTripMetadata.SceneMetadata] = []
         var sceneIDsByStart: [Int: UUID] = [:]
+        var sceneRanges: [SceneRange] = []
         var tableCursor = 0
 
         for (index, documentScene) in document.scenes.enumerated() {
@@ -141,14 +142,25 @@ enum EscaletaProjectMapper {
             scenes.append(mapped.scene)
             sceneMetadata.append(mapped.metadata)
             tableCursor += mapped.metadata.tableCount
-            if let start = documentScene.startSeconds, sceneIDsByStart[start] == nil {
-                sceneIDsByStart[start] = mapped.scene.id
+            if let start = documentScene.startSeconds {
+                if sceneIDsByStart[start] == nil {
+                    sceneIDsByStart[start] = mapped.scene.id
+                }
+                let estimatedEnd = start + max(1, Int(mapped.scene.estimatedDuration.rounded()))
+                sceneRanges.append(
+                    SceneRange(
+                        start: start,
+                        end: nextStart ?? estimatedEnd,
+                        id: mapped.scene.id
+                    )
+                )
             }
         }
 
         let pack = makePublishingPack(
             document.publishing,
             sceneIDsByStart: sceneIDsByStart,
+            sceneRanges: sceneRanges,
             stats: &stats
         )
         let sources = makeSources(document.sources)
@@ -483,16 +495,67 @@ enum EscaletaProjectMapper {
 
     // MARK: - SEO
 
+    private struct SceneRange {
+        let start: Int
+        let end: Int
+        let id: UUID
+    }
+
+    /// Exact start first, then the scene whose time range contains the chapter.
+    /// Hand-written escaletas rarely repeat a scene header exactly, and an
+    /// unmapped chapter used to vanish from the publishing export.
+    private static func sceneID(
+        for seconds: Int,
+        exact: [Int: UUID],
+        ranges: [SceneRange]
+    ) -> UUID? {
+        if let exact = exact[seconds] { return exact }
+        if let containing = ranges.first(where: { seconds >= $0.start && seconds < $0.end }) {
+            return containing.id
+        }
+        // A chapter after the last scene header belongs to the last scene.
+        return ranges.last(where: { seconds >= $0.start })?.id
+    }
+
     private static func makePublishingPack(
         _ document: EscaletaPublishingPack?,
         sceneIDsByStart: [Int: UUID],
+        sceneRanges: [SceneRange],
         stats: inout EscaletaMappingStats
     ) -> PublishingPack {
         guard let document else { return PublishingPack() }
 
-        let chapters = document.chapters.map { chapter in
+        // A scene can start only one chapter. Exact timestamp matches win over
+        // range matches, and a second chapter inside the same scene stays
+        // sceneless so it travels as an imported chapter instead of vanishing.
+        var claimedScenes = Set<UUID>()
+        var sceneIDs = Array<UUID?>(repeating: nil, count: document.chapters.count)
+        for (index, chapter) in document.chapters.enumerated() {
+            guard let sceneID = sceneIDsByStart[chapter.seconds],
+                  !claimedScenes.contains(sceneID) else { continue }
+            claimedScenes.insert(sceneID)
+            sceneIDs[index] = sceneID
+        }
+        let rangeOrder = document.chapters.indices.sorted { lhs, rhs in
+            let left = document.chapters[lhs].seconds
+            let right = document.chapters[rhs].seconds
+            if left == right { return lhs < rhs }
+            return left < right
+        }
+        for index in rangeOrder where sceneIDs[index] == nil {
+            let chapter = document.chapters[index]
+            guard let sceneID = sceneID(
+                for: chapter.seconds,
+                exact: [:],
+                ranges: sceneRanges
+            ), !claimedScenes.contains(sceneID) else { continue }
+            claimedScenes.insert(sceneID)
+            sceneIDs[index] = sceneID
+        }
+
+        let chapters = document.chapters.enumerated().map { index, chapter in
             ChapterOverride(
-                sceneID: sceneIDsByStart[chapter.seconds],
+                sceneID: sceneIDs[index],
                 title: chapter.title,
                 startSeconds: TimeInterval(chapter.seconds)
             )

@@ -18,6 +18,18 @@ extension AppState {
         set { windowState.isAssetsPresented = newValue }
     }
 
+    /// Folder that project-relative asset paths are resolved against.
+    var assetProjectDirectory: URL? {
+        projectStore.currentFileURL?.deletingLastPathComponent()
+    }
+
+    /// Current path for a reference. New entries are absolute; projects saved
+    /// by an older build keep `<Project> assets/portada.png`, which belongs to
+    /// the project folder and never to the process working directory.
+    func resolvedAssetPath(_ path: String) -> String {
+        AssetPath.resolved(path, relativeTo: assetProjectDirectory)
+    }
+
     /// Adds one or more files by reference. Directories are ignored; duplicate
     /// paths enrich the existing entry instead of adding a second one.
     ///
@@ -85,7 +97,32 @@ extension AppState {
     func removeAsset(id: UUID) {
         guard let index = project.assets.firstIndex(where: { $0.id == id }) else { return }
         project.assets.remove(at: index)
+        removePublishingVariants(referencing: id)
         touchProject()
+    }
+
+    /// How many A/B thumbnail variants use this asset. The confirmation alert
+    /// mentions them before the user deletes a library row.
+    func publishingUsageCount(forAssetID id: UUID) -> Int {
+        project.publishingPacks.values.reduce(0) { partial, pack in
+            partial + pack.thumbnailVariants.filter { $0.assetID == id }.count
+        }
+    }
+
+    /// Keeps every publishing pack free of dangling `assetID`s after the
+    /// library row is gone. Each pack keeps a chosen variant when possible.
+    private func removePublishingVariants(referencing assetID: UUID) {
+        for key in project.publishingPacks.keys {
+            guard var pack = project.publishingPacks[key] else { continue }
+            let before = pack.thumbnailVariants.count
+            pack.thumbnailVariants.removeAll { $0.assetID == assetID }
+            guard pack.thumbnailVariants.count != before else { continue }
+            if !pack.thumbnailVariants.contains(where: \.isChosen),
+               !pack.thumbnailVariants.isEmpty {
+                pack.thumbnailVariants[0].isChosen = true
+            }
+            project.publishingPacks[key] = pack
+        }
     }
 
     func setAssetKind(_ kind: AssetKind, assetID: UUID) {
@@ -141,11 +178,48 @@ extension AppState {
 
     /// Checks every reference and keeps stale entries visible with their
     /// missing flag set. Moves tracked by a bookmark update the stored path.
+    ///
+    /// Before checking, legacy project-relative paths are migrated to absolute
+    /// paths inside the project folder. Nothing is lost: the file stays where
+    /// it is and only the stored string changes.
     func refreshAssetReachability() async {
+        let projectDirectory = assetProjectDirectory
+        let projectFileURL = projectStore.currentFileURL
+        var migrated = false
+        for index in project.assets.indices {
+            let path = project.assets[index].path
+            guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            var resolved: String?
+            if !AssetPath.isAbsolute(path) {
+                if let projectDirectory {
+                    resolved = AssetPath.resolved(path, relativeTo: projectDirectory)
+                }
+            } else if project.assets[index].isCopiedIntoProject,
+                      !FileManager.default.fileExists(atPath: path),
+                      let projectFileURL,
+                      let repaired = repairedCopiedPath(
+                          path,
+                          asset: project.assets[index],
+                          projectFileURL: projectFileURL
+                      ) {
+                // A build before the C-1 fix saved `/<cwd>/Proyecto
+                // assets/portada.png` (or `/Proyecto assets/portada.png`).
+                // The file is still beside the project; rewrite the stale
+                // absolute path instead of reporting it missing.
+                resolved = repaired
+            }
+            guard let resolved, resolved != path else { continue }
+            project.assets[index].path = resolved
+            migrated = true
+        }
+        if migrated {
+            touchProject()
+        }
+
         let coreAssets = assets.map(coreAsset)
         guard !coreAssets.isEmpty else { return }
-        let results = await Task.detached(priority: .utility) {
-            AssetReachabilityChecker.check(coreAssets)
+        let results = await Task.detached(priority: .utility) { [projectDirectory] in
+            AssetReachabilityChecker.check(coreAssets, projectDirectory: projectDirectory)
         }.value
         var updated = coreAssets
         guard AssetReachabilityChecker.apply(results, to: &updated) else { return }
@@ -157,6 +231,36 @@ extension AppState {
                 project.assets[index] = appAsset
             }
         }
+    }
+
+    /// Repairs an absolute-looking thumbnail path by looking for the copied
+    /// file inside the project's own `<Project> assets/` folder.
+    ///
+    /// Only copied thumbnails qualify, only after their bookmark failed to
+    /// resolve, and only when the stale path still ends in
+    /// `<Project> assets/<file>`. A reference to an unmounted external drive
+    /// must never be silently repointed to a same-named local file.
+    private func repairedCopiedPath(
+        _ storedPath: String,
+        asset: ProjectAsset,
+        projectFileURL: URL
+    ) -> String? {
+        guard asset.isCopiedIntoProject else { return nil }
+        if let bookmarkData = asset.bookmarkData,
+           let resolved = AssetBookmark.resolve(bookmarkData),
+           FileManager.default.fileExists(atPath: resolved.path) {
+            return nil
+        }
+        let assetsName = AssetStore.assetsDirectoryName(forProjectFile: projectFileURL)
+        let components = (storedPath as NSString).pathComponents
+        guard components.count >= 2,
+              components[components.count - 2] == assetsName else { return nil }
+        let fileName = components[components.count - 1]
+        guard !fileName.isEmpty else { return nil }
+        let candidate = AssetStore.assetsDirectory(forProjectFile: projectFileURL)
+            .appendingPathComponent(fileName)
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return nil }
+        return candidate.path
     }
 
     /// Adds or refreshes the OBS asset for a take that just finished. Called by
@@ -218,7 +322,7 @@ extension AppState {
     /// actor. Values are persisted the next time the project is saved.
     func loadAssetMetadata(assetID: UUID) {
         guard let asset = project.assets.first(where: { $0.id == assetID }) else { return }
-        let path = asset.path
+        let path = resolvedAssetPath(asset.path)
         let bookmarkData = asset.bookmarkData
         Task { [weak self] in
             let metadata = await AssetMetadataLoader.shared.load(path: path, bookmarkData: bookmarkData)
@@ -247,7 +351,7 @@ extension AppState {
     /// Best URL for opening or previewing an asset. Prefers the live path and
     /// falls back to the bookmark for moved files.
     func assetReferenceURL(_ asset: ProjectAsset) -> URL? {
-        let path = AssetPath.normalized(asset.path)
+        let path = resolvedAssetPath(asset.path)
         if !path.isEmpty, FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
         }

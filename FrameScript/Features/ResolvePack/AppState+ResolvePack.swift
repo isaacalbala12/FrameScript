@@ -66,14 +66,27 @@ extension AppState {
             wordsPerMinute: effectiveWPM(language: language),
             pauseDefaults: DurationEstimator.pauseDefaults(settings: settings),
             frameRate: configuration.rate.frameRate,
-            rhythmWarningsByScene: rhythmWarnings ?? resolvePackRhythmWarnings()
+            rhythmWarningsByScene: rhythmWarnings ?? resolvePackRhythmWarnings(),
+            chapterOverrides: publishingCoreOverrides(
+                publishingPack(language: language).chapterOverrides
+            )
         )
         let mapping = mapper.map(project: project)
+        let chapterPlan = publishingChapterPlan(language: language)
+        let chapters = PublishingChapters.chapterList(
+            plan: chapterPlan,
+            importedOverrides: publishingCoreOverrides(
+                publishingPack(language: language).chapterOverrides
+            ),
+            rate: configuration.rate.frameRate
+        )
         return ResolveDeliveryPack.plan(
             scenes: mapping.scenes,
             projectName: project.title,
             options: options,
-            extraWarnings: mapping.warnings
+            extraWarnings: mapping.warnings,
+            extraWarningItems: mapping.warningItems,
+            chapters: chapters
         )
     }
 

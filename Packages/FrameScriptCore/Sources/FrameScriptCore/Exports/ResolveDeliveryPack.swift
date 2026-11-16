@@ -40,6 +40,12 @@ public struct ResolvePackOptions: Sendable, Hashable, Codable {
     public var includeChapters: Bool
     public var includeChapterMarkersInFCPXML: Bool
     public var includeReadme: Bool
+    /// Prefix cells starting with `=`, `+`, `-` or `@` with an apostrophe so
+    /// Numbers/Excel never evaluate a shot description as a formula.
+    public var csvEscapesFormulas: Bool
+    /// Write `_chapters.txt` even when it has fewer than three chapters, which
+    /// YouTube ignores. Off by default; the sheet asks explicitly.
+    public var writeInvalidChapters: Bool
 
     public init(
         fps: FrameRate = .fps25,
@@ -52,7 +58,9 @@ public struct ResolvePackOptions: Sendable, Hashable, Codable {
         includeEditingNotes: Bool = true,
         includeChapters: Bool = true,
         includeChapterMarkersInFCPXML: Bool = true,
-        includeReadme: Bool = true
+        includeReadme: Bool = true,
+        csvEscapesFormulas: Bool = true,
+        writeInvalidChapters: Bool = false
     ) {
         self.fps = fps
         self.dropFrame = dropFrame && fps.supportsDropFrame
@@ -66,6 +74,8 @@ public struct ResolvePackOptions: Sendable, Hashable, Codable {
         self.includeChapters = includeChapters
         self.includeChapterMarkersInFCPXML = includeChapterMarkersInFCPXML
         self.includeReadme = includeReadme
+        self.csvEscapesFormulas = csvEscapesFormulas
+        self.writeInvalidChapters = writeInvalidChapters
     }
 
     /// Returns a copy with a new rate. Changing the rate recomputes the default
@@ -90,7 +100,9 @@ public struct ResolvePackOptions: Sendable, Hashable, Codable {
             includeEditingNotes: includeEditingNotes,
             includeChapters: includeChapters,
             includeChapterMarkersInFCPXML: includeChapterMarkersInFCPXML,
-            includeReadme: includeReadme
+            includeReadme: includeReadme,
+            csvEscapesFormulas: csvEscapesFormulas,
+            writeInvalidChapters: writeInvalidChapters
         )
     }
 
@@ -106,7 +118,8 @@ public struct ResolvePackOptions: Sendable, Hashable, Codable {
             dropFrame: dropFrame,
             startTimecode: startTimecode,
             asciiSafeNames: asciiSafeNames,
-            includeChapterMarkers: includeFCPXML && includeChapterMarkersInFCPXML
+            includeChapterMarkers: includeFCPXML && includeChapterMarkersInFCPXML,
+            csvEscapesFormulas: csvEscapesFormulas
         )
     }
 }
@@ -197,13 +210,54 @@ public struct ResolvePackFile: Sendable, Hashable, Identifiable {
 public struct ResolveMarkerPreview: Sendable, Hashable, Identifiable {
     public let frame: Int
     public let timecode: String
+    /// Original text with Markdown and emoji stripped, never ASCII-folded and
+    /// never truncated to the EDL's 60 characters.
     public let name: String
+    /// Exactly what the marker EDL writes, after ASCII transliteration and the
+    /// 60-character cap. Equal to `name` when the EDL is unchanged.
+    public let edlName: String
     public let note: String
+    public let edlNote: String
     public let color: ExportMarkerColor
     public let durationFrames: Int
     public let kind: ResolvedMarker.Kind
 
     public var id: String { "\(frame):\(name):\(color.rawValue)" }
+
+    /// True when the EDL differs from what the preview shows (accents, emoji or
+    /// the 60-character cap).
+    public var edlDiffers: Bool { name != edlName || note != edlNote }
+}
+
+/// One delivery-sheet warning with enough structure to localize it.
+///
+/// `message` stays Spanish for the README, CLI and older callers; the app
+/// reads `kind` and renders the same warning in the interface language.
+public struct ResolvePackWarning: Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case missingLanguageText(sceneTitle: String, language: String)
+        case unestimableDuration(sceneTitle: String)
+        case unanchoredBRoll(sceneTitle: String, item: String)
+        case claimNeedsVerification(sceneTitle: String, status: String, text: String)
+        case unlinkedClaim(status: String, text: String)
+        case dropFrameUnsupported(fps: String)
+        case emptyProjectName
+        case markerCollision(name: String, otherName: String, frame: Int)
+        case tooManyEvents(count: Int)
+        case chapter(ChapterWarning)
+        case markerNameTruncated(name: String, fullName: String)
+        case moreNamesTruncated(count: Int)
+        case chaptersOmitted(chapterCount: Int)
+        case chapterListsDiffer
+    }
+
+    public let kind: Kind
+    public let message: String
+
+    public init(kind: Kind, message: String) {
+        self.kind = kind
+        self.message = message
+    }
 }
 
 /// Everything the sheet needs before writing anything: the scene snapshot, the
@@ -218,8 +272,14 @@ public struct ResolvePackPlan: Sendable {
     public let markers: [ResolvedMarker]
     /// Markers before the collision merge, in scene + re-hook + cue order.
     public let allMarkers: [ResolvedMarker]
+    /// Paste-ready chapter text (`_chapters.txt`) following the Publishing pack.
     public let chapters: ChapterList
+    /// Chapter markers derived from the same scenes/frame rate as the marker
+    /// EDL, so they line up with the scene markers in the FCPXML.
+    public let timelineChapters: ChapterList
+    /// Spanish fallback messages, kept for the README and existing callers.
     public let warnings: [String]
+    public let warningItems: [ResolvePackWarning]
 
     public init(
         projectName: String,
@@ -230,7 +290,9 @@ public struct ResolvePackPlan: Sendable {
         markers: [ResolvedMarker],
         allMarkers: [ResolvedMarker],
         chapters: ChapterList,
-        warnings: [String]
+        timelineChapters: ChapterList? = nil,
+        warnings: [String],
+        warningItems: [ResolvePackWarning] = []
     ) {
         self.projectName = projectName
         self.names = names
@@ -240,7 +302,9 @@ public struct ResolvePackPlan: Sendable {
         self.markers = markers
         self.allMarkers = allMarkers
         self.chapters = chapters
+        self.timelineChapters = timelineChapters ?? chapters
         self.warnings = warnings
+        self.warningItems = warningItems
     }
 
     public var sceneCount: Int { scenes.count }
@@ -262,18 +326,32 @@ public struct ResolvePackPlan: Sendable {
     }
 
     /// Marker rows with absolute timecodes, exactly as the EDL writes them.
+    /// `name`/`note` keep the original text; `edlName`/`edlNote` show what the
+    /// ASCII-safe EDL actually receives.
     public var markerPreviews: [ResolveMarkerPreview] {
         markers.map { marker in
             let timecode = Timecode(frames: settings.startTimecode.frames + marker.frame)
                 .string(rate: settings.fps, dropFrame: settings.effectiveDropFrame)
+            let name = ExportTextSanitizer.markerName(
+                marker.name,
+                asciiSafe: false,
+                limit: .max
+            )
+            let note = ExportTextSanitizer.markerNote(
+                marker.note,
+                asciiSafe: false,
+                limit: .max
+            )
             return ResolveMarkerPreview(
                 frame: marker.frame,
                 timecode: timecode,
-                name: ExportTextSanitizer.markerName(
+                name: name,
+                edlName: ExportTextSanitizer.markerName(
                     marker.name,
                     asciiSafe: settings.asciiSafeNames
                 ),
-                note: ExportTextSanitizer.markerNote(
+                note: note,
+                edlNote: ExportTextSanitizer.markerNote(
                     marker.note,
                     asciiSafe: settings.asciiSafeNames
                 ),
@@ -287,9 +365,29 @@ public struct ResolvePackPlan: Sendable {
     public func numberOfMarkers(of kind: ResolvedMarker.Kind) -> Int {
         markers.filter { $0.kind == kind }.count
     }
+
+    /// The chapters file is only written when YouTube can use it, unless the
+    /// creator explicitly asks for the invalid list (N-7).
+    public var includesChaptersFile: Bool {
+        options.includeChapters
+            && (chapters.isValidForYouTube || options.writeInvalidChapters)
+    }
 }
 
 public enum ResolveDeliveryPack {
+    /// Compares chapter content, not formatting. Two lists with the same
+    /// (start second, title) entries in any order are the same list; a title
+    /// override, a different start or an extra imported chapter is a real
+    /// difference.
+    public static func chapterListsDiffer(_ lhs: ChapterList, _ rhs: ChapterList) -> Bool {
+        func signature(_ list: ChapterList) -> [String] {
+            list.chapters
+                .map { "\($0.startSeconds)|\($0.title)" }
+                .sorted()
+        }
+        return signature(lhs) != signature(rhs)
+    }
+
     /// Builds the plan and every warning the sheet shows before exporting.
     ///
     /// `extraWarnings` carries scene-mapping issues from the app (missing
@@ -299,7 +397,9 @@ public enum ResolveDeliveryPack {
         scenes: [ExportScene],
         projectName: String,
         options: ResolvePackOptions,
-        extraWarnings: [String] = []
+        extraWarnings: [String] = [],
+        extraWarningItems: [ResolvePackWarning] = [],
+        chapters: ChapterList? = nil
     ) -> ResolvePackPlan {
         let settings = options.settings(projectName: projectName)
         let names = ResolvePackNaming.names(
@@ -308,20 +408,90 @@ public enum ResolveDeliveryPack {
         )
         let resolution = ExportMarkerResolver.resolve(scenes: scenes, settings: settings)
         let allMarkers = ExportMarkerResolver.allMarkers(scenes: scenes, settings: settings)
-        let chapters = YouTubeChapters.make(scenes: scenes, rate: settings.fps)
+        // `_chapters.txt` follows the Publishing pack (titles, exclusions and
+        // imported chapters). FCPXML markers must follow the timeline this pack
+        // is building, so they use the same scenes and frame rate as the EDL.
+        let timelineChapters = YouTubeChapters.make(scenes: scenes, rate: settings.fps)
+        let chapterList = chapters ?? timelineChapters
 
-        var warnings: [String] = []
-        warnings.append(contentsOf: extraWarnings)
-        warnings.append(contentsOf: settings.validationWarnings)
-        warnings.append(contentsOf: resolution.warnings.map(\.message))
+        var warningItems: [ResolvePackWarning] = []
+        warningItems.append(contentsOf: extraWarningItems)
+        warningItems.append(contentsOf: settings.validationIssues.map { issue in
+            let kind: ResolvePackWarning.Kind
+            switch issue {
+            case let .dropFrameUnsupported(fps):
+                kind = .dropFrameUnsupported(fps: fps)
+            case .emptyProjectName:
+                kind = .emptyProjectName
+            }
+            return ResolvePackWarning(kind: kind, message: issue.message)
+        })
+        warningItems.append(contentsOf: resolution.warnings.map { warning in
+            let kind: ResolvePackWarning.Kind
+            switch warning.kind {
+            case .duplicateFrame:
+                kind = .markerCollision(
+                    name: warning.name ?? "",
+                    otherName: warning.otherName ?? "",
+                    frame: warning.frame ?? 0
+                )
+            case .tooManyEvents:
+                kind = .tooManyEvents(count: warning.count ?? resolution.markers.count)
+            }
+            return ResolvePackWarning(kind: kind, message: warning.message)
+        })
         if options.includeChapters || (options.includeFCPXML && options.includeChapterMarkersInFCPXML) {
-            warnings.append(contentsOf: chapters.warnings.map(\.message))
+            warningItems.append(contentsOf: chapterList.warnings.map {
+                ResolvePackWarning(kind: .chapter($0), message: $0.message)
+            })
+            if options.includeFCPXML && options.includeChapterMarkersInFCPXML,
+               Self.chapterListsDiffer(timelineChapters, chapterList) {
+                warningItems.append(contentsOf: timelineChapters.warnings.map {
+                    ResolvePackWarning(kind: .chapter($0), message: $0.message)
+                })
+            }
         }
-        warnings.append(contentsOf: truncationWarnings(
+        warningItems.append(contentsOf: truncationWarnings(
             markers: resolution.markers,
             settings: settings
         ))
 
+        if options.includeChapters,
+           !chapterList.isValidForYouTube,
+           !options.writeInvalidChapters {
+            let count = chapterList.chapters.count
+            warningItems.append(
+                ResolvePackWarning(
+                    kind: .chaptersOmitted(chapterCount: count),
+                    message: "No se escribe el archivo de capítulos: YouTube necesita al menos 3 capítulos de 10 s y esta lista tiene \(count)."
+                )
+            )
+        }
+
+        let chaptersFileWillBeWritten = options.includeChapters
+            && (chapterList.isValidForYouTube || options.writeInvalidChapters)
+        let fcpxmlHasChapterMarkers = options.includeFCPXML
+            && options.includeChapterMarkersInFCPXML
+        if chaptersFileWillBeWritten,
+           fcpxmlHasChapterMarkers,
+           Self.chapterListsDiffer(chapterList, timelineChapters) {
+            warningItems.append(
+                ResolvePackWarning(
+                    kind: .chapterListsDiffer,
+                    message: "El archivo de capítulos y los marcadores del FCPXML no coinciden. Puede venir de las duraciones de las tomas frente a las estimaciones, o de capítulos importados sin escena que solo existen en el archivo."
+                )
+            )
+        }
+
+        var warnings = extraWarnings
+        warnings.append(contentsOf: warningItems.map(\.message))
+
+        // Keep the first message for duplicates such as two truncation
+        // warnings that sanitize to the same EDL name.
+        var seenWarningKinds = Set<ResolvePackWarning.Kind>()
+        let uniqueWarningItems = warningItems.filter {
+            seenWarningKinds.insert($0.kind).inserted
+        }
         var seen = Set<String>()
         let uniqueWarnings = warnings.filter { seen.insert($0).inserted }
 
@@ -333,8 +503,10 @@ public enum ResolveDeliveryPack {
             scenes: scenes,
             markers: resolution.markers,
             allMarkers: allMarkers,
-            chapters: chapters,
-            warnings: uniqueWarnings
+            chapters: chapterList,
+            timelineChapters: timelineChapters,
+            warnings: uniqueWarnings,
+            warningItems: uniqueWarningItems
         )
     }
 
@@ -354,7 +526,12 @@ public enum ResolveDeliveryPack {
         if plan.options.includeFCPXML {
             files.append(ResolvePackFile(
                 name: names.fcpxml,
-                text: ResolveFCPXML.make(scenes: scenes, settings: settings)
+                text: ResolveFCPXML.make(
+                    markers: plan.markers,
+                    durationFrames: plan.durationFrames,
+                    settings: settings,
+                    chapters: settings.includeChapterMarkers ? plan.timelineChapters.chapters : []
+                )
             ))
         }
         if plan.options.includeShotList {
@@ -369,7 +546,7 @@ public enum ResolveDeliveryPack {
                 text: EditingNotesMarkdown.make(scenes: scenes, settings: settings)
             ))
         }
-        if plan.options.includeChapters {
+        if plan.includesChaptersFile {
             let text = plan.chapters.text.isEmpty ? "" : plan.chapters.text + "\n"
             files.append(ResolvePackFile(name: names.chapters, text: text))
         }
@@ -411,9 +588,9 @@ public enum ResolveDeliveryPack {
     private static func truncationWarnings(
         markers: [ResolvedMarker],
         settings: ExportSettings
-    ) -> [String] {
+    ) -> [ResolvePackWarning] {
         var seen = Set<String>()
-        var messages: [String] = []
+        var items: [ResolvePackWarning] = []
         for marker in markers {
             let info = ExportTextSanitizer.markerNameInfo(
                 marker.name,
@@ -421,13 +598,20 @@ public enum ResolveDeliveryPack {
             )
             guard info.wasTruncated, seen.insert(info.text).inserted else { continue }
             let full = ExportTextSanitizer.collapseWhitespace(marker.name)
-            messages.append(
-                "«\(info.text)» se recorta a 60 caracteres en el EDL (nombre completo: «\(full)»)."
+            items.append(
+                ResolvePackWarning(
+                    kind: .markerNameTruncated(name: info.text, fullName: full),
+                    message: "«\(info.text)» se recorta a 60 caracteres en el EDL (nombre completo: «\(full)»)."
+                )
             )
         }
-        guard messages.count > 8 else { return messages }
-        return Array(messages.prefix(8)) + [
-            "… y \(messages.count - 8) nombres más superan los 60 caracteres."
+        guard items.count > 8 else { return items }
+        let extra = items.count - 8
+        return Array(items.prefix(8)) + [
+            ResolvePackWarning(
+                kind: .moreNamesTruncated(count: extra),
+                message: "… y \(extra) nombres más superan los 60 caracteres."
+            )
         ]
     }
 }

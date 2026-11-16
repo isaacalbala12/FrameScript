@@ -82,11 +82,11 @@ final class AssetThumbnailCache {
     private var order: [String] = []
     private let maximumEntries = 150
 
-    func image(for asset: ProjectAsset) async -> NSImage? {
+    func image(for asset: ProjectAsset, projectDirectory: URL? = nil) async -> NSImage? {
         let key = cacheKey(for: asset)
         if let image = images[key] { return image }
         guard !failed.contains(key),
-              let resolved = AssetFileAccess.resolve(asset)
+              let resolved = AssetFileAccess.resolve(asset, projectDirectory: projectDirectory)
         else { return nil }
         defer { AssetFileAccess.stopAccessing(resolved) }
         guard FileManager.default.fileExists(atPath: resolved.url.path) else { return nil }

@@ -6,7 +6,7 @@ import XCTest
 
 /// Renders the Assets sheet offscreen at the two supported window sizes in both
 /// appearances. With `FS_SNAPSHOTS=1` in the test host the PNGs are written to
-/// `/tmp/fs-snapshots/w3-c-assets`; without it the same render asserts layout
+/// `/tmp/fs-snapshots/w3fix-cdh-assets`; without it the same render asserts layout
 /// invariants (no clipping, no overlapping key regions, Spanish strings).
 @MainActor
 final class AssetsSnapshotTests: XCTestCase {
@@ -157,7 +157,7 @@ final class AssetsSnapshotTests: XCTestCase {
             XCTFail("Could not encode \(name).png")
             return
         }
-        let directory = URL(fileURLWithPath: "/tmp/fs-snapshots/w3-c-assets", isDirectory: true)
+        let directory = URL(fileURLWithPath: "/tmp/fs-snapshots/w3fix-cdh-assets", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try png.write(to: directory.appendingPathComponent("\(name).png"), options: .atomic)
     }

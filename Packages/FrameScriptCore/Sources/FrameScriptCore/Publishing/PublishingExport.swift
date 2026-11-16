@@ -138,9 +138,9 @@ public enum PublishingExport {
         let chapters = input.chapters
             .map { "\(DurationFormat.clock(seconds: $0.seconds)) \($0.title)" }
             .joined(separator: "\n")
-        let chaptersAlreadyPresent = input.chapters.first.map {
-            base.contains("\(DurationFormat.clock(seconds: $0.seconds)) \($0.title)")
-        } ?? false
+        // Compare every chapter line: a description that already mentions two
+        // of six chapters must still receive the remaining four.
+        let chaptersAlreadyPresent = !chapters.isEmpty && base.contains(chapters)
         if !chapters.isEmpty, !chaptersAlreadyPresent {
             parts.append("\(chaptersHeading)\n\(chapters)")
         }
@@ -149,9 +149,13 @@ public enum PublishingExport {
             .map(\.displayLine)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let sourcesAlreadyPresent = sources.contains { base.contains($0) }
-        if !sources.isEmpty, !sourcesAlreadyPresent {
-            parts.append("\(sourcesHeading)\n" + sources.map { "- \($0)" }.joined(separator: "\n"))
+        // Filter line by line: one source already in the description must not
+        // hide the rest of the list.
+        let missingSources = sources.filter { !base.contains($0) }
+        if !missingSources.isEmpty {
+            parts.append(
+                "\(sourcesHeading)\n" + missingSources.map { "- \($0)" }.joined(separator: "\n")
+            )
         }
 
         return parts.joined(separator: "\n\n")

@@ -271,7 +271,7 @@ struct PublishingMetadataTab: View {
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(theme.accent.color)
+                        .foregroundStyle(theme.accentText)
                         .disabled(candidate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         Button {
@@ -296,7 +296,7 @@ struct PublishingMetadataTab: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(theme.accent.color)
+            .foregroundStyle(theme.accentText)
         }
         .padding(14)
         .background(cardBackground)
@@ -324,12 +324,24 @@ struct PublishingMetadataTab: View {
                     unit: appState.localized("publishing.unit.characters")
                 )
                 Spacer()
+                let studioDescription = appState.publishingStudioDescription(language: language)
+                HStack(spacing: 4) {
+                    Text(appState.localized("publishing.description.studioLabel"))
+                    PublishingCounterLabel(
+                        count: studioDescription.count,
+                        limit: PublishingLimits.descriptionMaximum,
+                        recommended: PublishingLimits.descriptionRecommended,
+                        unit: appState.localized("publishing.unit.characters")
+                    )
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(theme.tertiaryText)
                 Button(appState.localized("publishing.description.copyYouTube")) {
-                    appState.copyPublishingText(appState.publishingStudioDescription(language: language))
+                    appState.copyPublishingText(studioDescription)
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(theme.accent.color)
+                .foregroundStyle(theme.accentText)
                 .help(appState.localized("publishing.description.copyYouTubeHelp"))
             }
         }

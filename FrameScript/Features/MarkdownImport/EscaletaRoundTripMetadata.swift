@@ -222,6 +222,11 @@ struct EscaletaProjectNotes: Equatable, Sendable {
     var scriptIntro: String?
     var pacingNotes: [String] = []
     var metadata: EscaletaRoundTripMetadata?
+    /// Lines that belong to another co-tenant of `FrameProject.topic`: the
+    /// Board's `__framescript_board_topic__:` marker and any plain text before
+    /// the first known label. They are written back first, byte for byte, so
+    /// typing a promise never destroys the Board's game/topic (D-1).
+    var preservedPrefix: [String] = []
 
     static let promiseLabel = "Promesa:"
     static let thesisLabel = "Tesis:"
@@ -235,6 +240,9 @@ struct EscaletaProjectNotes: Equatable, Sendable {
         category: "EscaletaRoundTrip"
     )
 
+    /// True when the block contains no escaleta notes and no metadata. A plain
+    /// project topic is intentionally ignored so `BoardProjectTopic` keeps
+    /// treating plain projects as plain text.
     var isEmpty: Bool {
         promise == nil
             && thesis == nil
@@ -260,7 +268,14 @@ struct EscaletaProjectNotes: Equatable, Sendable {
                 sections.append(Self.metadataLabel + data.base64EncodedString())
             }
         }
-        return sections.joined(separator: "\n\n")
+        let prefix = preservedPrefix
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if prefix.isEmpty {
+            return sections.joined(separator: "\n\n")
+        }
+        guard !sections.isEmpty else { return prefix }
+        return prefix + "\n\n" + sections.joined(separator: "\n\n")
     }
 
     static func decode(_ text: String) -> EscaletaProjectNotes {
@@ -291,8 +306,18 @@ struct EscaletaProjectNotes: Equatable, Sendable {
             }
         }
 
+        let boardMarker = BoardProjectTopic.marker
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix(boardMarker) {
+                // The Board's topic marker is another co-tenant of this field.
+                // Preserve it verbatim and never fold it into a notes value.
+                flush()
+                currentLabel = nil
+                currentLines = []
+                notes.preservedPrefix.append(line)
+                continue
+            }
             if trimmed.hasPrefix(metadataLabel) {
                 flush()
                 currentLabel = nil
@@ -317,9 +342,17 @@ struct EscaletaProjectNotes: Equatable, Sendable {
                 currentLines = []
             } else if currentLabel != nil {
                 currentLines.append(line)
+            } else {
+                notes.preservedPrefix.append(line)
             }
         }
         flush()
+
+        // A trailing separator is an artifact of the notes block, not content.
+        while let last = notes.preservedPrefix.last,
+              last.trimmingCharacters(in: .whitespaces).isEmpty {
+            notes.preservedPrefix.removeLast()
+        }
         return notes
     }
 

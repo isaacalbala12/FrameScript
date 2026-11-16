@@ -98,7 +98,7 @@ struct AssetListRow: View {
                     Text("\(links)")
                         .font(.system(size: 10, weight: .medium, design: .rounded))
                 }
-                .foregroundStyle(theme.accent.color)
+                .foregroundStyle(theme.accentText)
             }
 
             AssetKindBadge(kind: asset.kind, compact: true)

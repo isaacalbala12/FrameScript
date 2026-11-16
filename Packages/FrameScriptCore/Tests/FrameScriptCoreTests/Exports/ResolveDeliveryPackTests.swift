@@ -180,7 +180,7 @@ struct ResolveDeliveryPackTests {
 
     // MARK: - Names
 
-    @Test("ASCII-safe names transliterate the title, markers and filenames")
+    @Test("ASCII-safe names transliterate the EDL but the preview keeps the original")
     func asciiNames() {
         let scenes = [
             ExportScene(title: "Árbol ñandú ¿qué? 🎬", start: 0, duration: 20),
@@ -188,7 +188,9 @@ struct ResolveDeliveryPackTests {
         let plan = plan(project: "Árbol ñandú", scenes: scenes, options: options(ascii: true))
         #expect(plan.names.folder == "Arbol nandu_resolve")
         #expect(plan.names.markerEDL == "Arbol nandu_markers.edl")
-        #expect(plan.markerPreviews.first?.name == "00 Arbol nandu ?que?")
+        #expect(plan.markerPreviews.first?.name == "00 Árbol ñandú ¿qué?")
+        #expect(plan.markerPreviews.first?.edlName == "00 Arbol nandu ?que?")
+        #expect(plan.markerPreviews.first?.edlDiffers == true)
         let edl = ResolveMarkerEDL.make(scenes: plan.scenes, settings: plan.settings)
         #expect(edl.hasPrefix("TITLE: Arbol nandu\r\n"))
         #expect(!edl.contains("ñ"))
@@ -232,7 +234,8 @@ struct ResolveDeliveryPackTests {
         let long = String(repeating: "Palabra ", count: 20)
         let plan = plan(scenes: [ExportScene(title: long, start: 0, duration: 20)])
         #expect(plan.warnings.contains { $0.contains("60 caracteres") && $0.contains("Palabra") })
-        #expect(plan.markerPreviews.first?.name.count == 60)
+        #expect(plan.markerPreviews.first?.name.count ?? 0 > 60)
+        #expect(plan.markerPreviews.first?.edlName.count == 60)
     }
 
     // MARK: - Files

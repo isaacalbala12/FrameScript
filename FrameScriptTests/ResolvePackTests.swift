@@ -428,7 +428,10 @@ final class ResolvePackTests: XCTestCase {
     func testPackPlanUsesMapperOutputAndWritesEverySelectedFile() throws {
         let scene = Scene(order: 0, sectionType: .hook, title: "Gancho", scriptText: tenWords)
         let mapping = mapper().map(project: makeProject(scenes: [scene]))
-        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        // One scene cannot form three chapters; opt in explicitly so this test
+        // keeps exercising the file writer rather than N-7's omission.
+        configuration.writeInvalidChapters = true
         let options = try XCTUnwrap(configuration.options())
         let plan = ResolveDeliveryPack.plan(
             scenes: mapping.scenes,
@@ -489,7 +492,7 @@ final class ResolvePackTests: XCTestCase {
             options: options
         )
         XCTAssertTrue(plan.warnings.contains { $0.contains("60 caracteres") })
-        XCTAssertEqual(plan.markerPreviews.first?.name.count, 60)
+        XCTAssertEqual(plan.markerPreviews.first?.edlName.count, 60)
     }
 
     // MARK: - Layout and chrome
@@ -518,6 +521,51 @@ final class ResolvePackTests: XCTestCase {
             }
             XCTAssertTrue(frames.options.union(frames.divider).union(frames.preview).equalTo(frames.body))
         }
+    }
+
+    func testW3FixCDHInvalidChapterFileCountsAsNotWritten() throws {
+        let scenes = [
+            ExportScene(title: "Uno", start: 0, duration: 20),
+            ExportScene(title: "Dos", start: 20, duration: 20)
+        ]
+        let options = try XCTUnwrap(
+            ResolvePackConfiguration.defaults(languageCode: "es").options()
+        )
+        let plan = ResolveDeliveryPack.plan(
+            scenes: scenes,
+            projectName: "Prueba",
+            options: options
+        )
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+
+        XCTAssertFalse(
+            ResolvePackFileSelection.chaptersWillBeWritten(
+                configuration: configuration,
+                plan: plan
+            )
+        )
+        XCTAssertEqual(
+            ResolvePackFileSelection.selectedFileCount(
+                configuration: configuration,
+                plan: plan
+            ),
+            5
+        )
+
+        configuration.writeInvalidChapters = true
+        XCTAssertTrue(
+            ResolvePackFileSelection.chaptersWillBeWritten(
+                configuration: configuration,
+                plan: plan
+            )
+        )
+        XCTAssertEqual(
+            ResolvePackFileSelection.selectedFileCount(
+                configuration: configuration,
+                plan: plan
+            ),
+            6
+        )
     }
 
     func testShortcutIsRegisteredAndDoesNotClash() {
@@ -558,6 +606,22 @@ final class ResolvePackTests: XCTestCase {
         XCTAssertEqual(spanish["resolvePack.legend.graphic"], "Gráfico / tabla")
         XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.subtitle"]).contains("Resolve FREE"))
         XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.note.authoritative"]).contains("EDL"))
+        XCTAssertEqual(spanish["resolvePack.metric.cues"], "Marcas")
+        XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.metric.markersFormat"]).contains("marcas"))
+        XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.preview.empty"]).contains("marcas"))
+        for (key, value) in spanish where value.range(
+            of: "\\bcues\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            XCTFail("Spanish Resolve string \(key) still says cue: \(value)")
+        }
+        XCTAssertEqual(russian["resolvePack.metric.cues"], "Метки")
+        for (key, value) in russian where value.range(
+            of: "\\bКью\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            XCTFail("Russian Resolve string \(key) still says Кью: \(value)")
+        }
     }
 }
 

@@ -244,4 +244,91 @@ public enum PublishingChapters {
         }
         return result
     }
+
+    /// Imported chapters that have no scene of their own. The importer maps a
+    /// timestamp to a scene when it falls inside that scene's range, but a
+    /// hand-written chapter can still be unmapped; it must travel to the
+    /// publishing export instead of disappearing.
+    public static func importedChapters(
+        _ overrides: [FrameScriptDocument.ChapterOverride]
+    ) -> [EscaletaChapter] {
+        overrides
+            .filter { $0.sceneID == nil && !$0.isExcluded }
+            .compactMap { override in
+                guard let startSeconds = override.startSeconds,
+                      let title = PublishingText.nonEmpty(override.title) else { return nil }
+                let seconds = max(0, Int(startSeconds.rounded()))
+                return EscaletaChapter(
+                    seconds: seconds,
+                    timestamp: DurationFormat.clock(seconds: seconds),
+                    title: title
+                )
+            }
+            .sorted { $0.seconds < $1.seconds }
+    }
+
+    /// Final chapter list for the publishing export: the generated plan plus
+    /// imported chapters that no scene owns, de-duplicated by start second and
+    /// sorted like YouTube expects.
+    public static func escaletaChapters(
+        plan: ChapterPlan,
+        importedOverrides: [FrameScriptDocument.ChapterOverride]
+    ) -> [EscaletaChapter] {
+        var result = plan.chapters.map { chapter in
+            EscaletaChapter(
+                seconds: chapter.startSeconds,
+                timestamp: DurationFormat.clock(seconds: chapter.startSeconds),
+                title: chapter.title
+            )
+        }
+        // YouTube rejects two chapters at the same second, so a sceneless
+        // imported chapter is exported only when its start is still free. A
+        // chapter before the first scene (a free second) is kept.
+        var takenStarts = Set(result.map(\.seconds))
+        for imported in importedChapters(importedOverrides) {
+            guard takenStarts.insert(imported.seconds).inserted else { continue }
+            result.append(imported)
+        }
+        return result.sorted { lhs, rhs in
+            if lhs.seconds == rhs.seconds { return lhs.title < rhs.title }
+            return lhs.seconds < rhs.seconds
+        }
+    }
+
+    /// Paste-ready chapter list that includes the imported chapters. The
+    /// Resolve pack writes this text to `_chapters.txt`, so it cannot silently
+    /// drop a chapter that the Publishing export includes.
+    public static func chapterList(
+        plan: ChapterPlan,
+        importedOverrides: [FrameScriptDocument.ChapterOverride],
+        rate: FrameRate = .fps25
+    ) -> ChapterList {
+        let chapters = escaletaChapters(
+            plan: plan,
+            importedOverrides: importedOverrides
+        ).enumerated().map { index, chapter in
+            Chapter(
+                startFrame: Timecode(
+                    seconds: TimeInterval(chapter.seconds),
+                    rate: rate
+                ).frames,
+                startSeconds: chapter.seconds,
+                title: chapter.title,
+                position: index + 1,
+                sceneID: plan.chapters.first(where: { $0.startSeconds == chapter.seconds })?.sceneID
+            )
+        }
+        let text = chapters
+            .map { "\(DurationFormat.clock(seconds: $0.startSeconds)) \($0.title)" }
+            .joined(separator: "\n")
+        return ChapterList(
+            chapters: chapters,
+            text: text,
+            warnings: plan.warnings,
+            videoEndSeconds: max(
+                plan.videoEndSeconds,
+                chapters.last?.startSeconds ?? 0
+            )
+        )
+    }
 }

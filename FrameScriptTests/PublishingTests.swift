@@ -218,16 +218,26 @@ final class PublishingTests: XCTestCase {
         let source = try makePNG(named: "portada.png")
 
         let first = try state.addPublishingThumbnail(from: source, language: "es")
-        let firstPath = try XCTUnwrap(project.assets.first(where: { $0.id == first.assetID })?.path)
-        XCTAssertEqual(firstPath, "Proyecto assets/portada.png")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: temporaryDirectory.appendingPathComponent(firstPath).path))
+        let firstAsset = try XCTUnwrap(project.assets.first(where: { $0.id == first.assetID }))
+        XCTAssertEqual(
+            firstAsset.path,
+            temporaryDirectory.appendingPathComponent("Proyecto assets/portada.png").path
+        )
+        XCTAssertTrue(firstAsset.path.hasPrefix("/"))
+        XCTAssertNotNil(firstAsset.bookmarkData)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstAsset.path))
         XCTAssertEqual(project.publishingPacks["es"]?.thumbnailVariants.count, 1)
         XCTAssertEqual(project.publishingPacks["es"]?.thumbnailVariants.first?.isChosen, true)
 
         let second = try state.addPublishingThumbnail(from: source, language: "es")
         let secondPath = try XCTUnwrap(project.assets.first(where: { $0.id == second.assetID })?.path)
-        XCTAssertEqual(secondPath, "Proyecto assets/portada 2.png")
-        XCTAssertNotEqual(firstPath, secondPath)
+        XCTAssertEqual(
+            secondPath,
+            temporaryDirectory.appendingPathComponent("Proyecto assets/portada 2.png").path
+        )
+        XCTAssertNotEqual(firstAsset.path, secondPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstAsset.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondPath))
 
         let url = try XCTUnwrap(state.publishingThumbnailURL(for: first))
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))

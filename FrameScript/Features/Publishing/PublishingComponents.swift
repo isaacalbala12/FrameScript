@@ -143,7 +143,7 @@ struct PublishingTokenEditor: View {
                 Button(appState.localized("publishing.add"), action: addDraft)
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty ? theme.tertiaryText : theme.accent.color)
+                    .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty ? theme.tertiaryText : theme.accentText)
                     .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }

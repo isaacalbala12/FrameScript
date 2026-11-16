@@ -17,7 +17,7 @@ final class PublishingSnapshotTests: XCTestCase {
     private var appState: AppState!
 
     private static let snapshotDirectory = URL(
-        fileURLWithPath: "/tmp/fs-snapshots/w3-d-publishing",
+        fileURLWithPath: "/tmp/fs-snapshots/w3fix-cdh-publishing",
         isDirectory: true
     )
     private static let windowSizes = [
@@ -145,6 +145,72 @@ final class PublishingSnapshotTests: XCTestCase {
         }
     }
 
+    // MARK: - Imported chapters
+
+    func testImportedChapterBadgeSnapshots() throws {
+        appState.updatePublishingPack(language: "es") { pack in
+            pack.chapterOverrides.append(
+                ChapterOverride(
+                    sceneID: nil,
+                    title: "Capítulo importado de la escaleta",
+                    startSeconds: 90
+                )
+            )
+        }
+
+        for window in Self.windowSizes {
+            for scheme in [ColorScheme.light, .dark] {
+                try render(
+                    PublishingPanel(initialTab: .chapters, initialLanguage: "es"),
+                    name: "publishing-chapters-imported-\(sizeName(window))-\(schemeName(scheme))",
+                    windowSize: window,
+                    scheme: scheme
+                )
+            }
+        }
+    }
+
+    func testFooterIsNotReadyWhenTheChecklistIsIncomplete() {
+        let issues = appState.publishingValidationIssues(language: "es")
+        let summary = appState.publishingFooterSummaryText(
+            errors: issues.filter { $0.severity == .error }.count,
+            warnings: issues.filter { $0.severity == .warning }.count
+        )
+
+        XCTAssertFalse(summary.contains("Todo listo"))
+        XCTAssertTrue(summary.contains("2/8"))
+    }
+
+    func testExportButtonStaysAccentFilledWhenTheWindowIsNotKey() throws {
+        let size = CGSize(width: 980, height: 712)
+        let sage = try renderImage(
+            PublishingPanel(initialTab: .metadata, initialLanguage: "es"),
+            windowSize: size,
+            scheme: .light,
+            accent: .sage
+        )
+        let rose = try renderImage(
+            PublishingPanel(initialTab: .metadata, initialLanguage: "es"),
+            windowSize: size,
+            scheme: .light,
+            accent: .rose
+        )
+        let scale = CGFloat(sage.pixelsWide) / size.width
+        let bottomMargin = (size.height - PublishingMetrics.panelHeight) / 2
+        let band = CGRect(
+            x: 0,
+            y: bottomMargin * scale,
+            width: CGFloat(sage.pixelsWide),
+            height: CGFloat(PublishingMetrics.footerHeight) * scale
+        )
+        let differing = differingPixels(sage, rose, in: band)
+        XCTAssertGreaterThan(
+            differing,
+            300,
+            "The export primary button is not accent-filled (\(differing) footer pixels changed)"
+        )
+    }
+
     // MARK: - Sheets
 
     func testPublishingSheetsSnapshots() throws {        let input = appState.publishingExportInput(language: "es")
@@ -254,6 +320,60 @@ final class PublishingSnapshotTests: XCTestCase {
             )
             try png.write(to: Self.snapshotDirectory.appendingPathComponent("\(name).png"))
         }
+    }
+
+    private func renderImage<V: View>(
+        _ view: V,
+        windowSize: CGSize,
+        scheme: ColorScheme,
+        accent: AccentPalette
+    ) throws -> NSBitmapImageRep {
+        let theme = FrameTheme(colorScheme: scheme, accent: accent)
+        let root = ZStack {
+            theme.appBackground
+            view
+        }
+        .frame(width: windowSize.width, height: windowSize.height)
+        .environment(appState)
+        .environment(\.frameTheme, theme)
+        .environment(\.colorScheme, scheme)
+
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = NSRect(origin: .zero, size: windowSize)
+        hostingView.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        hostingView.wantsLayer = true
+        hostingView.layoutSubtreeIfNeeded()
+        let representation = try XCTUnwrap(
+            hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+        )
+        hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+        return representation
+    }
+
+    private func differingPixels(
+        _ lhs: NSBitmapImageRep,
+        _ rhs: NSBitmapImageRep,
+        in band: CGRect
+    ) -> Int {
+        let width = min(lhs.pixelsWide, rhs.pixelsWide)
+        let height = min(lhs.pixelsHigh, rhs.pixelsHigh)
+        let minX = max(0, Int(band.minX))
+        let maxX = min(width, Int(band.maxX))
+        let minY = max(0, Int(band.minY))
+        let maxY = min(height, Int(band.maxY))
+        guard minX < maxX, minY < maxY else { return 0 }
+        var differing = 0
+        for x in stride(from: minX, to: maxX, by: 2) {
+            for y in stride(from: minY, to: maxY, by: 2) {
+                guard let left = lhs.colorAt(x: x, y: y),
+                      let right = rhs.colorAt(x: x, y: y) else { continue }
+                let dr = abs(left.redComponent - right.redComponent)
+                let dg = abs(left.greenComponent - right.greenComponent)
+                let db = abs(left.blueComponent - right.blueComponent)
+                if dr + dg + db > 0.05 { differing += 1 }
+            }
+        }
+        return differing
     }
 
     private func sampledColors(_ representation: NSBitmapImageRep) -> Int {

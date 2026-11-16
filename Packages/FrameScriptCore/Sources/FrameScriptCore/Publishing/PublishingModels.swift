@@ -43,10 +43,15 @@ public enum PublishingIssueSeverity: String, Sendable, Hashable, CaseIterable {
 }
 
 public enum PublishingValidationRule: String, Sendable, Hashable {
+    case titleMissing
     case titleTooLong
     case titleNearLimit
+    case titleInvalidCharacters
+    case descriptionMissing
     case descriptionTooLong
     case descriptionNearLimit
+    case descriptionInvalidCharacters
+    case studioDescriptionTooLong
     case tagsTooLong
     case tooManyTags
     case tooManyHashtags
@@ -86,6 +91,10 @@ public struct PublishingValidationIssue: Sendable, Hashable, Identifiable {
 public struct PublishingValidationInput: Sendable, Equatable {
     public var title: String
     public var description: String
+    /// Final description after chapters and sources are appended. YouTube
+    /// receives this string, so the 5,000-character limit must be checked here
+    /// as well as on the editable `description`.
+    public var studioDescription: String
     public var tags: [String]
     public var hashtags: [String]
     public var pinnedComment: String
@@ -94,6 +103,7 @@ public struct PublishingValidationInput: Sendable, Equatable {
     public init(
         title: String = "",
         description: String = "",
+        studioDescription: String = "",
         tags: [String] = [],
         hashtags: [String] = [],
         pinnedComment: String = "",
@@ -101,6 +111,7 @@ public struct PublishingValidationInput: Sendable, Equatable {
     ) {
         self.title = title
         self.description = description
+        self.studioDescription = studioDescription
         self.tags = tags
         self.hashtags = hashtags
         self.pinnedComment = pinnedComment
@@ -208,9 +219,15 @@ public enum PublishingText {
         return result
     }
 
+    /// YouTube counts a multi-word tag as if it were wrapped in quotes, so
+    /// `assetto corsa` costs two extra characters. Ignoring them made the
+    /// counter accept 498/500 values that YouTube then rejected.
     public static func tagCharacterCount(_ tags: [String]) -> Int {
         guard !tags.isEmpty else { return 0 }
-        return tags.reduce(0) { $0 + $1.count } + tags.count - 1
+        let characters = tags.reduce(0) { partial, tag in
+            partial + tag.count + (tag.contains(where: \.isWhitespace) ? 2 : 0)
+        }
+        return characters + tags.count - 1
     }
 
     /// Number of words in the longest thumbnail text.

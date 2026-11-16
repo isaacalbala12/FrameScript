@@ -15,6 +15,30 @@ public enum AssetPath {
         return URL(fileURLWithPath: expanded).standardizedFileURL.path
     }
 
+    /// Whether a stored path is anchored at the filesystem root or the home
+    /// directory. Anything else is a project-relative path written by an older
+    /// build (publishing thumbnails used `<Project> assets/portada.png`).
+    public static func isAbsolute(_ path: String) -> Bool {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("/") || trimmed.hasPrefix("~")
+    }
+
+    /// Resolves a stored path against the project folder when it is relative.
+    /// Absolute paths are only normalised, so an existing file is never moved.
+    public static func resolved(_ path: String, relativeTo projectDirectory: URL?) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if isAbsolute(trimmed) {
+            return normalized(trimmed)
+        }
+        guard let projectDirectory else {
+            // Without a project there is no correct base. Leave the stored
+            // value untouched instead of resolving it against the cwd.
+            return trimmed
+        }
+        return normalized(projectDirectory.appendingPathComponent(trimmed).path)
+    }
+
     /// Stable key used to decide whether two paths point at the same file.
     ///
     /// macOS volumes are case-insensitive by default, so the key lowercases the

@@ -33,18 +33,20 @@ public struct AssetReachabilityResult: Sendable, Equatable {
 public enum AssetReachabilityChecker {
     public static func check(
         _ assets: [FrameScriptDocument.ProjectAsset],
+        projectDirectory: URL? = nil,
         fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) -> [AssetReachabilityResult] {
         assets.map { asset in
-            check(asset, fileExists: fileExists)
+            check(asset, projectDirectory: projectDirectory, fileExists: fileExists)
         }
     }
 
     public static func check(
         _ asset: FrameScriptDocument.ProjectAsset,
+        projectDirectory: URL? = nil,
         fileExists: @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) -> AssetReachabilityResult {
-        let storedPath = AssetPath.normalized(asset.path)
+        let storedPath = AssetPath.resolved(asset.path, relativeTo: projectDirectory)
         if !storedPath.isEmpty, fileExists(storedPath) {
             return AssetReachabilityResult(assetID: asset.id, path: storedPath, reachability: .reachable)
         }

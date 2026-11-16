@@ -119,17 +119,41 @@ extension AppState {
     }
 
     func setPublishingPromise(_ value: String) {
-        var notes = publishingNotes
-        notes.promise = value.isEmpty ? nil : value
+        updatePublishingNotes { notes in
+            notes.promise = value.isEmpty ? nil : value
+        }
+    }
+
+    func setPublishingThesis(_ value: String) {
+        updatePublishingNotes { notes in
+            notes.thesis = value.isEmpty ? nil : value
+        }
+    }
+
+    /// Rewrites only the escaleta notes block. A plain project topic (for
+    /// example the Board's game «Assetto Corsa») is first converted to the
+    /// Board's marker form, so the value survives and `BoardProjectTopic`
+    /// still displays it. Marker lines and unknown text are preserved by
+    /// `EscaletaProjectNotes` itself.
+    private func updatePublishingNotes(_ mutate: (inout EscaletaProjectNotes) -> Void) {
+        let base = publishingTopicBase()
+        var notes = EscaletaProjectNotes.decode(base)
+        mutate(&notes)
         project.topic = notes.encoded()
         touchProject()
     }
 
-    func setPublishingThesis(_ value: String) {
-        var notes = publishingNotes
-        notes.thesis = value.isEmpty ? nil : value
-        project.topic = notes.encoded()
-        touchProject()
+    private func publishingTopicBase() -> String {
+        let stored = project.topic
+        guard BoardProjectTopic.markedTopic(in: stored) == nil else { return stored }
+        let notes = EscaletaProjectNotes.decode(stored)
+        guard notes.isEmpty else { return stored }
+        let plain = notes.preservedPrefix
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !plain.isEmpty else { return stored }
+        let encoded = Data(plain.utf8).base64EncodedString()
+        return BoardProjectTopic.marker + encoded
     }
 
     // MARK: - Chapters
@@ -256,13 +280,13 @@ extension AppState {
         }
         let path = asset.path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return nil }
-        if path.hasPrefix("/") {
-            return URL(fileURLWithPath: path)
-        }
-        guard let directory = projectStore.currentFileURL?.deletingLastPathComponent() else {
-            return nil
-        }
-        return ThumbnailAssetPath.resolvedURL(relativePath: path, projectDirectory: directory)
+        // New copies are absolute. A project saved by an older build still has
+        // `<Project> assets/portada.png`, which belongs to the project folder,
+        // never to the process working directory.
+        let directory = projectStore.currentFileURL?.deletingLastPathComponent()
+        let resolved = AssetPath.resolved(path, relativeTo: directory)
+        guard !resolved.isEmpty else { return nil }
+        return URL(fileURLWithPath: resolved)
     }
 
     @discardableResult
@@ -270,18 +294,33 @@ extension AppState {
         guard let fileURL = projectStore.currentFileURL else {
             throw ThumbnailFileStoreError.projectNotSaved
         }
-        let projectName = fileURL.deletingPathExtension().lastPathComponent
-        let result = try ThumbnailFileStore().copyThumbnail(
-            from: url,
-            projectName: projectName,
-            projectDirectory: fileURL.deletingLastPathComponent(),
-            existingPaths: Set(project.assets.map(\.path))
-        )
 
-        project.assets.append(result.asset)
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        guard let image = NSImage(contentsOf: url), image.size.width > 0, image.size.height > 0 else {
+            throw ThumbnailFileStoreError.invalidImage
+        }
+
+        let asset: ProjectAsset
+        do {
+            // One copy rule for every thumbnail: absolute path inside
+            // `<Project> assets/`, a bookmark and the collision counter.
+            asset = try AssetStore.makeThumbnailAsset(
+                from: url,
+                projectFileURL: fileURL
+            ).makeAsset()
+        } catch AssetStoreError.projectFileMissing {
+            throw ThumbnailFileStoreError.projectNotSaved
+        } catch {
+            throw ThumbnailFileStoreError.copyFailed(error.localizedDescription)
+        }
+
+        project.assets.append(asset)
         var pack = publishingPack(language: language)
         let variant = ThumbnailVariant(
-            assetID: result.asset.id,
+            assetID: asset.id,
             pairedTitle: pack.chosenTitle,
             isChosen: pack.thumbnailVariants.isEmpty
         )
@@ -309,16 +348,33 @@ extension AppState {
     }
 
     func removePublishingThumbnail(variantID: UUID, language: String) {
+        var removedAssetID: UUID?
         updatePublishingPack(language: language) { pack in
             guard let index = pack.thumbnailVariants.firstIndex(where: { $0.id == variantID }) else {
                 return
             }
+            removedAssetID = pack.thumbnailVariants[index].assetID
             let wasChosen = pack.thumbnailVariants[index].isChosen
             pack.thumbnailVariants.remove(at: index)
             if wasChosen, !pack.thumbnailVariants.isEmpty {
                 pack.thumbnailVariants[0].isChosen = true
             }
         }
+        guard let removedAssetID else { return }
+        removeOrphanedThumbnailAsset(removedAssetID)
+    }
+
+    /// Removes the copied image and its library entry once no variant in any
+    /// language pack references it. The file is left on disk on purpose:
+    /// deleting user media is never a side effect of removing a variant.
+    private func removeOrphanedThumbnailAsset(_ assetID: UUID) {
+        let stillUsed = project.publishingPacks.values.contains { pack in
+            pack.thumbnailVariants.contains { $0.assetID == assetID }
+        }
+        guard !stillUsed else { return }
+        guard project.assets.contains(where: { $0.id == assetID }) else { return }
+        project.assets.removeAll { $0.id == assetID }
+        touchProject()
     }
 
     func publishingThumbnailNotes(language: String) -> PublishingThumbnailNotes {
@@ -340,11 +396,45 @@ extension AppState {
             for: PublishingValidationInput(
                 title: pack.chosenTitle,
                 description: pack.description,
+                studioDescription: publishingStudioDescription(language: language),
                 tags: pack.tags,
                 hashtags: pack.hashtags,
                 pinnedComment: pack.pinnedComment,
                 thumbnailTexts: concepts.map(\.text)
             )
+        )
+    }
+
+    /// Footer text for the publishing panel. Green «Todo listo» is only
+    /// allowed when the metadata has no issue *and* the 8-item checklist is
+    /// complete; otherwise the creator sees the checklist progress (N-1).
+    func publishingFooterSummaryText(errors: Int, warnings: Int) -> String {
+        let progress = publishingChecklistProgress
+        if errors == 0, warnings == 0, progress.done == progress.total {
+            return localized("publishing.validation.ok")
+        }
+        if errors == 0, warnings == 0 {
+            return String(
+                format: localized("publishing.validation.checklistFormat"),
+                progress.done,
+                progress.total
+            )
+        }
+        let issueText: String
+        if errors > 0 {
+            issueText = errors == 1
+                ? localized("publishing.validation.errorOne")
+                : String(format: localized("publishing.validation.errorsCount"), errors)
+        } else {
+            issueText = warnings == 1
+                ? localized("publishing.validation.warningOne")
+                : String(format: localized("publishing.validation.warningsCount"), warnings)
+        }
+        return String(
+            format: localized("publishing.validation.checklistWithIssuesFormat"),
+            issueText,
+            progress.done,
+            progress.total
         )
     }
 
@@ -503,7 +593,7 @@ extension AppState {
 
     // MARK: - Private helpers
 
-    private func publishingCoreOverrides(
+    func publishingCoreOverrides(
         _ overrides: [ChapterOverride]
     ) -> [FrameScriptDocument.ChapterOverride] {
         overrides.map { override in
@@ -554,30 +644,23 @@ extension AppState {
         return max(0, summary.estimated)
     }
 
+    /// Imported chapters that have no scene and therefore cannot be
+    /// regenerated. Shown in the chapter tab with an «importado, sin escena»
+    /// badge, and appended to every export.
+    func publishingImportedChapters(language: String) -> [EscaletaChapter] {
+        PublishingChapters.importedChapters(
+            publishingCoreOverrides(publishingPack(language: language).chapterOverrides)
+        )
+    }
+
     private func publishingEscaletaChapters(
         pack: PublishingPack,
         plan: ChapterPlan
     ) -> [EscaletaChapter] {
-        if !plan.chapters.isEmpty {
-            return plan.chapters.map { chapter in
-                EscaletaChapter(
-                    seconds: chapter.startSeconds,
-                    timestamp: DurationFormat.clock(seconds: chapter.startSeconds),
-                    title: chapter.title
-                )
-            }
-        }
-        return pack.chapterOverrides
-            .sorted { ($0.startSeconds ?? 0) < ($1.startSeconds ?? 0) }
-            .compactMap { override in
-                guard let start = override.startSeconds else { return nil }
-                let seconds = Int(start.rounded())
-                return EscaletaChapter(
-                    seconds: seconds,
-                    timestamp: DurationFormat.clock(seconds: seconds),
-                    title: override.title
-                )
-            }
+        PublishingChapters.escaletaChapters(
+            plan: plan,
+            importedOverrides: publishingCoreOverrides(pack.chapterOverrides)
+        )
     }
 
     private func publishingPromptLanguageName(_ language: String) -> String {

@@ -48,8 +48,10 @@ public enum ResolvePackReadme {
         if options.includeEditingNotes {
             lines.append("- `\(names.editingNotes)` — notas de montaje por escena: guion, plan de imagen, montaje, avisos y marcadores.")
         }
-        if options.includeChapters {
+        if plan.includesChaptersFile {
             lines.append("- `\(names.chapters)` — capítulos listos para pegar en la descripción de YouTube.")
+        } else if options.includeChapters {
+            lines.append("- `\(names.chapters)` no se incluye: YouTube necesita al menos 3 capítulos de 10 s y esta lista no los cumple.")
         }
         lines.append("- `\(names.readme)` — este archivo.")
         lines.append("")
@@ -95,7 +97,7 @@ public enum ResolvePackReadme {
             lines.append("")
         }
 
-        if options.includeChapters {
+        if plan.includesChaptersFile {
             lines.append("## Capítulos de YouTube")
             lines.append("")
             lines.append("Pega el contenido de `\(names.chapters)` en la descripción de tu vídeo. YouTube necesita al menos tres capítulos, el primero en 0:00 y 10 segundos como mínimo por capítulo.")
@@ -103,6 +105,11 @@ public enum ResolvePackReadme {
                 lines.append("")
                 lines.append("> Hay avisos de capítulos: revisa la lista de avisos del pack antes de publicar.")
             }
+            lines.append("")
+        } else if options.includeChapters {
+            lines.append("## Capítulos de YouTube")
+            lines.append("")
+            lines.append("No se ha escrito `\(names.chapters)`: YouTube necesita al menos tres capítulos de 10 segundos y esta lista no los cumple. Añade escenas o marcas al guion y vuelve a exportar.")
             lines.append("")
         }
 

@@ -5,6 +5,7 @@ import FrameScriptCore
 struct ResolveSceneMappingResult: Sendable {
     let scenes: [ExportScene]
     let warnings: [String]
+    let warningItems: [ResolvePackWarning]
 }
 
 /// Turns `FrameProject` scenes into `ExportScene` values for the Resolve pack.
@@ -25,6 +26,11 @@ struct ResolveSceneMapper: Sendable {
     var frameRate: FrameRate = .fps25
     /// Rhythm warnings already computed by `RhythmReviewCenter`, keyed by scene.
     var rhythmWarningsByScene: [UUID: [RhythmWarning]] = [:]
+    /// Publishing chapter titles and exclusions for this language. The pack's
+    /// `_chapters.txt` must agree with the Publishing panel even when the two
+    /// duration sources differ; the app also passes the full plan, but the
+    /// scene-level values keep FCPXML-only builds consistent.
+    var chapterOverrides: [FrameScriptDocument.ChapterOverride] = []
 
     func map(project: FrameProject) -> ResolveSceneMappingResult {
         let sorted = project.scenes.enumerated()
@@ -36,8 +42,10 @@ struct ResolveSceneMapper: Sendable {
 
         let targetLanguage = DurationLanguage.normalized(languageCode)
         let primaryLanguage = DurationLanguage.normalized(project.primaryLanguage)
+        let chapterOverrides = PublishingChapters.overridesByScene(chapterOverrides)
         var output: [ExportScene] = []
         var warnings: [String] = []
+        var warningItems: [ResolvePackWarning] = []
         var start: TimeInterval = 0
 
         for scene in sorted {
@@ -52,6 +60,12 @@ struct ResolveSceneMapper: Sendable {
                !scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 warnings.append(
                     "«\(scene.title)» no tiene texto en «\(targetLanguage)»; se usa el original."
+                )
+                warningItems.append(
+                    ResolvePackWarning(
+                        kind: .missingLanguageText(sceneTitle: scene.title, language: targetLanguage),
+                        message: warnings[warnings.count - 1]
+                    )
                 )
             }
 
@@ -82,6 +96,12 @@ struct ResolveSceneMapper: Sendable {
                 warnings.append(
                     "«\(scene.title)» no tiene una duración estimable; sus marcadores pueden coincidir con la escena siguiente."
                 )
+                warningItems.append(
+                    ResolvePackWarning(
+                        kind: .unestimableDuration(sceneTitle: scene.title),
+                        message: warnings[warnings.count - 1]
+                    )
+                )
             }
 
             let originalEstimate = Self.estimate(
@@ -91,17 +111,40 @@ struct ResolveSceneMapper: Sendable {
             )
             let scale = originalEstimate > 0.001 ? duration / originalEstimate : 1
 
-            func cueSeconds(for anchor: TextAnchor?) -> TimeInterval {
+            // One parse of the scene answers every anchor, including the cue
+            // tokens. That keeps a keystroke in the timecode field from
+            // re-parsing the whole script once per cue (H-2).
+            let parsedTokens = ScriptMarkup.parse(scene.scriptText, defaults: pauseDefaults)
+            let rhythmWarnings = rhythmWarningsByScene[scene.id] ?? []
+            var pendingOffsets: [Int] = []
+            func registerOffset(_ anchor: TextAnchor?) -> Int? {
                 guard let current = TextAnchorRepair.current(anchor, in: scene.scriptText) else {
-                    return 0
+                    return nil
                 }
-                let seconds = TimelineAnchoring.seconds(
-                    text: scene.scriptText,
-                    utf16Offset: current.startUTF16,
-                    wordsPerMinute: wordsPerMinute,
-                    defaults: pauseDefaults
-                )
-                return Self.scaled(seconds, by: scale, into: duration)
+                pendingOffsets.append(current.startUTF16)
+                return pendingOffsets.count - 1
+            }
+            func registerOffset(_ utf16Offset: Int) -> Int {
+                pendingOffsets.append(max(0, utf16Offset))
+                return pendingOffsets.count - 1
+            }
+
+            let bRollOffsetIndexes = scene.bRollItems.map { registerOffset($0.textAnchor) }
+            let editingOffsetIndexes = scene.editingItems.map { registerOffset($0.textAnchor) }
+            let rhythmOffsetIndexes = rhythmWarnings.map { registerOffset($0.range.location) }
+            let cueEntries = parsedTokens.compactMap { token -> (label: String, payload: String, offsetIndex: Int)? in
+                guard case .cue(let label, let payload) = token.kind else { return nil }
+                return (label, payload, registerOffset(token.range.location))
+            }
+            let offsetTimes = TimelineAnchoring.seconds(
+                text: scene.scriptText,
+                utf16Offsets: pendingOffsets,
+                wordsPerMinute: wordsPerMinute,
+                defaults: pauseDefaults
+            )
+            func cueSeconds(at index: Int?) -> TimeInterval {
+                guard let index, offsetTimes.indices.contains(index) else { return 0 }
+                return Self.scaled(offsetTimes[index], by: scale, into: duration)
             }
 
             var markers: [ExportMarker] = []
@@ -116,12 +159,12 @@ struct ResolveSceneMapper: Sendable {
             // MARK: B-roll
 
             var shots: [ExportShot] = []
-            for item in scene.bRollItems {
+            for (index, item) in scene.bRollItems.enumerated() {
                 let source = Self.sourceTag(for: item.sourceType)
                 let label = Self.sourceLabel(for: item.sourceType)
                 let summary = ExportTextSanitizer.collapseWhitespace(item.descriptionText)
                 let name = summary.isEmpty ? label : "\(label) · \(summary)"
-                let offset = cueSeconds(for: item.textAnchor)
+                let offset = cueSeconds(at: bRollOffsetIndexes[index])
 
                 var noteParts = [item.notes, item.framing, item.motion, item.mood]
                     .map(ExportTextSanitizer.collapseWhitespace)
@@ -152,13 +195,22 @@ struct ResolveSceneMapper: Sendable {
                     warnings.append(
                         "«\(scene.title)»: el B-roll «\(summary.isEmpty ? label : summary)» no tiene ancla; se coloca al inicio de la escena."
                     )
+                    warningItems.append(
+                        ResolvePackWarning(
+                            kind: .unanchoredBRoll(
+                                sceneTitle: scene.title,
+                                item: summary.isEmpty ? label : summary
+                            ),
+                            message: warnings[warnings.count - 1]
+                        )
+                    )
                 }
             }
 
             // MARK: Editing cues
 
-            for item in scene.editingItems {
-                let offset = cueSeconds(for: item.textAnchor)
+            for (index, item) in scene.editingItems.enumerated() {
+                let offset = cueSeconds(at: editingOffsetIndexes[index])
                 if Self.isReHook(item) {
                     rehookOffsets.append(offset)
                 }
@@ -218,23 +270,13 @@ struct ResolveSceneMapper: Sendable {
 
             // MARK: Script cues
 
-            for token in ScriptMarkup.parse(scene.scriptText, defaults: pauseDefaults) {
-                guard case .cue(let label, let payload) = token.kind else { continue }
-                let offset = Self.scaled(
-                    TimelineAnchoring.seconds(
-                        text: scene.scriptText,
-                        utf16Offset: token.range.location,
-                        wordsPerMinute: wordsPerMinute,
-                        defaults: pauseDefaults
-                    ),
-                    by: scale,
-                    into: duration
-                )
-                let normalized = label.folding(
+            for entry in cueEntries {
+                let offset = cueSeconds(at: entry.offsetIndex)
+                let normalized = entry.label.folding(
                     options: [.diacriticInsensitive, .caseInsensitive],
                     locale: Locale(identifier: "es_ES")
                 ).uppercased()
-                let payloadText = ExportTextSanitizer.collapseWhitespace(payload)
+                let payloadText = ExportTextSanitizer.collapseWhitespace(entry.payload)
                 let name = Self.composed(Self.cueName(for: normalized), payloadText)
 
                 switch normalized {
@@ -258,7 +300,8 @@ struct ResolveSceneMapper: Sendable {
             let uniqueRehooks = Array(
                 Set(rehookOffsets.map { ($0 * 1_000).rounded() / 1_000 })
             ).sorted()
-            for offset in uniqueRehooks where offset >= 0.5 {
+            let realRehookOffsets = uniqueRehooks.filter { $0 >= 0.5 }
+            for offset in realRehookOffsets {
                 markers.append(
                     ExportMarker(
                         offset: offset,
@@ -286,22 +329,23 @@ struct ResolveSceneMapper: Sendable {
                     )
                 )
                 sceneWarnings.append("Claim \(status): \(claim.text)")
+                warningItems.append(
+                    ResolvePackWarning(
+                        kind: .claimNeedsVerification(
+                            sceneTitle: scene.title,
+                            status: status,
+                            text: claim.text
+                        ),
+                        message: sceneWarnings[sceneWarnings.count - 1]
+                    )
+                )
             }
 
-            for warning in rhythmWarningsByScene[scene.id] ?? [] {
+            for (index, warning) in rhythmWarnings.enumerated() {
                 let message = RhythmWarningFormatter.text(for: warning, language: .spanish)
                 switch warning.kind {
                 case .longSentence, .noVisualChange:
-                    let offset = Self.scaled(
-                        TimelineAnchoring.seconds(
-                            text: scene.scriptText,
-                            utf16Offset: warning.range.location,
-                            wordsPerMinute: wordsPerMinute,
-                            defaults: pauseDefaults
-                        ),
-                        by: scale,
-                        into: duration
-                    )
+                    let offset = cueSeconds(at: rhythmOffsetIndexes[index])
                     markers.append(
                         ExportMarker(
                             offset: offset,
@@ -315,12 +359,14 @@ struct ResolveSceneMapper: Sendable {
                 }
             }
 
+            let chapterOverride = chapterOverrides[scene.id]
             let exportedScene = ExportScene(
                 id: scene.id,
                 title: scene.title,
                 start: start,
                 duration: duration,
                 isRehook: !uniqueRehooks.isEmpty,
+                emitsSceneRehookMarker: uniqueRehooks.contains { $0 < 0.5 },
                 markers: Self.spreadCollisions(
                     markers,
                     duration: duration,
@@ -332,16 +378,31 @@ struct ResolveSceneMapper: Sendable {
                 editingNotes: Self.deduplicated(editingNotes),
                 warnings: Self.deduplicated(sceneWarnings),
                 targetDuration: scene.targetDuration,
-                chapterTitle: scene.title,
-                includesInChapters: true
+                chapterTitle: PublishingText.nonEmpty(chapterOverride?.title ?? "") ?? scene.title,
+                includesInChapters: !(chapterOverride?.isExcluded ?? false)
             )
             output.append(exportedScene)
             start += duration
         }
 
+        // A claim with no scene cannot be placed on the timeline, but the
+        // creator must know it is not covered by a red rigor marker.
+        for claim in project.claims where claim.status != .confirmed && claim.sceneIDs.isEmpty {
+            let status = Self.claimStatusLabel(claim.status)
+            let message = "Claim \(status) sin escena vinculada: «\(claim.text)» no aparece en la timeline."
+            warnings.append(message)
+            warningItems.append(
+                ResolvePackWarning(
+                    kind: .unlinkedClaim(status: status, text: claim.text),
+                    message: message
+                )
+            )
+        }
+
         return ResolveSceneMappingResult(
             scenes: output,
-            warnings: Self.deduplicated(warnings)
+            warnings: Self.deduplicated(warnings),
+            warningItems: Self.deduplicated(warningItems)
         )
     }
 
@@ -485,5 +546,10 @@ struct ResolveSceneMapper: Sendable {
     private static func deduplicated(_ values: [String]) -> [String] {
         var seen = Set<String>()
         return values.filter { seen.insert($0).inserted }
+    }
+
+    private static func deduplicated(_ values: [ResolvePackWarning]) -> [ResolvePackWarning] {
+        var seen = Set<ResolvePackWarning.Kind>()
+        return values.filter { seen.insert($0.kind).inserted }
     }
 }

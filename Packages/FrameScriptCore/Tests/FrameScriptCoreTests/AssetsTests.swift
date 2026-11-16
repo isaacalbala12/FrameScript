@@ -264,7 +264,7 @@ private func makeAsset(
     #expect(FileManager.default.fileExists(atPath: source.path), "the source must never be moved or deleted")
 }
 
-@Test func copyThumbnailReplacesAStaleCopyAndHonoursPreferredNames() throws {
+@Test func copyThumbnailNeverOverwritesAndHonoursPreferredNames() throws {
     let root = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
     let source = try writeFile("cover.png", in: root, contents: "v1")
@@ -275,8 +275,28 @@ private func makeAsset(
 
     try Data("v2".utf8).write(to: source, options: .atomic)
     let second = try AssetStore.copyThumbnail(from: source, projectFileURL: project, preferredName: "miniatura")
-    #expect(second == first)
+    #expect(second.lastPathComponent == "miniatura 2.png")
+    #expect(second != first)
+    #expect(try String(contentsOf: first, encoding: .utf8) == "v1")
     #expect(try String(contentsOf: second, encoding: .utf8) == "v2")
+}
+
+@Test func copyingTwoDifferentFilesWithTheSameNameKeepsBoth() throws {
+    let root = try makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let firstSource = try writeFile("portada.png", in: root, contents: "first")
+    let secondDirectory = root.appendingPathComponent("other", isDirectory: true)
+    try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+    let secondSource = try writeFile("portada.png", in: secondDirectory, contents: "second")
+    let project = root.appendingPathComponent("Proyecto.fscr")
+
+    let first = try AssetStore.copyThumbnail(from: firstSource, projectFileURL: project)
+    let second = try AssetStore.copyThumbnail(from: secondSource, projectFileURL: project)
+
+    #expect(first.lastPathComponent == "portada.png")
+    #expect(second.lastPathComponent == "portada 2.png")
+    #expect(try String(contentsOf: first, encoding: .utf8) == "first")
+    #expect(try String(contentsOf: second, encoding: .utf8) == "second")
 }
 
 @Test func copyThumbnailRejectsAMissingSource() throws {

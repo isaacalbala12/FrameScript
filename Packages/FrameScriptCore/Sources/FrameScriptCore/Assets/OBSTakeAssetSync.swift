@@ -29,11 +29,17 @@ public enum OBSTakeAssetSync {
     }
 
     /// Inserts or updates the asset for a finished take and returns its index.
+    ///
+    /// An existing entry keeps the kind the creator picked by hand: an OBS
+    /// recording re-kinded to «Cámara» must not revert on every project open.
+    /// Its path is only replaced when the stored one is gone and the take's
+    /// file still exists, so a relink made with «Ubicar…» survives.
     @discardableResult
     public static func upsert(
         take: FrameScriptDocument.Take,
         sceneID: UUID,
-        into assets: inout [FrameScriptDocument.ProjectAsset]
+        into assets: inout [FrameScriptDocument.ProjectAsset],
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) -> Int? {
         guard let incoming = makeAsset(for: take, sceneID: sceneID) else { return nil }
 
@@ -46,8 +52,10 @@ public enum OBSTakeAssetSync {
         }
 
         var existing = assets[index]
-        existing.path = incoming.path
-        existing.kind = .obs
+        let storedPath = AssetPath.normalized(existing.path)
+        if (storedPath.isEmpty || !fileExists(storedPath)), fileExists(incoming.path) {
+            existing.path = incoming.path
+        }
         existing.linkedTakeIDs = AssetDeduplication.unique(existing.linkedTakeIDs + [take.id])
         existing.linkedSceneIDs = AssetDeduplication.unique(existing.linkedSceneIDs + [sceneID])
         if let bookmarkData = incoming.bookmarkData, existing.bookmarkData == nil {
