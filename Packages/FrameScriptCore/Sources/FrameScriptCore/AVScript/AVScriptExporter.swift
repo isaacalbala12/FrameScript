@@ -235,8 +235,14 @@ public enum AVScriptExporter {
     /// formula operator) appears anywhere. Everything else stays escaped.
     static func isDialogueProse(_ field: String) -> Bool {
         guard field.hasPrefix("- "), !field.contains("|") else { return false }
-        guard let first = field.dropFirst(2).first else { return false }
-        return first.isLetter || "¿¡«\"".contains(first)
+        let rest = field.dropFirst(2)
+        guard let first = rest.first else { return false }
+        guard first.isLetter || "¿¡«\"".contains(first) else { return false }
+        // `- HYPERLINK(...)`: a bare word immediately followed by "(" reads
+        // as a spreadsheet function call, not dialogue. Prose such as
+        // "- Vale (más o menos)" has a space before the parenthesis.
+        let word = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }
+        return rest.dropFirst(word.count).first != "("
     }
 
     private static func csvRow(

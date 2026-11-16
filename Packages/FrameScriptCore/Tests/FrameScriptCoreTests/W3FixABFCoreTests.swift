@@ -175,3 +175,16 @@ struct W3FixABFCoreTests {
         )
     }
 }
+
+@Suite("W3FixABF CSV function-call guard")
+struct W3FixABFCSVFunctionCallTests {
+    @Test("A dash followed by a function call is not dialogue")
+    func dashFunctionCallsAreEscaped() {
+        #expect(!AVScriptExporter.isDialogueProse("- HYPERLINK(\"http://x\",\"y\")"))
+        #expect(!AVScriptExporter.isDialogueProse("- WEBSERVICE(\"http://x\")"))
+        #expect(!AVScriptExporter.isDialogueProse("- _xlfn.IMPORT(1)"))
+        #expect(AVScriptExporter.isDialogueProse("- Hola, qué tal"))
+        #expect(AVScriptExporter.isDialogueProse("- Vale (más o menos)"))
+        #expect(AVScriptExporter.isDialogueProse("- ¿Seguro?"))
+    }
+}

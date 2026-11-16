@@ -223,8 +223,11 @@ final class W3FixABFTimelineTests: XCTestCase {
                     timestamp: 0,
                     windowNumber: 0,
                     context: nil,
-                    characters: "+",
-                    charactersIgnoringModifiers: "=",
+                    // With ⌘ held, AppKit reports `characters` without Shift
+                    // and `charactersIgnoringModifiers` with it (verified on a
+                    // real US keyboard).
+                    characters: "=",
+                    charactersIgnoringModifiers: "+",
                     isARepeat: false,
                     keyCode: 24
                 )
