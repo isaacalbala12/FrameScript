@@ -6,7 +6,20 @@ struct TopToolbar: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        HStack(spacing: 14) {
+        GeometryReader { proxy in
+            // Six mode buttons plus nine actions need the extra room; below the
+            // standard window width the switcher drops its shortcut badges.
+            content(compact: proxy.size.width < 1_250)
+        }
+        .frame(height: 58)
+        .background(theme.background)
+        .task {
+            await appState.recording.connectAutomaticallyIfNeeded()
+        }
+    }
+
+    private func content(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 14) {
             Menu {
                 Button(appState.localized("project.rename")) { appState.renameProject() }
                 projectMenuButton(appState.localized("project.save"), shortcut: .save) { appState.saveProject() }
@@ -15,6 +28,11 @@ struct TopToolbar: View {
                     .disabled(appState.projectStore.currentFileURL == nil)
                 Divider()
                 projectMenuButton(appState.localized("project.export"), shortcut: .export) { appState.exportProject() }
+                projectMenuButton(appState.localized("resolvePack.menu"), shortcut: .resolvePack) {
+                    ResolvePackPresenter.shared.present(
+                        languageCode: appState.resolvePackDefaultLanguageCode
+                    )
+                }
                 Divider()
                 Button(appState.localized("project.browser")) { appState.returnToProjectList() }
             } label: {
@@ -35,15 +53,23 @@ struct TopToolbar: View {
             }
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
-            .frame(minWidth: 160, idealWidth: 260, maxWidth: 360, alignment: .leading)
+            .frame(
+                minWidth: compact ? 120 : 160,
+                idealWidth: compact ? 170 : 260,
+                maxWidth: 360,
+                alignment: .leading
+            )
             .layoutPriority(1)
 
             Spacer(minLength: 8)
 
-            ModeSwitcher(selection: Binding(
-                get: { appState.selectedMode },
-                set: { appState.selectMode($0) }
-            ))
+            ModeSwitcher(
+                selection: Binding(
+                    get: { appState.selectedMode },
+                    set: { appState.selectMode($0) }
+                ),
+                prefersCompactButtons: compact
+            )
 
             Spacer(minLength: 8)
 
@@ -79,10 +105,13 @@ struct TopToolbar: View {
             }
             .buttonStyle(.cursorPlain)
             .foregroundStyle(theme.secondaryText)
+            // The status reads as text whenever it can: the title gives up its
+            // slack first (WP6 collapses it to the dot only in a real squeeze).
+            .layoutPriority(1)
             .accessibilityLabel("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
-            HStack(spacing: 5) {
+            HStack(spacing: compact ? 3 : 5) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
                     help: appState.localized("project.export"),
@@ -90,9 +119,29 @@ struct TopToolbar: View {
                 )
 
                 toolbarButton(
+                    systemName: "megaphone",
+                    help: appState.localized("publishing.toolbar.help"),
+                    action: appState.showPublishingPanel
+                )
+
+                toolbarButton(
                     systemName: "text.bubble",
                     help: appState.localized("toolbar.teleprompter"),
                     action: appState.presentTeleprompter
+                )
+
+                ProductionToolbarButton()
+
+                toolbarButton(
+                    systemName: "books.vertical",
+                    help: appState.localized("research.toolbarHelp"),
+                    action: { appState.openResearchPanel() }
+                )
+
+                toolbarButton(
+                    systemName: "photo.stack",
+                    help: appState.localized("menu.assets"),
+                    action: { appState.isAssetsPresented = true }
                 )
 
                 toolbarDivider
@@ -120,6 +169,8 @@ struct TopToolbar: View {
                     HStack(spacing: 5) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 13, weight: .medium))
+                        // The keycap is part of the base toolbar contract at the
+                        // minimum window width (uiux): always keep it visible.
                         Text(appState.shortcutDisplay(for: .commandPalette))
                             .font(.system(size: 10, weight: .medium, design: .rounded))
                             .foregroundStyle(theme.tertiaryText)
@@ -150,12 +201,8 @@ struct TopToolbar: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, compact ? 14 : 18)
         .frame(height: 58)
-        .background(theme.background)
-        .task {
-            await appState.recording.connectAutomaticallyIfNeeded()
-        }
     }
 
     private var recordingStatusColor: Color {
@@ -236,7 +283,7 @@ struct TopToolbar: View {
 
 enum ProjectTitleMenuShortcutHints {
     static func binding(for command: ShortcutCommand, settings: AppSettings) -> ShortcutBinding? {
-        guard [.save, .saveAs, .export].contains(command) else { return nil }
+        guard [.save, .saveAs, .export, .resolvePack].contains(command) else { return nil }
         return settings.activeShortcut(for: command)
     }
 }

@@ -123,6 +123,7 @@ struct ScriptEditorView: View {
             saveRestorationState: { state in
                 appState.editorState.setScriptEditorState(state, sceneID: sceneID, editorIdentity: editorIdentity)
             },
+            selectionRequest: TimelineNavigation.shared.pendingRequest,
             markers: productionMarkers,
             fontSize: preferences.fontSize,
             spellcheck: preferences.spellcheck,
@@ -142,6 +143,7 @@ struct ScriptEditorView: View {
             addEditingLabel: appState.localized("production.addEditingForSelection"),
             bRollMarkerLabel: appState.localized("production.markerTooltip.bRoll"),
             editingMarkerLabel: appState.localized("production.markerTooltip.editing"),
+            createClipLabel: appState.localized("clips.command.create"),
             onTextCommitted: { previousText, text in
                 appState.commitScriptTextChange(sceneID: sceneID, previousText: previousText, text: text)
             },
@@ -154,9 +156,12 @@ struct ScriptEditorView: View {
                     appState.addBRollItem(sceneID: sceneID, anchor: anchor)
                 case .editing:
                     appState.addEditingItem(sceneID: sceneID, anchor: anchor)
-                case .script:
+                case .script, .clips, .timeline, .avScript:
                     break
                 }
+            },
+            createClipAction: { anchor in
+                appState.createClipFromAnchor(sceneID: sceneID, anchor: anchor)
             }
         )
     }
@@ -205,6 +210,7 @@ struct ScriptEditorView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.tertiaryText)
                 }
+                ResearchSceneBadge(sceneID: scene.id)
             }
             .font(.system(size: 13))
             .foregroundStyle(theme.secondaryText)
@@ -412,6 +418,8 @@ struct LinkedScriptTextView: NSViewRepresentable {
     @Binding var autocompleteState: AutocompleteEditorState
     let loadRestorationState: () -> ScriptEditorRestorationState?
     let saveRestorationState: (ScriptEditorRestorationState) -> Void
+    /// Paragraph/selection jump coming from the timeline (F18).
+    var selectionRequest: TimelineJumpRequest? = nil
     let markers: [ProductionTextMarker]
     let fontSize: Double
     let spellcheck: Bool
@@ -433,11 +441,13 @@ struct LinkedScriptTextView: NSViewRepresentable {
     /// call sites compiling.
     var bRollMarkerLabel: String = ""
     var editingMarkerLabel: String = ""
+    var createClipLabel: String = ""
     let onTextCommitted: (String, String) -> Void
     let autocomplete: @MainActor (AutocompleteContext) async -> AutocompleteResult
     let onTeardown: () -> Void
     let markerAction: ([UUID], WorkspaceMode) -> Void
     let addMarkerAction: (WorkspaceMode, TextAnchor) -> Void
+    var createClipAction: (TextAnchor) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -451,6 +461,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         ActiveScriptEditorSession.shared.register(context.coordinator)
         DispatchQueue.main.async {
             context.coordinator.restoreEditorStateIfAvailable()
+            context.coordinator.applyTimelineJumpIfNeeded()
             view.textView.window?.makeFirstResponder(view.textView)
         }
         return view
@@ -461,6 +472,12 @@ struct LinkedScriptTextView: NSViewRepresentable {
         context.coordinator.applyModelTextIfNeeded()
         configureAppearance(view)
         view.markerTextRevision = context.coordinator.textRevision
+        if selectionRequest != nil {
+            let coordinator = context.coordinator
+            DispatchQueue.main.async {
+                coordinator.applyTimelineJumpIfNeeded()
+            }
+        }
     }
 
     static func dismantleNSView(_ view: MarkerTextContainerView, coordinator: Coordinator) {
@@ -497,6 +514,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         view.addEditingLabel = addEditingLabel
         view.bRollMarkerLabel = bRollMarkerLabel
         view.editingMarkerLabel = editingMarkerLabel
+        view.createClipLabel = createClipLabel
         view.markupStyler.configure(MarkupEditorStyler.Configuration(
             isEnabled: true,
             pauseDefaults: pauseDefaults,
@@ -554,6 +572,7 @@ struct LinkedScriptTextView: NSViewRepresentable {
         private var editTransaction: EditTransaction?
         private var lastSelectionRange: NSRange?
         private var escapeDismissalContext: EscapeDismissalContext?
+        private var lastAppliedTimelineJumpID: UUID?
         /// Range captured from `shouldChangeTextIn`, which is reliable for
         /// pastes, undo and typing while `NSTextStorage.editedRange` can be a
         /// stale attribute range from the styler.
@@ -637,6 +656,26 @@ struct LinkedScriptTextView: NSViewRepresentable {
             view.scrollView.contentView.scroll(to: clampedVisibleOrigin(state.visibleOrigin, in: view))
             view.scrollView.reflectScrolledClipView(view.scrollView.contentView)
             pendingInitialRestorationState = nil
+        }
+
+        /// Applies a pending timeline paragraph jump once per request. The
+        /// request is consumed asynchronously so observation changes never
+        /// happen inside `updateNSView`.
+        func applyTimelineJumpIfNeeded() {
+            guard let view,
+                  let request = parent.selectionRequest,
+                  request.sceneID == parent.sceneID,
+                  request.id != lastAppliedTimelineJumpID else { return }
+            lastAppliedTimelineJumpID = request.id
+            let length = (view.textView.string as NSString).length
+            let range = TextAnchorGeometry.clamp(request.range, toLength: length)
+            view.textView.setSelectedRange(range)
+            view.textView.scrollRangeToVisible(range)
+            view.textView.window?.makeFirstResponder(view.textView)
+            let requestID = request.id
+            DispatchQueue.main.async {
+                TimelineNavigation.shared.consume(requestID)
+            }
         }
 
         func applyModelTextIfNeeded() {
@@ -1053,6 +1092,10 @@ struct LinkedScriptTextView: NSViewRepresentable {
                 return menu
             }
             menu.insertItem(NSMenuItem.separator(), at: 0)
+            let clipItem = NSMenuItem(title: parent.createClipLabel, action: #selector(createClipForSelection(_:)), keyEquivalent: "")
+            clipItem.target = self
+            clipItem.representedObject = anchor
+            menu.insertItem(clipItem, at: 0)
             let editingItem = NSMenuItem(title: parent.addEditingLabel, action: #selector(addEditingForSelection(_:)), keyEquivalent: "")
             editingItem.target = self
             editingItem.representedObject = anchor
@@ -1062,6 +1105,11 @@ struct LinkedScriptTextView: NSViewRepresentable {
             bRollItem.representedObject = anchor
             menu.insertItem(bRollItem, at: 0)
             return menu
+        }
+
+        @MainActor @objc private func createClipForSelection(_ sender: NSMenuItem) {
+            guard let anchor = sender.representedObject as? TextAnchor else { return }
+            parent.createClipAction(anchor)
         }
 
         @MainActor @objc private func addBRollForSelection(_ sender: NSMenuItem) {
@@ -1083,6 +1131,9 @@ protocol ActiveScriptEditor: AnyObject {
     @discardableResult func commitMarkedTextAndFlush() -> Bool
     func cancelAutocomplete(clearStatus: Bool)
     func selectRange(_ range: NSRange)
+    /// The current non-empty selection as an anchor, or nil when the caret is
+    /// collapsed. Used by the "create clip" command.
+    func currentSelectionAnchor() -> TextAnchor?
     var sceneID: UUID { get }
     var editorIdentity: UUID { get }
     var owningWindow: NSWindow? { get }
@@ -1092,6 +1143,8 @@ protocol ActiveScriptEditor: AnyObject {
 extension ActiveScriptEditor {
     /// Editors that do not support programmatic selection can ignore it.
     func selectRange(_ range: NSRange) {}
+
+    func currentSelectionAnchor() -> TextAnchor? { nil }
 }
 
 extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
@@ -1111,6 +1164,13 @@ extension LinkedScriptTextView.Coordinator: ActiveScriptEditor {
         textView.scrollRangeToVisible(clamped)
         textView.window?.makeFirstResponder(textView)
         captureRestorationState()
+    }
+
+    func currentSelectionAnchor() -> TextAnchor? {
+        guard let textView = view?.textView else { return nil }
+        let range = textView.selectedRange()
+        guard range.length > 0 else { return nil }
+        return TextAnchorRepair.anchor(in: textView.string, range: range)
     }
 }
 
@@ -1177,6 +1237,15 @@ final class ActiveScriptEditorSession {
         }
         editor.selectRange(range)
         return true
+    }
+
+    /// The live selection of the editor showing `sceneID`, if it has one.
+    func currentSelectionAnchor(inScene sceneID: UUID) -> TextAnchor? {
+        editors.removeAll { $0.value == nil }
+        let liveEditors = editors.compactMap(\.value)
+        let editor = liveEditors.first(where: { $0.sceneID == sceneID && $0.isActualFirstResponder })
+            ?? liveEditors.first(where: { $0.sceneID == sceneID })
+        return editor?.currentSelectionAnchor()
     }
 }
 
@@ -1621,6 +1690,7 @@ final class MarkerTextContainerView: NSView {
     /// context menu and must never describe an existing marker.
     var bRollMarkerLabel = ""
     var editingMarkerLabel = ""
+    var createClipLabel = ""
     var cachedFontSize: Double?
     var markerTextRevision = 0 {
         didSet {
@@ -1861,7 +1931,7 @@ enum TextAnchorGeometry {
         switch mode {
         case .bRoll: 2
         case .editing: 8
-        case .script: 2
+        case .script, .clips, .timeline, .avScript: 2
         }
     }
 

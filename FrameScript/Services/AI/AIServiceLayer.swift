@@ -182,6 +182,9 @@ enum AITask: String, Codable, Hashable {
     case editingGeneration
     case hook
     case rehook
+    case clipAdaptation
+    case titlesSEO
+    case claimCheck
 }
 
 @MainActor
@@ -359,7 +362,7 @@ struct OpenAICompatibleLLMProvider: LLMProviderProtocol {
         switch request.task {
         case .analyze:
             return capability.responseFormat
-        case .hook, .rehook:
+        case .hook, .rehook, .titlesSEO:
             return capability == .promptOnly ? nil : .jsonObject
         default:
             return nil
@@ -794,7 +797,6 @@ struct PromptBuilder {
         case .rehook:
             """
             You write re-engagement bridges for a Spanish-from-Spain simracing and motorsport YouTube video. Voice: direct, colloquial, tuteo, short sentences, dry humour. Keep the script's language.
-
             Return exactly one JSON object:
             {"bridges":[{"text":"…","anchor":"…"}]}
 
@@ -806,6 +808,41 @@ struct PromptBuilder {
             - Do not repeat the anchor, do not summarise the previous block, and add no fact, number or experience that is not in the supplied material.
             - Create one concrete promise or open question that the next few sentences answer. Turns such as "Y aquí viene lo bueno", "El problema es que" or "Pero hay otra pieza…" are welcome only when they fit.
             - "anchor" must copy one supplied anchor sentence exactly, character for character. "text" is spoken narration only: plain text, no Markdown, no quotes, no line breaks.
+            Respond only in \(languageName).
+            """
+        case .clipAdaptation:
+            """
+            You adapt a long-form video script into a vertical short clip (Reel, Short or Story). Write in natural Spanish from Spain: direct, colloquial, tuteo, short sentences, no corporate filler, no Latin-American vocabulary.
+
+            Return exactly one JSON object with these fields:
+            {"hook":"…","adaptedText":"…","onScreenText":"…","description":"…","hashtags":["#…"]}
+
+            Rules:
+            - Use only facts, numbers, names, prices and claims that appear in the supplied source text. Never invent data, sources, products, experiences or promises. If the source hedges, the clip hedges.
+            - Never add a claim the source does not support, and never resolve an open question the source leaves open.
+            - "hook" is spoken narration for the first 1–3 seconds: one sentence, no greeting, no channel name, no CTA, no "en este vídeo". It must stand alone.
+            - "adaptedText" is the shortened spoken body, plain text only: no Markdown, no labels, no quotes, no line breaks inside a sentence. Keep the creator's voice and cut, do not rewrite the facts.
+            - Stay close to the requested target duration in the user message. Aim for 85–100 % of it.
+            - "onScreenText" is 2 to 5 words, no final period, and must not simply repeat the hook.
+            - "description" is one or two plain sentences for the caption. "hashtags" has 3 to 6 tags, each starting with #.
+            - Do not mention the long video, the source, or the adaptation process.
+            """
+        case .titlesSEO:
+            PublishingTitlePrompt.systemPrompt(languageName: languageName)
+        case .claimCheck:
+            """
+            You review a YouTube script for verifiable factual claims before recording. \(languageInstruction)
+            Return exactly one JSON object:
+            {"claims":[{"text":"…","status":"probable","reason":"…"}]}
+
+            Rules:
+            - A claim is a specific statement of fact a viewer could check: numbers, dates, prices, records, names, specifications, events or attributed statements.
+            - Do not list opinions, jokes, promises, calls to action, personal experience, or rhetorical questions.
+            - "status" must be exactly one of probable, rumor or communityOpinion. Never write confirmed: only the creator can confirm a claim.
+            - "text" copies the claim from the scene as closely as possible: one short sentence, no Markdown, no quotes, no prefixes.
+            - "reason" says in one short sentence what should be checked, or which kind of source would settle it.
+            - Return at most 8 claims, in the order they appear. If there is nothing checkable, return {"claims":[]}.
+            - Do not invent facts, sources, numbers or links.
             Respond only in \(languageName).
             """
         }

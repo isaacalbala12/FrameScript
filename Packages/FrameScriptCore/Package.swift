@@ -11,10 +11,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "FrameScriptCore"),
-        /// The dormant delivery pack: Resolve/YouTube exports, history
-        /// snapshots, Plane sync and published-video comparison. Kept in a
-        /// separate target that the app does not link, so the shipped app never
-        /// gains an unwired feature surface by accident.
+        /// The dormant pack: version-history snapshots and published-video
+        /// comparison. Kept in a separate target that the app does not link, so
+        /// the shipped app never gains an unwired feature surface by accident.
+        /// The Resolve/YouTube/Plane delivery types moved to FrameScriptCore
+        /// once the clips, publishing, board and Resolve features shipped them.
         .target(
             name: "FrameScriptLabs",
             dependencies: ["FrameScriptCore"]

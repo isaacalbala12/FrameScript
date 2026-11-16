@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import FrameScriptCore
 @testable import FrameScriptLabs
 
 // MARK: - WP4: dormant delivery pack regressions

@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 
 /// A B-roll or checklist item as seen by the diff layer.
 ///

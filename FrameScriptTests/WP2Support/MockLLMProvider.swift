@@ -34,6 +34,16 @@ struct MockLLMProvider: LLMProviderProtocol {
                 : #"{"hooks":[{"angle":"contraste","text":"El parche promete más de lo que da. El problema está en un cambio del que nadie habla.","onScreenText":"¿Qué ha cambiado?"}]}"#)
         case .rehook:
             return Self.rehookResponse(for: request.userPrompt, russian: russian)
+        case .titlesSEO:
+            return LLMResponse(text: russian
+                ? #"{"titles":["Проверка давления, которая меняет всё","Три шины для дождя: что выбрать"]}"#
+                : #"{"titles":["La presión que cambia el neumático de lluvia","Tres neumáticos de lluvia: cuál elegir"]}"#)
+        case .claimCheck:
+            return LLMResponse(text: russian
+                ? #"{"claims":[{"text":"Патч выходит в мае.","status":"probable","reason":"Нужно проверить официальную дату."}]}"#
+                : #"{"claims":[{"text":"El parche sale en mayo.","status":"probable","reason":"Falta la fecha oficial."}]}"#)
+        case .clipAdaptation:
+            return LLMResponse(text: ##"{"hook":"El detalle que cambia la decisión está en una sola curva.","adaptedText":"El detalle que cambia la decisión está en una sola curva. El resto del vídeo lo explica con calma.","onScreenText":"Una sola curva","description":"Versión corta del análisis, sin datos nuevos.","hashtags":["#simracing","#analisis"]}"##)
         }
     }
 

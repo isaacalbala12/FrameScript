@@ -35,6 +35,12 @@ struct SettingsRootView: View {
                                 .padding(.top, 24)
                         case .templates:
                             TemplateSettings()
+                        case .board:
+                            BoardSettingsView(
+                                store: .shared,
+                                catalog: .shared,
+                                plane: .shared
+                            )
                         case .ai:
                             AISettings(settings: $settingsStore.settings)
                         case .export:

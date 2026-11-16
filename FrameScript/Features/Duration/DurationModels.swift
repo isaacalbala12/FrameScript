@@ -203,6 +203,49 @@ struct DurationTakeRecord: Equatable, Sendable {
     }
 }
 
+/// Builds the take records used by duration selection and learning.
+///
+/// Shared by `AppState` and the Resolve pack mapper so both pick the same real
+/// take for a scene and a language.
+enum DurationTakeRecords {
+    /// `sceneTextHash` lets callers pass a cached hash of `scene.scriptText`
+    /// (WP9 keeps one per scene) so hot paths do not rehash the whole text.
+    static func make(scene: Scene, primaryLanguage: String, sceneTextHash: String? = nil) -> [DurationTakeRecord] {
+        guard !scene.takes.isEmpty || scene.languageVariants.contains(where: { !$0.takes.isEmpty }) else {
+            return []
+        }
+        var records: [DurationTakeRecord] = []
+        let sceneHash = sceneTextHash ?? FrameScriptDocument.TextHash.hash(scene.scriptText)
+        for take in scene.takes {
+            let language = take.languageCode
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ? primaryLanguage : take.languageCode
+            records.append(
+                DurationTakeRecord(
+                    take: take,
+                    languageCode: language,
+                    sourceText: scene.scriptText,
+                    sourceTextHash: sceneHash
+                )
+            )
+        }
+        for variant in scene.languageVariants {
+            let variantHash = FrameScriptDocument.TextHash.hash(variant.text)
+            for take in variant.takes {
+                records.append(
+                    DurationTakeRecord(
+                        take: take,
+                        languageCode: variant.languageCode,
+                        sourceText: variant.text,
+                        sourceTextHash: variantHash
+                    )
+                )
+            }
+        }
+        return records
+    }
+}
+
 /// F11 selection rules: the good take wins, otherwise the latest take that is
 /// not rated bad. Stale takes (scene text changed since recording) are ignored.
 enum DurationTakeSelector {
@@ -305,7 +348,7 @@ enum DurationLearning {
         var inputs: [DurationLearningTakeInput] = []
 
         for scene in scenes {
-            let sceneHash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+            let sceneHash = sceneTextHash ?? FrameScriptDocument.TextHash.hash(scene.scriptText)
             for take in scene.takes {
                 let language = take.languageCode
                     .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -81,6 +81,8 @@ struct FormatSchemaTests {
             "TakeRating": FrameScriptDocument.TakeRating.allCases.map(\.rawValue),
             "AssetKind": FrameScriptDocument.AssetKind.allCases.map(\.rawValue),
             "ClaimStatus": FrameScriptDocument.ClaimStatus.allCases.map(\.rawValue),
+            "SourceKind": FrameScriptDocument.SourceKind.allCases.map(\.rawValue),
+            "SourceReliability": FrameScriptDocument.SourceReliability.allCases.map(\.rawValue),
             "ChecklistTaskKind": FrameScriptDocument.ChecklistTaskKind.allCases.map(\.rawValue),
             "ShortClipFormat": FrameScriptDocument.ShortClipFormat.allCases.map(\.rawValue),
             "ShortClipStatus": FrameScriptDocument.ShortClipStatus.allCases.map(\.rawValue)
@@ -120,12 +122,17 @@ struct FormatSchemaTests {
 
         // The sparse project leaves both overrides nil, so the only way to
         // sample these two types is to encode an empty instance directly.
-        for name in ["ProjectSettingsOverride", "RhythmThresholds"] {
+        for name in ["ProjectSettingsOverride", "RhythmThresholds", "ShortClipSceneSourceHash"] {
             let empty: Any
-            if name == "ProjectSettingsOverride" {
+            switch name {
+            case "ProjectSettingsOverride":
                 empty = try Self.jsonObject(of: FrameScriptDocument.ProjectSettingsOverride())
-            } else {
+            case "RhythmThresholds":
                 empty = try Self.jsonObject(of: FrameScriptDocument.RhythmThresholds())
+            default:
+                empty = try Self.jsonObject(
+                    of: FrameScriptDocument.ShortClip.SceneSourceHash(sceneID: UUID(), hash: "")
+                )
             }
             var emptyValidator = DocumentValidator(schema: schema)
             try emptyValidator.validate(empty, definition: name)

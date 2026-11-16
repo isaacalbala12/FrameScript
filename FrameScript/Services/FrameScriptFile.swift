@@ -566,11 +566,27 @@ extension FrameScriptDocument.ChecklistTask {
 
 extension FrameScriptDocument.Source {
     init(source: ProjectSource) {
-        self.init(id: source.id, title: source.title, url: source.url, note: source.note)
+        self.init(
+            id: source.id,
+            title: source.title,
+            url: source.url,
+            kind: FrameScriptDocument.SourceKind(rawValue: source.kind.rawValue) ?? .other,
+            reliability: FrameScriptDocument.SourceReliability(rawValue: source.reliability.rawValue) ?? .medium,
+            date: source.date,
+            note: source.note
+        )
     }
 
     func makeSource() -> ProjectSource {
-        ProjectSource(id: id, title: title, url: url, note: note)
+        ProjectSource(
+            id: id,
+            title: title,
+            url: url,
+            kind: SourceKind(rawValue: kind.rawValue) ?? .other,
+            reliability: SourceReliability(rawValue: reliability.rawValue) ?? .medium,
+            date: date,
+            note: note
+        )
     }
 }
 
@@ -581,7 +597,12 @@ extension FrameScriptDocument.Claim {
             text: claim.text,
             status: FrameScriptDocument.ClaimStatus(rawValue: claim.status.rawValue) ?? .probable,
             sourceIDs: claim.sourceIDs,
-            sceneIDs: claim.sceneIDs
+            sceneIDs: claim.sceneIDs,
+            anchorSceneID: claim.anchorSceneID,
+            anchor: claim.anchor.map(FrameScriptDocument.TextAnchor.init(anchor:)),
+            needsVerification: claim.needsVerification,
+            personalExperience: claim.personalExperience,
+            resolutionNote: claim.resolutionNote
         )
     }
 
@@ -591,18 +612,35 @@ extension FrameScriptDocument.Claim {
             text: text,
             status: AppClaimStatus(rawValue: status.rawValue) ?? .probable,
             sourceIDs: sourceIDs,
-            sceneIDs: sceneIDs
+            sceneIDs: sceneIDs,
+            anchorSceneID: anchorSceneID,
+            anchor: anchor?.makeAnchor(),
+            needsVerification: needsVerification,
+            personalExperience: personalExperience,
+            resolutionNote: resolutionNote
         )
     }
 }
 
 extension FrameScriptDocument.ComparisonTable {
     init(table: AppComparisonTable) {
-        self.init(id: table.id, title: table.title, header: table.header, rows: table.rows)
+        self.init(
+            id: table.id,
+            title: table.title,
+            header: table.header,
+            rows: table.rows,
+            sceneID: table.sceneID
+        )
     }
 
     func makeTable() -> AppComparisonTable {
-        AppComparisonTable(id: id, title: title, header: header, rows: rows)
+        AppComparisonTable(
+            id: id,
+            title: title,
+            header: header,
+            rows: rows,
+            sceneID: sceneID
+        )
     }
 }
 
@@ -636,7 +674,11 @@ extension FrameScriptDocument.ShortClip {
             sourceHash: clip.sourceHash,
             languageCode: clip.languageCode,
             sceneSourceHashes: clip.sceneSourceHashes.map {
-                FrameScriptDocument.ShortClip.SceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+                FrameScriptDocument.ShortClip.SceneSourceHash(
+                    sceneID: $0.sceneID,
+                    hash: $0.hash,
+                    sourceText: $0.sourceText
+                )
             },
             status: FrameScriptDocument.ShortClipStatus(rawValue: clip.status.rawValue) ?? .idea
         )
@@ -659,7 +701,7 @@ extension FrameScriptDocument.ShortClip {
             sourceHash: sourceHash,
             languageCode: languageCode,
             sceneSourceHashes: sceneSourceHashes.map {
-                AppClipSceneSourceHash(sceneID: $0.sceneID, hash: $0.hash)
+                AppClipSceneSourceHash(sceneID: $0.sceneID, hash: $0.hash, sourceText: $0.sourceText)
             },
             status: AppShortClipStatus(rawValue: status.rawValue) ?? .idea
         )

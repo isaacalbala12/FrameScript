@@ -62,6 +62,8 @@ struct FrameScriptProductionApp: App {
             .environment(appState)
             .environment(escaletaImport)
             .backupsSheet(appState)
+            .productionSheet(appState)
+            .publishingSheet(appState)
             .onAppear {
                 shortcutRouter.start(using: appState)
                 appDelegate.attach(appState)
@@ -179,6 +181,13 @@ struct FrameScriptProductionApp: App {
             Button(appState.localized("project.export")) { appState.exportProject() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .export))
                 .disabled(!commands.canExportProject)
+            Button(appState.localized("resolvePack.menu")) {
+                ResolvePackPresenter.shared.present(
+                    languageCode: appState.resolvePackDefaultLanguageCode
+                )
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .resolvePack))
+            .disabled(!commands.canExportResolvePack)
             Divider()
             Button(appState.localized("menu.importEscaleta")) {
                 escaletaImport.chooseFile(appState: appState)
@@ -190,6 +199,11 @@ struct FrameScriptProductionApp: App {
             }
             .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportEscaleta))
             .disabled(!commands.canExportProject)
+            Button(appState.localized("menu.exportAVScript")) {
+                appState.exportAVScript(format: .markdown)
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .exportAVScript))
+            .disabled(!commands.canExportAVScript)
         }
 
         CommandGroup(replacing: .appSettings) {
@@ -210,10 +224,31 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("mode.editing"), isOn: modeBinding(.editing))
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .editingMode))
                 .disabled(!commands.canSwitchMode)
+            Toggle(appState.localized("mode.clips"), isOn: modeBinding(.clips))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .clipsMode))
+                .disabled(!commands.canSwitchMode)
+            Toggle(appState.localized("mode.timeline"), isOn: modeBinding(.timeline))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineMode))
+                .disabled(!commands.canSwitchMode)
+            Toggle(appState.localized("mode.avScript"), isOn: modeBinding(.avScript))
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .avScriptMode))
+                .disabled(!commands.canSwitchMode)
+            Button(appState.localized("clips.command.create")) { appState.createClipFromEditorSelection() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .createClip))
+                .disabled(!commands.canCreateClip)
+            Divider()
+            Button(appState.localized("timeline.zoomIn")) { appState.timelineZoomIn() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineZoomIn))
+                .disabled(!commands.canZoomTimeline)
+            Button(appState.localized("timeline.zoomOut")) { appState.timelineZoomOut() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .timelineZoomOut))
+                .disabled(!commands.canZoomTimeline)
             Divider()
             Button(appState.localized("menu.teleprompter")) { appState.presentTeleprompter() }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .teleprompter))
                 .disabled(!commands.canOpenTeleprompter)
+            Button(appState.localized("board.menu")) { appState.showBoardWindow() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .showBoard))
             Divider()
             Toggle(appState.localized("command.toggleSidebar"), isOn: $appState.isSidebarVisible)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleContentsPanel))
@@ -221,9 +256,15 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("command.toggleAIReview"), isOn: aiReviewPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleAIReview))
                 .disabled(!commands.canToggleAIReview)
+            Button(appState.localized("research.menu")) { appState.openResearchPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .researchPanel))
+                .disabled(!commands.canShowResearch)
             Toggle(appState.localized("command.toggleFocus"), isOn: $appState.isFocusModeEnabled)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleFocusMode))
                 .disabled(!commands.canToggleFocusMode)
+            Button(appState.localized("menu.assets")) { appState.isAssetsPresented = true }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .assets))
+                .disabled(!commands.canShowAssets)
             Button(appState.localized("toolbar.commandPalette")) { appState.isCommandPalettePresented = true }
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .commandPalette))
             Button(appState.localized("command.showShortcuts")) { appState.isShortcutsPresented = true }
@@ -291,6 +332,10 @@ struct FrameScriptProductionApp: App {
             Button(appState.localized("menu.generateEditing")) { appState.generateEditingNotesForSelectedScene() }
                 .disabled(!commands.canGenerateForScene)
             Divider()
+            Button(appState.localized("publishing.menu.open")) { appState.showPublishingPanel() }
+                .configuredKeyboardShortcut(appState.shortcutBinding(for: .publishingPack))
+                .disabled(!commands.canShowPublishing)
+            Divider()
             // A take must always be stoppable, even when the project was closed
             // while OBS was still writing (lifecycle P1-1).
             Button(appState.localized("recording.menu.recordTake")) { appState.toggleRecordingTake() }
@@ -299,6 +344,11 @@ struct FrameScriptProductionApp: App {
             Toggle(appState.localized("recording.menu.togglePanel"), isOn: recordingPanelBinding)
                 .configuredKeyboardShortcut(appState.shortcutBinding(for: .toggleRecordingPanel))
                 .disabled(!commands.canToggleRecordingPanel)
+            Button(appState.localized("production.menu")) {
+                ProductionPresentation.shared.present()
+            }
+            .configuredKeyboardShortcut(appState.shortcutBinding(for: .productionChecklist))
+            .disabled(!commands.canShowProductionChecklist)
             Button(appState.localized("recording.obs.settings")) {
                 appState.recording.isSettingsPresented = true
             }

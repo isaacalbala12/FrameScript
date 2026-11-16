@@ -42,11 +42,14 @@ struct CommandAvailability: Equatable {
     var canSaveProject: Bool { hasOpenProject }
     var canSaveProjectAs: Bool { hasOpenProject }
     var canExportProject: Bool { hasOpenProject }
+    var canExportAVScript: Bool { hasOpenProject }
+    var canExportResolvePack: Bool { hasOpenProject }
     var canRevertToSaved: Bool { hasOpenProject && hasSavedFile && !hasActiveTake }
 
     /// Set by `CommandAvailability(appState:)`; kept out of the initializer so
     /// the matrix stays easy to build in tests.
     var hasSavedFile: Bool = false
+    var isTimelineMode: Bool = false
 
     // MARK: - Backups and app-level windows
 
@@ -76,6 +79,10 @@ struct CommandAvailability: Equatable {
     var canGenerateForScene: Bool { hasOpenProject && hasSelectedScene }
     var canOpenTeleprompter: Bool { hasOpenProject && hasScenes }
     var canToggleRecordingPanel: Bool { hasOpenProject }
+    /// The production checklist is derived from the open document, so it needs
+    /// a project but no selected scene.
+    var canShowProductionChecklist: Bool { hasOpenProject }
+    var canShowPublishing: Bool { hasOpenProject }
 
     /// Recording can always be stopped, even when the project vanished while
     /// OBS was writing the take; starting one needs a scene.
@@ -84,9 +91,17 @@ struct CommandAvailability: Equatable {
     // MARK: - Mode switches
 
     var canSwitchMode: Bool { hasOpenProject }
+    /// A clip starts from the selected scene or the current editor selection.
+    var canCreateClip: Bool { hasOpenProject && hasSelectedScene }
+    /// Timeline zoom only applies while the timeline workspace is on screen.
+    var canZoomTimeline: Bool { isTimelineMode }
     var canToggleContentsPanel: Bool { hasOpenProject }
     var canToggleAIReview: Bool { hasOpenProject }
     var canToggleFocusMode: Bool { hasOpenProject }
+    var canShowAssets: Bool { hasOpenProject }
+    var canShowResearch: Bool { hasOpenProject }
+    /// The board is a library window: it works without an open project.
+    var canShowBoard: Bool { true }
 
     func isEnabled(_ command: ShortcutCommand) -> Bool {
         switch command {
@@ -96,7 +111,7 @@ struct CommandAvailability: Equatable {
             canSaveProject
         case .saveAs:
             canSaveProjectAs
-        case .export, .exportEscaleta:
+        case .export, .exportEscaleta, .exportAVScript, .resolvePack:
             canExportProject
         case .importEscaleta:
             canReplaceProject
@@ -112,8 +127,12 @@ struct CommandAvailability: Equatable {
             canMoveScene
         case .previousScene, .nextScene:
             canNavigateScenes
-        case .scriptMode, .visualsMode, .editingMode:
+        case .scriptMode, .visualsMode, .editingMode, .clipsMode, .timelineMode, .avScriptMode:
             canSwitchMode
+        case .createClip:
+            canCreateClip
+        case .timelineZoomIn, .timelineZoomOut:
+            canZoomTimeline
         case .commandPalette:
             canShowCommandPalette
         case .toggleContentsPanel:
@@ -122,12 +141,22 @@ struct CommandAvailability: Equatable {
             canToggleAIReview
         case .toggleFocusMode:
             canToggleFocusMode
+        case .assets:
+            canShowAssets
+        case .researchPanel:
+            canShowResearch
+        case .showBoard:
+            canShowBoard
         case .teleprompter:
             canOpenTeleprompter
         case .recordTake:
             canToggleRecording
         case .toggleRecordingPanel:
             canToggleRecordingPanel
+        case .productionChecklist:
+            canShowProductionChecklist
+        case .publishingPack:
+            canShowPublishing
         case .analyzeCurrentScene, .generateHook, .suggestRehooks:
             canAnalyzeScene
         case .openSettings:
@@ -149,6 +178,7 @@ extension CommandAvailability {
             hasActiveTake: appState.recording.hasActiveTake
         )
         hasSavedFile = appState.projectStore.currentFileURL != nil
+        isTimelineMode = appState.selectedMode == .timeline
     }
 }
 

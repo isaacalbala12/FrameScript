@@ -310,6 +310,9 @@ extension ProjectSource {
             id: context.sourceIDs[id] ?? UUID(),
             title: title,
             url: url,
+            kind: kind,
+            reliability: reliability,
+            date: date,
             note: note
         )
     }
@@ -322,14 +325,19 @@ extension ProjectClaim {
             text: text,
             status: status,
             sourceIDs: context.sourceIDs(sourceIDs),
-            sceneIDs: context.sceneIDs(sceneIDs)
+            sceneIDs: context.sceneIDs(sceneIDs),
+            anchorSceneID: context.sceneID(anchorSceneID),
+            anchor: anchor,
+            needsVerification: needsVerification,
+            personalExperience: personalExperience,
+            resolutionNote: resolutionNote
         )
     }
 }
 
 extension ComparisonTable {
     func copied() -> ComparisonTable {
-        ComparisonTable(id: UUID(), title: title, header: header, rows: rows)
+        ComparisonTable(id: UUID(), title: title, header: header, rows: rows, sceneID: sceneID)
     }
 }
 
@@ -357,7 +365,11 @@ extension ShortClip {
             sourceHash: sourceHash,
             languageCode: languageCode,
             sceneSourceHashes: sceneSourceHashes.map {
-                ClipSceneSourceHash(sceneID: context.sceneID($0.sceneID) ?? $0.sceneID, hash: $0.hash)
+                ClipSceneSourceHash(
+                    sceneID: context.sceneID($0.sceneID) ?? $0.sceneID,
+                    hash: $0.hash,
+                    sourceText: $0.sourceText
+                )
             },
             status: status
         )

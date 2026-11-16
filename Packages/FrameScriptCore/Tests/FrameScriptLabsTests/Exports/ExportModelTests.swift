@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import FrameScriptCore
 @testable import FrameScriptLabs
 
 @Suite("Export models and text")
@@ -108,7 +109,8 @@ struct ExportModelTests {
         #expect(ExportMarkerColor.suggested(for: .capture) == .pink)
         #expect(ExportMarkerColor.suggested(for: .web) == .pink)
         #expect(ExportMarkerColor.suggested(for: .music) == .lavender)
-        #expect(ExportMarkerColor.suggested(for: .graphic) == .lemon)
+        // Resolve has no orange; graphics and tables use Sand, its warm orange.
+        #expect(ExportMarkerColor.suggested(for: .graphic) == .sand)
     }
 
     @Test("Frame rate fractions are reduced before comparison")

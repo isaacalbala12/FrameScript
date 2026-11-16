@@ -34,15 +34,26 @@ enum ApplicationMenuSpec {
         .init(command: .export, menu: .file),
         .init(command: .importEscaleta, menu: .file),
         .init(command: .exportEscaleta, menu: .file),
+        .init(command: .exportAVScript, menu: .file),
+        .init(command: .resolvePack, menu: .file),
         .init(command: .showBackups, menu: .file),
 
         .init(command: .scriptMode, menu: .view),
         .init(command: .visualsMode, menu: .view),
         .init(command: .editingMode, menu: .view),
+        .init(command: .clipsMode, menu: .view),
+        .init(command: .timelineMode, menu: .view),
+        .init(command: .avScriptMode, menu: .view),
+        .init(command: .createClip, menu: .view),
+        .init(command: .timelineZoomIn, menu: .view),
+        .init(command: .timelineZoomOut, menu: .view),
         .init(command: .teleprompter, menu: .view),
         .init(command: .toggleContentsPanel, menu: .view),
         .init(command: .toggleAIReview, menu: .view),
         .init(command: .toggleFocusMode, menu: .view),
+        .init(command: .researchPanel, menu: .view),
+        .init(command: .showBoard, menu: .view),
+        .init(command: .assets, menu: .view),
         .init(command: .commandPalette, menu: .view),
         .init(command: .showShortcuts, menu: .view),
 
@@ -59,6 +70,8 @@ enum ApplicationMenuSpec {
         .init(command: .suggestRehooks, menu: .tools),
         .init(command: .recordTake, menu: .tools),
         .init(command: .toggleRecordingPanel, menu: .tools),
+        .init(command: .productionChecklist, menu: .tools),
+        .init(command: .publishingPack, menu: .tools),
 
         .init(command: .openSettings, menu: .application)
     ]

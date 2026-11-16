@@ -10,6 +10,7 @@ struct AppRootView: View {
     var body: some View {
         @Bindable var windowState = appState.windowState
         @Bindable var recording = appState.recording
+        @Bindable var resolvePackPresenter = ResolvePackPresenter.shared
         // Read the observable property in the body so a pending question
         // invalidates this view and presents the sheet.
         let pendingPrompt = subscriptionRuntime.pendingPrompt
@@ -65,6 +66,11 @@ struct AppRootView: View {
                     .environment(appState)
                     .environment(\.frameTheme, appState.themeManager.frameTheme)
             }
+            .sheet(isPresented: $windowState.isAssetsPresented) {
+                AssetsSheetView()
+                    .environment(appState)
+                    .environment(\.frameTheme, appState.themeManager.frameTheme)
+            }
             .sheet(isPresented: $windowState.isCommandPalettePresented, onDismiss: performPendingPaletteAction) {
                 CommandPaletteView()
                     .environment(appState)
@@ -103,6 +109,7 @@ struct AppRootView: View {
 
     private func performPendingPaletteAction() {
         HookSheetPresenter.shared.presentPendingRequest()
+        ResolvePackPresenter.shared.presentPendingRequest()
         if PaletteActionHandoff.shared.takeExportRequest() {
             appState.windowState.isExportPresented = true
         }
@@ -191,7 +198,13 @@ struct AppShellView: View {
             handleDrop(urls)
         }
         .hookGeneratorSheets(presenter: HookSheetPresenter.shared)
+        .resolvePackSheet(presenter: ResolvePackPresenter.shared)
+        .task(id: appState.project.id) {
+            appState.syncOBSAssetsFromTakes()
+            await appState.refreshAssetReachability()
+        }
         .onDisappear {
+            appState.windowState.isAssetsPresented = false
             appState.flushActiveEditorBoundary()
         }
     }
@@ -221,6 +234,12 @@ struct AppShellView: View {
                 BRollEditorView(scene: scene)
             case .editing:
                 EditingEditorView(scene: scene)
+            case .clips:
+                ClipsPanel()
+            case .timeline:
+                TimelineWorkspaceView()
+            case .avScript:
+                AVScriptEditorView(scene: scene)
             }
         } else {
             EmptyProjectView()
@@ -837,6 +856,17 @@ private struct ExportSheetView: View {
                 }
                 .toggleStyle(.checkbox)
 
+                if warningCount > 0 {
+                    Label(
+                        String(format: appState.localized("research.exportSheet.warning"), warningCount),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 260, alignment: .leading)
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text(appState.localized("export.preview"))
                         .font(.system(size: 12, weight: .medium))
@@ -902,6 +932,10 @@ private struct ExportSheetView: View {
 
     private var previewText: String {
         appState.dependencies.exportService.render(project: appState.project, format: format, preferences: effectivePreferences, language: appState.currentLanguage)
+    }
+
+    private var warningCount: Int {
+        appState.researchExportWarnings().count
     }
 
     private func saveFile() {

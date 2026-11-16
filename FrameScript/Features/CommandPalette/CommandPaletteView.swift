@@ -240,6 +240,32 @@ struct CommandPaletteView: View {
             appState.selectMode(.bRoll)
         case .editingMode:
             appState.selectMode(.editing)
+        case .clipsMode:
+            appState.selectMode(.clips)
+        case .createClip:
+            appState.createClipFromEditorSelection()
+        case .timelineMode:
+            appState.selectMode(.timeline)
+        case .timelineZoomIn:
+            appState.timelineZoomIn()
+        case .timelineZoomOut:
+            appState.timelineZoomOut()
+        case .avScriptMode:
+            appState.selectMode(.avScript)
+        case .exportAVScript:
+            appState.exportAVScript(format: .markdown)
+        case .assets:
+            appState.isAssetsPresented = true
+        case .publishingPack:
+            appState.showPublishingPanel()
+        case .researchPanel:
+            appState.openResearchPanel()
+        case .showBoard:
+            appState.showBoardWindow()
+        case .resolvePack:
+            ResolvePackPresenter.shared.presentAfterPaletteDismissal(
+                languageCode: appState.resolvePackDefaultLanguageCode
+            )
         case .commandPalette:
             break
         case .toggleContentsPanel:
@@ -254,6 +280,8 @@ struct CommandPaletteView: View {
             appState.toggleRecordingTake()
         case .toggleRecordingPanel:
             appState.recording.isPanelVisible.toggle()
+        case .productionChecklist:
+            ProductionPresentation.shared.presentAfterPaletteDismissal()
         case .analyzeCurrentScene:
             appState.settings.editorPreferences.showAIReviewPanel = true
             Task { await appState.analyzeSelectedScene() }

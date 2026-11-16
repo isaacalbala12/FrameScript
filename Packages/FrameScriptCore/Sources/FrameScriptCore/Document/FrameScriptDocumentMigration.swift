@@ -149,12 +149,32 @@ extension FrameScriptDocument {
         for index in project.claims.indices {
             project.claims[index].sourceIDs = Self.uniqued(project.claims[index].sourceIDs.filter(sourceIDs.contains))
             project.claims[index].sceneIDs = Self.uniqued(project.claims[index].sceneIDs.filter(sceneIDs.contains))
+            if let anchorSceneID = project.claims[index].anchorSceneID, !sceneIDs.contains(anchorSceneID) {
+                project.claims[index].anchorSceneID = nil
+                project.claims[index].anchor = nil
+            }
+        }
+        for index in project.comparisonTables.indices {
+            if let sceneID = project.comparisonTables[index].sceneID, !sceneIDs.contains(sceneID) {
+                project.comparisonTables[index].sceneID = nil
+            }
         }
         for index in project.clips.indices {
             project.clips[index].sourceSceneIDs = Self.uniqued(project.clips[index].sourceSceneIDs.filter(sceneIDs.contains))
             if let anchorSceneID = project.clips[index].anchorSceneID, !sceneIDs.contains(anchorSceneID) {
                 project.clips[index].anchorSceneID = nil
                 project.clips[index].anchor = nil
+            } else if let anchorSceneID = project.clips[index].anchorSceneID,
+                      !project.clips[index].sourceSceneIDs.contains(anchorSceneID) {
+                project.clips[index].sourceSceneIDs.insert(anchorSceneID, at: 0)
+            }
+            // F24's diff baseline is optional; older files may have hashes
+            // without `sourceText`, and hand-edited files may list hashes for
+            // scenes that are no longer part of the clip.
+            let clipSceneIDs = Set(project.clips[index].sourceSceneIDs)
+            var seenHashes: Set<UUID> = []
+            project.clips[index].sceneSourceHashes = project.clips[index].sceneSourceHashes.filter {
+                clipSceneIDs.contains($0.sceneID) && seenHashes.insert($0.sceneID).inserted
             }
         }
     }
@@ -194,6 +214,19 @@ extension FrameScriptDocument {
             }
             if changed {
                 project.scenes[sceneIndex] = scene
+            }
+        }
+        // A claim anchor lives in the scene named by `anchorSceneID`. A claim
+        // that names no scene has no text to validate it against, so an
+        // out-of-range claim anchor is dropped like any other stale anchor
+        // instead of making the project unreadable.
+        let scenesByID = Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0) })
+        for index in project.claims.indices {
+            guard let anchorSceneID = project.claims[index].anchorSceneID,
+                  let scene = scenesByID[anchorSceneID] else { continue }
+            let textLength = (scene.scriptText as NSString).length
+            if !isValid(project.claims[index].anchor, textLength: textLength) {
+                project.claims[index].anchor = nil
             }
         }
     }

@@ -33,6 +33,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
     case appearance
     case editor
     case templates
+    case board
     case ai
     case export
     case keyboardShortcuts
@@ -46,6 +47,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
         case .appearance: "paintpalette"
         case .editor: "text.alignleft"
         case .templates: "doc.on.doc"
+        case .board: "rectangle.split.3x1"
         case .ai: "sparkles"
         case .export: "square.and.arrow.up"
         case .keyboardShortcuts: "keyboard"
@@ -60,6 +62,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Codable, Hashable {
         case .appearance: appState.localized("settings.appearance")
         case .editor: appState.localized("settings.editor")
         case .templates: appState.localized("settings.templates")
+        case .board: appState.localized("settings.board")
         case .ai: appState.localized("settings.ai")
         case .export: appState.localized("settings.export")
         case .keyboardShortcuts: appState.localized("settings.keyboardShortcuts")
@@ -124,8 +127,15 @@ final class AppState {
     let dependencies: AppDependencies
     /// F10 recording state and the obs-websocket client.
     let recording: RecordingController
+    /// Subscription AI runtime. Tests inject one backed by an isolated
+    /// `UserDefaults` suite so they never read the real app preferences.
+    let subscriptionRuntime: SubscriptionAIRuntime
     /// Seam for recording -> teleprompter (F8/F9); tests replace it with a fake.
     var recordingTeleprompter: any RecordingTeleprompterPresenting = LiveRecordingTeleprompter()
+    /// Integration seam for production destinations whose panels live on
+    /// another branch (publishing, research). Local destinations are handled by
+    /// `AppState+Production`.
+    var productionNavigator: (any ProductionNavigator)?
     /// Last accepted teleprompter learning sample, used to drop duplicate
     /// reports of the same reading.
     var lastTeleprompterLearningSignature: TeleprompterLearningSignature?
@@ -193,6 +203,7 @@ final class AppState {
         themeManager: ResolvedThemeManager = ResolvedThemeManager(),
         dependencies: AppDependencies = .live,
         recording: RecordingController? = nil,
+        subscriptionRuntime: SubscriptionAIRuntime = .shared,
         aiProviderConfigurationStore: AIProviderConfigurationStore = AIProviderConfigurationStore(),
         securityScope: SecurityScopedResourceAccess = .live,
         closeConfirmation: CloseConfirmation? = nil,
@@ -206,7 +217,10 @@ final class AppState {
         exportFolderBookmarkResolver: @escaping ExportFolderBookmarkResolver = { data, isStale in
             try URL(resolvingBookmarkData: data, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &isStale)
         },
-        templates: [FrameTemplate] = SampleData.templates
+        templates: [FrameTemplate] = SampleData.templates,
+        /// `nil` reads the user's custom templates. Tests pass `[]` so they
+        /// never touch the real app defaults domain.
+        customTemplates: [FrameTemplate]? = nil
     ) {
         self.projectStore = projectStore
         self.recentProjectStore = recentProjectStore
@@ -218,6 +232,7 @@ final class AppState {
         self.themeManager = themeManager
         self.dependencies = dependencies
         self.recording = recording ?? RecordingController()
+        self.subscriptionRuntime = subscriptionRuntime
         self.aiProviderConfigurationStore = aiProviderConfigurationStore
         self.securityScope = securityScope
         self.closeConfirmation = closeConfirmation
@@ -228,9 +243,16 @@ final class AppState {
         self.exportFolderBookmarkCreator = exportFolderBookmarkCreator
         self.exportFolderBookmarkResolver = exportFolderBookmarkResolver
         self.builtInTemplates = templates.filter(\.builtIn)
-        let loadedCustomTemplates = Self.loadCustomTemplates()
-        self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: loadedCustomTemplates.templates)
-        self.didFailToLoadCustomTemplates = loadedCustomTemplates.failed
+        // `customTemplates` stays injectable for tests; production passes `nil`
+        // and reads the isolated application defaults.
+        if let customTemplates {
+            self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: customTemplates)
+            self.didFailToLoadCustomTemplates = false
+        } else {
+            let loadedCustomTemplates = Self.loadCustomTemplates()
+            self.templates = Self.mergedTemplates(builtIns: templates.filter(\.builtIn), customTemplates: loadedCustomTemplates.templates)
+            self.didFailToLoadCustomTemplates = loadedCustomTemplates.failed
+        }
         self.windowState.isSidebarVisible = settingsStore.settings.windowPreferences.sidebarDefaultVisible
         self.projectStore.setSegmentSplitMode(settingsStore.settings.generalPreferences.defaultSplitMode)
         self.projectStore.durationConfigurationProvider = { [weak self] scene in
@@ -243,10 +265,21 @@ final class AppState {
         settingsStore.setErrorReporter { [weak errorCenter] error in
             errorCenter?.present(error)
         }
-        SubscriptionAIRuntime.shared.attach(appState: self)
+        subscriptionRuntime.attach(appState: self)
         attachRecordingContext()
         self.recording.teleprompterHook = self
         TeleprompterPresenter.shared.readingSessionReporter = self
+        projectStore.projectDidChangeHandler = { [weak self] in
+            guard let self else { return }
+            if self.hasOpenProject {
+                ProductionChecklistCenter.shared.scheduleRefresh(project: self.project)
+            } else {
+                ProductionChecklistCenter.shared.clear()
+            }
+        }
+        if projectStore.hasOpenProject {
+            ProductionChecklistCenter.shared.refreshNow(project: project)
+        }
     }
 
     func configure() {
@@ -311,6 +344,11 @@ final class AppState {
         if editorState.selectedSceneID == nil {
             editorState.selectedSceneID = project.scenes.first?.id
         }
+#if DEBUG
+        if arguments.contains("--framescript-ui-test-open-timeline") {
+            editorState.selectedMode = .timeline
+        }
+#endif
     }
 
     var project: FrameProject {
@@ -457,6 +495,7 @@ final class AppState {
             sceneNameResolver: { [weak self] name in self?.localizedTemplateSceneName(name) ?? name }
         )
         willReplaceOpenProject()
+        applyBoardTemplateDefault(to: project, template: selectedTemplate)
         projectStore.openProject(project, fileURL: nil, wordsPerMinute: durationWordsPerMinute(for: project), markUnsaved: true, recalculateDurations: false)
         resetProjectFileTracking()
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
@@ -1150,7 +1189,7 @@ final class AppState {
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
-        case .script: []
+        case .script, .clips, .timeline, .avScript: []
         }
         let anchorsByID = Dictionary(uniqueKeysWithValues: items)
         let selectedIDs = itemIDs.reduce(into: [UUID]()) { result, itemID in
@@ -1207,7 +1246,7 @@ final class AppState {
             scene.editingItems.enumerated().compactMap { index, item in
                 TextAnchorRepair.current(item.textAnchor, in: scene.scriptText).map { (item.id, $0, index) }
             }
-        case .script:
+        case .script, .clips, .timeline, .avScript:
             []
         }
         let sorted = anchors.sorted {
@@ -1243,7 +1282,7 @@ final class AppState {
             editorState.selectedProductionItemIDs.lazy.compactMap { selectedID in
                 scene.editingItems.first(where: { $0.id == selectedID }).flatMap { TextAnchorRepair.current($0.textAnchor, in: scene.scriptText) }
             }.first
-        case .script:
+        case .script, .clips, .timeline, .avScript:
             nil
         }
         return selectedAnchor ?? TextAnchorRepair.anchor(
@@ -2241,6 +2280,9 @@ final class ProjectStore {
     var durationConfigurationProvider: ((Scene) -> DurationConfiguration)?
     /// Re-runs the rhythm review after anchor mutations. Set by `AppState`.
     var markupReviewRefreshHandler: (() -> Void)?
+    /// Called after the open project, its dirty flag, or its contents change.
+    /// AppState uses it to keep derived caches (production checklist) fresh.
+    @ObservationIgnored var projectDidChangeHandler: (() -> Void)?
 
     init(
         project: FrameProject = SampleData.defaultProject,
@@ -2317,6 +2359,7 @@ final class ProjectStore {
         }
         hasUnsavedFileChanges = origin == .builtInDemo ? false : markUnsaved || fileURL == nil
         saveState = hasUnsavedFileChanges ? .edited : .saved
+        projectDidChangeHandler?()
     }
 
     func closeProject() {
@@ -2332,6 +2375,7 @@ final class ProjectStore {
         durationDirtySceneIDs.removeAll()
         lastDurationConfiguration = nil
         EditorMarkupSessionCaches.reset()
+        projectDidChangeHandler?()
     }
 
     var needsCloseConfirmation: Bool {
@@ -2647,6 +2691,7 @@ final class ProjectStore {
         contentRevision &+= 1
         hasUnsavedFileChanges = true
         saveState = .edited
+        projectDidChangeHandler?()
     }
 
     /// Marks every scene for one duration pass. Used when the resolved pace can
@@ -3212,6 +3257,8 @@ final class WindowState {
     var settingsRequestID = UUID()
     var newProjectRequest: NewProjectRequest?
     var isExportPresented = false
+    var selectedClipID: UUID?
+    var isAssetsPresented = false
     var pendingSettingsTab: SettingsTab?
     var pendingSettingsHighlightKey: String?
 }

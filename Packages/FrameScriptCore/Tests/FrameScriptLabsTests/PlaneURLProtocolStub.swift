@@ -1,4 +1,5 @@
 import Foundation
+import FrameScriptCore
 
 /// A `URLProtocol` stub so the client tests exercise the real `URLSession`
 /// stack without touching the network.
