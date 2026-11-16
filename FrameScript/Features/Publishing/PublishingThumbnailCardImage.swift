@@ -33,6 +33,8 @@ extension AssetThumbnailCache: ThumbnailCardImageLoading {}
 @Observable
 final class PublishingThumbnailCardImageModel {
     private(set) var image: NSImage?
+    private(set) var isLoading = false
+    private(set) var hasLoaded = false
     private(set) var loadCount = 0
     private var loadedRequest: ThumbnailCardImageRequest?
 
@@ -45,6 +47,12 @@ final class PublishingThumbnailCardImageModel {
         guard request != loadedRequest else { return }
         loadedRequest = request
         loadCount += 1
+        isLoading = true
+        hasLoaded = false
+        defer {
+            isLoading = false
+            hasLoaded = true
+        }
         guard let asset else {
             image = nil
             return

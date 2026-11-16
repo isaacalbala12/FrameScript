@@ -531,6 +531,8 @@ final class W3FixCDHThemeAndThumbnailTests: XCTestCase {
 
         await model.update(asset: asset, projectDirectory: directory, loader: loader)
         XCTAssertEqual(model.loadCount, 1)
+        XCTAssertTrue(model.hasLoaded)
+        XCTAssertFalse(model.isLoading)
 
         // A paired-title keystroke leaves the resource identical.
         await model.update(asset: asset, projectDirectory: directory, loader: loader)

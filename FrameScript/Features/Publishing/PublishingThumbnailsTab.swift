@@ -397,8 +397,10 @@ private struct PublishingThumbnailCardImage: View {
                 VStack(spacing: 5) {
                     Image(systemName: "photo")
                         .font(.system(size: 18))
-                    Text(appState.localized("publishing.thumbnails.missingFile"))
-                        .font(.system(size: 10))
+                    if model.hasLoaded, !model.isLoading {
+                        Text(appState.localized("publishing.thumbnails.missingFile"))
+                            .font(.system(size: 10))
+                    }
                 }
                 .foregroundStyle(theme.tertiaryText)
             }
