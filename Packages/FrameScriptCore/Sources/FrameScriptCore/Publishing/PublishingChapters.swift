@@ -281,13 +281,12 @@ public enum PublishingChapters {
                 title: chapter.title
             )
         }
-        // Only an exact (time, title) duplicate is dropped. A sceneless
-        // chapter at the same second but with a different title (or one before
-        // the first scene) must still reach the export.
-        var seen = Set(result.map { "\($0.seconds)|\($0.title)" })
+        // YouTube rejects two chapters at the same second, so a sceneless
+        // imported chapter is exported only when its start is still free. A
+        // chapter before the first scene (a free second) is kept.
+        var takenStarts = Set(result.map(\.seconds))
         for imported in importedChapters(importedOverrides) {
-            let key = "\(imported.seconds)|\(imported.title)"
-            guard seen.insert(key).inserted else { continue }
+            guard takenStarts.insert(imported.seconds).inserted else { continue }
             result.append(imported)
         }
         return result.sorted { lhs, rhs in

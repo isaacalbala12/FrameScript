@@ -354,7 +354,7 @@ struct W3FixCDHPublishingTests {
         #expect(ResolveDeliveryPack.chapterListsDiffer(first, extra))
     }
 
-    @Test("W3FixCDH sceneless chapters survive unless time and title are identical")
+    @Test("W3FixCDH sceneless chapters keep the list valid for YouTube")
     func scenelessChaptersAreOnlyDeduplicatedExactly() {
         let plan = PublishingChapters.plan(
             scenes: [
@@ -386,9 +386,13 @@ struct W3FixCDHPublishingTests {
             importedOverrides: overrides
         )
 
-        #expect(chapters.filter { $0.seconds == 0 && $0.title == "Uno" }.count == 1)
-        #expect(chapters.contains { $0.seconds == 0 && $0.title == "Otra versión del gancho" })
+        // One chapter per second: the scene chapter wins at 0:00.
+        #expect(chapters.filter { $0.seconds == 0 }.count == 1)
+        #expect(chapters.first { $0.seconds == 0 }?.title == "Uno")
+        #expect(!chapters.contains { $0.title == "Otra versión del gancho" })
+        // A sceneless chapter at a free second is still exported.
         #expect(chapters.contains { $0.seconds == 10 && $0.title == "Antes de la primera escena" })
+        #expect(Set(chapters.map(\.seconds)).count == chapters.count)
     }
 }
 
