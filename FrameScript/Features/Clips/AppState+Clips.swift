@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import FrameScriptCore
+import UniformTypeIdentifiers
 
 // MARK: - AI adaptation
 
@@ -116,10 +117,20 @@ extension AppState {
     var clips: [ShortClip] { project.clips }
 
     var clipsSummary: ClipSummary {
+        clipsSummary(scenes: clipSourceScenes)
+    }
+
+    /// Render-time overload: the panel computes `clipSourceScenes` once and
+    /// passes it down instead of recopying every scene for every row.
+    func clipsSummary(scenes: [FrameScriptDocument.Scene]) -> ClipSummary {
         ClipSummaryBuilder.summary(
             clips: project.clips.map(FrameScriptDocument.ShortClip.init(clip:)),
-            scenes: clipSourceScenes,
-            wordsPerMinute: effectiveWPM()
+            scenes: scenes,
+            wordsPerMinute: { clip in
+                let code = DurationLanguage.normalized(clip.languageCode)
+                return effectiveWPM(language: code.isEmpty ? durationProjectLanguage : code)
+            },
+            pauseDefaults: settings.editorPreferences.markupPauseDefaults
         )
     }
 
@@ -149,16 +160,27 @@ extension AppState {
     }
 
     func clipStaleness(for clip: ShortClip) -> ClipStalenessReport {
+        clipStaleness(for: clip, scenes: clipSourceScenes)
+    }
+
+    func clipStaleness(
+        for clip: ShortClip,
+        scenes: [FrameScriptDocument.Scene]
+    ) -> ClipStalenessReport {
         ClipStaleness.report(
             clip: FrameScriptDocument.ShortClip(clip: clip),
-            scenes: clipSourceScenes
+            scenes: scenes
         )
     }
 
     func clipIsStale(_ clip: ShortClip) -> Bool {
+        clipIsStale(clip, scenes: clipSourceScenes)
+    }
+
+    func clipIsStale(_ clip: ShortClip, scenes: [FrameScriptDocument.Scene]) -> Bool {
         ClipStaleness.isStale(
             clip: FrameScriptDocument.ShortClip(clip: clip),
-            scenes: clipSourceScenes
+            scenes: scenes
         )
     }
 
@@ -294,12 +316,50 @@ extension AppState {
         touchProject()
     }
 
-    func deleteClip(id: UUID) {
-        guard let index = clipIndex(id: id) else { return }
+    @discardableResult
+    func deleteClip(id: UUID, undoManager: UndoManager? = nil) -> Bool {
+        guard clipIndex(id: id) != nil else { return false }
+        if settings.generalPreferences.confirmBeforeDeleting,
+           canPresentConfirmation,
+           !confirm(
+               title: localized("clips.delete.confirm.title"),
+               message: localized("clips.delete.confirm.message")
+           ) {
+            return false
+        }
+        return removeClip(id: id, undoManager: undoManager)
+    }
+
+    /// Deletes without asking. Used by both the confirmed action and redo, so a
+    /// repeated redo never shows the confirmation twice.
+    @discardableResult
+    func removeClip(id: UUID, undoManager: UndoManager?) -> Bool {
+        guard let index = clipIndex(id: id) else { return false }
+        let clip = project.clips[index]
+        let manager = undoManager ?? projectWindow?.undoManager
+        manager?.registerUndo(withTarget: self) { target in
+            target.insertClip(clip, at: index, undoManager: manager)
+        }
+        manager?.setActionName(localized("clips.delete"))
         project.clips.remove(at: index)
         if windowState.selectedClipID == id {
             windowState.selectedClipID = index < project.clips.count ? project.clips[index].id : project.clips.last?.id
         }
+        touchProject()
+        return true
+    }
+
+    /// Undo counterpart of ``deleteClip(id:undoManager:)``. Re-inserts the same
+    /// clip at its original index and registers the inverse step.
+    func insertClip(_ clip: ShortClip, at index: Int, undoManager: UndoManager?) {
+        guard clipIndex(id: clip.id) == nil else { return }
+        let clamped = min(max(0, index), project.clips.count)
+        project.clips.insert(clip, at: clamped)
+        windowState.selectedClipID = clip.id
+        undoManager?.registerUndo(withTarget: self) { target in
+            target.removeClip(id: clip.id, undoManager: undoManager)
+        }
+        undoManager?.setActionName(localized("clips.delete"))
         touchProject()
     }
 
@@ -371,7 +431,7 @@ extension AppState {
 
     // MARK: AI
 
-    func generateClipAdaptation(id: UUID) async {
+    func generateClipAdaptation(id: UUID, undoManager: UndoManager? = nil) async {
         guard let clip = clip(id: id) else { return }
         guard settings.aiPreferences.provider != .disabled else {
             errorCenter.present(AppError(kind: .aiConfiguration, recoveryAction: .openAISettings))
@@ -384,6 +444,19 @@ extension AppState {
             return
         }
 
+        let writtenFields = [clip.hook, clip.adaptedText, clip.onScreenText, clip.description]
+        if writtenFields.contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+           canPresentConfirmation,
+           !confirm(
+               title: localized("clips.generate.confirm.title"),
+               message: localized("clips.generate.confirm.message")
+           ) {
+            return
+        }
+
+        // Compare the response with these values so text typed while the
+        // request is in flight is never replaced by the generated text.
+        let snapshot = clip
         do {
             let provider = settings.aiPreferences.provider
             let apiKey = provider.isSubscriptionBacked
@@ -406,17 +479,68 @@ extension AppState {
             guard !generated.adaptedText.isEmpty else { throw GenerationError.emptyDescription }
             guard let index = clipIndex(id: id) else { return }
             var updated = project.clips[index]
-            updated.hook = generated.hook
-            updated.adaptedText = generated.adaptedText
-            updated.onScreenText = generated.onScreenText
-            updated.description = generated.description
-            updated.hashtags = generated.hashtags
+            if updated.hook == snapshot.hook { updated.hook = generated.hook }
+            if updated.adaptedText == snapshot.adaptedText { updated.adaptedText = generated.adaptedText }
+            if updated.onScreenText == snapshot.onScreenText { updated.onScreenText = generated.onScreenText }
+            if updated.description == snapshot.description { updated.description = generated.description }
+            if updated.hashtags == snapshot.hashtags { updated.hashtags = generated.hashtags }
             if updated.status == .idea { updated.status = .draft }
-            project.clips[index] = updated
-            touchProject()
+            guard updated != project.clips[index] else { return }
+            applyClipReplacement(
+                updated,
+                undoManager: undoManager,
+                actionKey: "clips.generate.undoAction"
+            )
         } catch {
             errorCenter.present(AppError.ai(error))
         }
+    }
+
+    /// "Usar el texto original": replaces the adapted text with the clip's
+    /// current source, asking first when there is hand-written text to lose.
+    @discardableResult
+    func useSourceTextForClip(id: UUID, undoManager: UndoManager? = nil) -> Bool {
+        guard let clip = clip(id: id) else { return false }
+        let source = ClipSourceExtractor.sourceText(
+            clip: FrameScriptDocument.ShortClip(clip: clip),
+            scenes: clipSourceScenes
+        )
+        guard source != clip.adaptedText else { return false }
+        if !clip.adaptedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           canPresentConfirmation,
+           !confirm(
+               title: localized("clips.useSource.confirm.title"),
+               message: localized("clips.useSource.confirm.message")
+           ) {
+            return false
+        }
+        var updated = clip
+        updated.adaptedText = source
+        applyClipReplacement(
+            updated,
+            undoManager: undoManager,
+            actionKey: "clips.useSource.undoAction"
+        )
+        return true
+    }
+
+    /// One undoable model replacement shared by the AI merge and the
+    /// "use the source text" action.
+    private func applyClipReplacement(
+        _ clip: ShortClip,
+        undoManager: UndoManager?,
+        actionKey: String
+    ) {
+        guard let index = clipIndex(id: clip.id) else { return }
+        let previous = project.clips[index]
+        guard previous != clip else { return }
+        let manager = undoManager ?? projectWindow?.undoManager
+        manager?.registerUndo(withTarget: self) { target in
+            target.applyClipReplacement(previous, undoManager: manager, actionKey: actionKey)
+        }
+        manager?.setActionName(localized(actionKey))
+        project.clips[index] = clip
+        touchProject()
     }
 
     // MARK: Export
@@ -457,13 +581,29 @@ extension AppState {
     enum ClipMarkerFormat: String {
         case edl
         case fcpxml
+
+        var contentType: UTType {
+            switch self {
+            case .edl: UTType(filenameExtension: "edl") ?? .plainText
+            case .fcpxml: UTType(filenameExtension: "fcpxml") ?? .xml
+            }
+        }
     }
 
-    func saveClipMarkers(id: UUID, format: ClipMarkerFormat) {
+    func saveClipMarkers(
+        id: UUID,
+        format: ClipMarkerFormat,
+        rate: ResolvePackFrameRate = .default
+    ) {
         guard let clip = clip(id: id) else { return }
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "\(clip.title).\(format.rawValue)"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = SafeFileName.fileName(
+            clip.title,
+            fallback: "clip",
+            extension: format.rawValue
+        )
         panel.message = localized("clips.export.saveMessage")
         if let folder = resolvedDefaultExportFolder() {
             let didStartAccessing = folder.startAccessingSecurityScopedResource()
@@ -476,16 +616,31 @@ extension AppState {
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        do {
+            try writeClipMarkers(id: id, format: format, rate: rate, to: url)
+        } catch {
+            errorCenter.present(AppError(kind: .export))
+        }
+    }
+
+    /// Renders the marker file without touching the filesystem. The save panel
+    /// and the regression tests share this exact content.
+    func clipMarkerContent(
+        id: UUID,
+        format: ClipMarkerFormat,
+        rate: ResolvePackFrameRate
+    ) -> String? {
+        guard let clip = clip(id: id) else { return nil }
         let settings = ExportSettings(
             projectName: clip.title,
-            fps: .fps25,
-            dropFrame: false,
+            fps: rate.frameRate,
+            dropFrame: rate.dropFrame,
             startTimecode: .zero
         )
         let coreClip = FrameScriptDocument.ShortClip(clip: clip)
         let wordsPerMinute = effectiveWPM(language: clipLanguageCode(clip))
         let pauseDefaults = self.settings.editorPreferences.markupPauseDefaults
-        let content: String = switch format {
+        return switch format {
         case .edl:
             ClipExport.edl(
                 for: coreClip,
@@ -503,11 +658,66 @@ extension AppState {
                 labels: clipExportLabels
             )
         }
+    }
+
+    @discardableResult
+    func writeClipMarkers(
+        id: UUID,
+        format: ClipMarkerFormat,
+        rate: ResolvePackFrameRate,
+        to url: URL
+    ) throws -> String {
+        guard let content = clipMarkerContent(id: id, format: format, rate: rate) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        return content
+    }
+
+    /// Opens the same save panel as the marker export and writes the Markdown
+    /// version of the clip document.
+    func exportClipText(id: UUID) {
+        guard let clip = clip(id: id) else { return }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = SafeFileName.fileName(
+            clip.title,
+            fallback: "clip",
+            extension: "md"
+        )
+        panel.message = localized("clips.export.saveTextMessage")
+        if let folder = resolvedDefaultExportFolder() {
+            let didStartAccessing = folder.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccessing {
+                    folder.stopAccessingSecurityScopedResource()
+                }
+            }
+            panel.directoryURL = folder
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
         do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            try writeClipText(id: id, to: url)
         } catch {
             errorCenter.present(AppError(kind: .export))
         }
+    }
+
+    /// Renders the Markdown export for the "Guardar texto…" action.
+    func clipTextExportContent(id: UUID) -> String? {
+        guard let clip = clip(id: id) else { return nil }
+        return clipExportDocument(for: clip).markdown
+    }
+
+    @discardableResult
+    func writeClipText(id: UUID, to url: URL) throws -> String {
+        guard let content = clipTextExportContent(id: id) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        return content
     }
 
     // MARK: Helpers

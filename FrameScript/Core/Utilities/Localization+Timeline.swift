@@ -40,14 +40,20 @@ extension L10n {
             "timeline.warning.longHook": "Long hook",
             "timeline.warning.sceneLengthOutlier": "Long scene",
             "timeline.warningsCount": "%d rhythm warnings",
+            "timeline.warningsCount.one": "%d rhythm warning",
+            "timeline.warningsCount.other": "%d rhythm warnings",
             "timeline.noWarnings": "No rhythm warnings",
             "timeline.legend.pause": "Pause",
             "timeline.legend.warning": "Warning",
             "timeline.sceneCount": "%d scenes",
-            "timeline.blockCount": "%d blocks"
+            "timeline.sceneCount.one": "%d scene",
+            "timeline.sceneCount.other": "%d scenes",
+            "timeline.blockCount": "%d blocks",
+            "timeline.blockCount.one": "%d block",
+            "timeline.blockCount.other": "%d blocks"
         ],
         .spanish: [
-            "mode.timeline": "Línea",
+            "mode.timeline": "Timeline",
             "command.switchTimeline": "Abrir la línea de tiempo",
             "timeline.title": "Línea de tiempo del guion",
             "timeline.subtitle": "%d escenas · %@",
@@ -70,7 +76,7 @@ extension L10n {
             "timeline.takeNumber": "Toma %d",
             "timeline.pauseDuration": "Pausa de %@ s",
             "timeline.pauseShort": "%@ s",
-            "timeline.unanchored": "Sin enlace",
+            "timeline.unanchored": "Sin anclar",
             "timeline.empty.title": "Aún no hay nada que situar",
             "timeline.empty.message": "Escribe una escena con guion y aparecerá aquí como bloques de narración.",
             "timeline.dragHint": "Arrastra una escena para cambiar el orden.",
@@ -84,11 +90,17 @@ extension L10n {
             "timeline.warning.longHook": "Gancho largo",
             "timeline.warning.sceneLengthOutlier": "Escena muy larga",
             "timeline.warningsCount": "%d avisos de ritmo",
+            "timeline.warningsCount.one": "%d aviso de ritmo",
+            "timeline.warningsCount.other": "%d avisos de ritmo",
             "timeline.noWarnings": "Sin avisos de ritmo",
             "timeline.legend.pause": "Pausa",
             "timeline.legend.warning": "Aviso",
             "timeline.sceneCount": "%d escenas",
-            "timeline.blockCount": "%d bloques"
+            "timeline.sceneCount.one": "%d escena",
+            "timeline.sceneCount.other": "%d escenas",
+            "timeline.blockCount": "%d bloques",
+            "timeline.blockCount.one": "%d bloque",
+            "timeline.blockCount.other": "%d bloques"
         ],
         .russian: [
             "mode.timeline": "Таймлайн",
@@ -128,11 +140,20 @@ extension L10n {
             "timeline.warning.longHook": "Длинный хук",
             "timeline.warning.sceneLengthOutlier": "Слишком длинная сцена",
             "timeline.warningsCount": "%d замечаний по ритму",
+            "timeline.warningsCount.one": "%d замечание по ритму",
+            "timeline.warningsCount.few": "%d замечания по ритму",
+            "timeline.warningsCount.many": "%d замечаний по ритму",
             "timeline.noWarnings": "Замечаний по ритму нет",
             "timeline.legend.pause": "Пауза",
             "timeline.legend.warning": "Замечание",
             "timeline.sceneCount": "%d сцен",
-            "timeline.blockCount": "%d блоков"
+            "timeline.sceneCount.one": "%d сцена",
+            "timeline.sceneCount.few": "%d сцены",
+            "timeline.sceneCount.many": "%d сцен",
+            "timeline.blockCount": "%d блоков",
+            "timeline.blockCount.one": "%d блок",
+            "timeline.blockCount.few": "%d блока",
+            "timeline.blockCount.many": "%d блоков"
         ]
     ]
 }

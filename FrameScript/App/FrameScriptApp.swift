@@ -403,7 +403,22 @@ final class AppKitPhysicalShortcutCommandRouter {
                   let appState = self.appState,
                   let menu = NSApp.mainMenu
             else { return event }
-            return PhysicalShortcutMenuDispatcher.dispatch(event, settings: appState.settings, menu: menu) ? nil : event
+            return PhysicalShortcutMenuDispatcher.dispatch(
+                event,
+                settings: appState.settings,
+                menu: menu
+            ) { command in
+                switch command {
+                case .timelineZoomIn:
+                    appState.timelineZoomIn()
+                    return true
+                case .timelineZoomOut:
+                    appState.timelineZoomOut()
+                    return true
+                default:
+                    return false
+                }
+            } ? nil : event
         }
     }
 
@@ -421,15 +436,31 @@ final class AppKitPhysicalShortcutCommandRouter {
 /// key-equivalent dispatch. Keeping this separate from the event monitor makes
 /// the command layer directly integration-testable.
 enum PhysicalShortcutMenuDispatcher {
-    static func dispatch(_ event: NSEvent, settings: AppSettings, menu: NSMenu) -> Bool {
+    static func dispatch(
+        _ event: NSEvent,
+        settings: AppSettings,
+        menu: NSMenu,
+        performAlternate: ((ShortcutCommand) -> Bool)? = nil
+    ) -> Bool {
         let modifiers = shortcutModifiers(from: event.modifierFlags)
         guard !modifiers.isEmpty,
               let binding = ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers),
               binding.isValid,
               ShortcutRegistry.isAssignable(binding),
-              ShortcutCommand.allCases.contains(where: { settings.activeShortcut(for: $0) == binding }),
+              let command = ShortcutRegistry.command(
+                for: binding,
+                overrides: settings.shortcutOverrides
+              ),
               let canonicalEvent = canonicalEvent(from: event, binding: binding)
         else { return false }
+
+        // The menu can only carry one key equivalent per command. Alternate
+        // keys (⌘+ on a Spanish layout, ⇧⌘= on a US one) are dispatched here.
+        guard let active = settings.activeShortcut(for: command) else { return false }
+        guard active == binding else {
+            guard active == command.definition.factoryDefault else { return false }
+            return performAlternate?(command) ?? false
+        }
         guard hasEnabledMatchingMenuItem(for: canonicalEvent, in: menu) else { return false }
         return menu.performKeyEquivalent(with: canonicalEvent)
     }

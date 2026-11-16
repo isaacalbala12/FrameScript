@@ -158,7 +158,12 @@ public enum AVScriptExporter {
 
     // MARK: CSV
 
-    public static func csv(document: AVScriptDocument, labels: AVScriptExportLabels = AVScriptExportLabels()) -> String {
+    public static func csv(
+        document: AVScriptDocument,
+        labels: AVScriptExportLabels = AVScriptExportLabels(),
+        escapeFormulas: Bool = false,
+        includesBOM: Bool = false
+    ) -> String {
         let header = [
             labels.csvScene,
             labels.csvParagraph,
@@ -169,7 +174,11 @@ public enum AVScriptExporter {
             labels.csvStatus,
             labels.csvAnchor,
         ]
-        var rows: [String] = [header.map { ShotListCSV.escape($0) }.joined(separator: ",")]
+        var rows: [String] = [
+            header
+                .map { ShotListCSV.escape($0, escapeFormulas: escapeFormulas) }
+                .joined(separator: ",")
+        ]
 
         for scene in document.scenes {
             for row in scene.rows {
@@ -188,7 +197,8 @@ public enum AVScriptExporter {
                         description: "",
                         source: "",
                         status: "",
-                        anchor: anchor
+                        anchor: anchor,
+                        escapeFormulas: escapeFormulas
                     ))
                     continue
                 }
@@ -207,13 +217,17 @@ public enum AVScriptExporter {
                         description: annotation.text,
                         source: annotation.source,
                         status: annotation.status,
-                        anchor: anchorValue
+                        anchor: anchorValue,
+                        escapeFormulas: escapeFormulas
                     ))
                 }
             }
         }
 
-        return rows.joined(separator: "\r\n") + "\r\n"
+        let csv = rows.joined(separator: "\r\n") + "\r\n"
+        // The header carries Spanish accents, so Excel needs the BOM to pick
+        // UTF-8 instead of the legacy code page.
+        return includesBOM ? "\u{FEFF}" + csv : csv
     }
 
     private static func csvRow(
@@ -224,7 +238,8 @@ public enum AVScriptExporter {
         description: String,
         source: String,
         status: String,
-        anchor: String
+        anchor: String,
+        escapeFormulas: Bool
     ) -> String {
         [
             scene,
@@ -236,7 +251,7 @@ public enum AVScriptExporter {
             status,
             anchor,
         ]
-        .map { ShotListCSV.escape($0) }
+        .map { ShotListCSV.escape($0, escapeFormulas: escapeFormulas) }
         .joined(separator: ",")
     }
 }

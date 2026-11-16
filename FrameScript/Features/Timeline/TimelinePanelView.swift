@@ -95,11 +95,10 @@ struct TimelinePanelView: View {
     }
 
     private var subtitle: String {
-        let total = DurationFormat.clock(seconds: Int(layout.totalDuration.rounded()))
-        return String(
-            format: text("timeline.subtitle"),
-            layout.scenes.count,
-            total
+        TimelineSubtitle.text(
+            sceneCount: layout.scenes.count,
+            totalDuration: layout.totalDuration,
+            language: language
         )
     }
 
@@ -188,13 +187,21 @@ struct TimelinePanelView: View {
             if warningCount > 0 {
                 legendChip(
                     color: theme.warning,
-                    title: String(format: text("timeline.warningsCount"), warningCount)
+                    title: L10n.plural(
+                        "timeline.warningsCount",
+                        count: warningCount,
+                        language: language
+                    )
                 )
             }
 
             Spacer(minLength: 8)
 
-            Text(String(format: text("timeline.blockCount"), layout.blocks.count))
+            Text(L10n.plural(
+                "timeline.blockCount",
+                count: layout.blocks.count,
+                language: language
+            ))
                 .font(.system(size: 11))
                 .foregroundStyle(theme.tertiaryText)
                 .accessibilityIdentifier("timeline-block-count")
@@ -591,38 +598,70 @@ private struct TimelineCanvasView: View {
     }
 
     private func label(for block: TimelineBlock) -> String {
+        TimelineBlockLabel.label(for: block, layout: layout, language: language)
+    }
+
+    private func text(_ key: String) -> String {
+        L10n.tr(key, language: language)
+    }
+}
+
+/// Header subtitle built from the same plural keys as the footer.
+enum TimelineSubtitle {
+    static func text(
+        sceneCount: Int,
+        totalDuration: TimeInterval,
+        language: AppLanguage
+    ) -> String {
+        let total = DurationFormat.clock(seconds: Int(totalDuration.rounded()))
+        let scenes = L10n.plural(
+            "timeline.sceneCount",
+            count: sceneCount,
+            language: language
+        )
+        return "\(scenes) · \(total)"
+    }
+}
+
+/// Canvas labels shared by the view and the regression tests. Every label comes
+/// from the localized tables; no enum raw value ever reaches the canvas.
+enum TimelineBlockLabel {
+    static func label(
+        for block: TimelineBlock,
+        layout: TimelineLayout,
+        language: AppLanguage
+    ) -> String {
         switch block.track {
         case .scenes:
             let hasReal = layout.scene(id: block.sceneID)?.hasRealTake == true
-            return hasReal ? "\(block.label) · \(text("timeline.real"))" : block.label
+            return hasReal ? "\(block.label) · \(text("timeline.real", language: language))" : block.label
         case .narration:
             return block.label
         case .pauses:
             guard let seconds = block.pauseSeconds else { return "" }
             return String(
-                format: text("timeline.pauseShort"),
+                format: text("timeline.pauseShort", language: language),
                 formattedPause(seconds)
             )
-        case .bRoll:
-            return block.isAnchored ? block.label : "\(block.label) · \(text("timeline.unanchored"))"
-        case .editing:
-            return block.label
+        case .bRoll, .editing:
+            guard !block.isAnchored else { return block.label }
+            return "\(block.label) · \(text("timeline.unanchored", language: language))"
         case .takes:
-            return block.isSelected ? "\(block.label) · \(text("timeline.real"))" : block.label
+            return block.isSelected ? "\(block.label) · \(text("timeline.real", language: language))" : block.label
         case .warnings:
             guard let kind = block.warningKind else { return block.label }
-            return text("timeline.warning.\(kind.rawValue)")
+            return text("timeline.warning.\(kind.rawValue)", language: language)
         }
     }
 
-    private func formattedPause(_ seconds: TimeInterval) -> String {
+    private static func formattedPause(_ seconds: TimeInterval) -> String {
         if abs(seconds - seconds.rounded()) < 0.001 {
             return "\(Int(seconds.rounded()))"
         }
         return String(format: "%.1f", seconds)
     }
 
-    private func text(_ key: String) -> String {
+    private static func text(_ key: String, language: AppLanguage) -> String {
         L10n.tr(key, language: language)
     }
 }

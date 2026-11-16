@@ -826,7 +826,7 @@ final class AppState {
         transitionEditorContext(sceneID: .some(sceneID))
     }
 
-    private func transitionEditorContext(
+    func transitionEditorContext(
         sceneID: UUID?? = nil,
         mode: WorkspaceMode? = nil,
         preservingProductionSelection: Bool = false,
@@ -1127,13 +1127,15 @@ final class AppState {
         }
     }
 
-    func selectProductionItem(_ itemID: UUID, mode: WorkspaceMode) {
+    @discardableResult
+    func selectProductionItem(_ itemID: UUID, mode: WorkspaceMode) -> Bool {
         selectProductionItems([itemID], mode: mode)
     }
 
-    func selectProductionItems(_ itemIDs: [UUID], mode: WorkspaceMode) {
+    @discardableResult
+    func selectProductionItems(_ itemIDs: [UUID], mode: WorkspaceMode) -> Bool {
         guard mode == .bRoll || mode == .editing,
-              let scene = selectedScene else { return }
+              let scene = selectedScene else { return false }
         let items: [(UUID, TextAnchor?)] = switch mode {
         case .bRoll: scene.bRollItems.map { ($0.id, $0.textAnchor) }
         case .editing: scene.editingItems.map { ($0.id, $0.textAnchor) }
@@ -1147,10 +1149,13 @@ final class AppState {
             result.append(itemID)
         }
         guard let selectedID = selectedIDs.first,
-              let group = productionMarkerGroups(in: scene, mode: mode).first(where: { $0.itemIDs.contains(selectedID) }) else { return }
+              let group = productionMarkerGroups(in: scene, mode: mode).first(where: { $0.itemIDs.contains(selectedID) }) else {
+            return false
+        }
         transitionEditorContext(mode: mode, preservingProductionSelection: true) {
             editorState.selectedProductionItemIDs = group.itemIDs
         }
+        return true
     }
 
     func isProductionItemSelected(_ itemID: UUID) -> Bool {
@@ -1850,7 +1855,14 @@ final class AppState {
         return true
     }
 
-    private func confirm(title: String, message: String, confirmButtonTitle: String? = nil) -> Bool {
+    /// True when an interactive confirmation can actually be shown. Unit tests
+    /// that do not inject a handler run headless, and `NSAlert.runModal()`
+    /// would block the test host forever.
+    var canPresentConfirmation: Bool {
+        confirmationHandler != nil || projectWindow != nil
+    }
+
+    func confirm(title: String, message: String, confirmButtonTitle: String? = nil) -> Bool {
         if let confirmationHandler {
             return confirmationHandler(title, message)
         }

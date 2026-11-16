@@ -99,6 +99,22 @@ public enum ClipSummaryBuilder {
         wordsPerMinute: Double,
         pauseDefaults: PauseDefaults = .standard
     ) -> ClipSummary {
+        summary(
+            clips: clips,
+            scenes: scenes,
+            wordsPerMinute: { _ in wordsPerMinute },
+            pauseDefaults: pauseDefaults
+        )
+    }
+
+    /// Per-clip speaking rate: a clip may use a language different from the
+    /// project's, so the summary must ask for each clip's own estimate rate.
+    public static func summary(
+        clips: [FrameScriptDocument.ShortClip],
+        scenes: [FrameScriptDocument.Scene],
+        wordsPerMinute: (FrameScriptDocument.ShortClip) -> Double,
+        pauseDefaults: PauseDefaults = .standard
+    ) -> ClipSummary {
         guard !clips.isEmpty else { return .empty }
 
         var byStatus: [FrameScriptDocument.ShortClipStatus: Int] = [:]
@@ -116,7 +132,7 @@ public enum ClipSummaryBuilder {
                 hook: clip.hook,
                 adaptedText: clip.adaptedText,
                 targetSeconds: clip.targetSeconds,
-                wordsPerMinute: wordsPerMinute,
+                wordsPerMinute: wordsPerMinute(clip),
                 pauseDefaults: pauseDefaults
             ).seconds
         }
@@ -145,12 +161,26 @@ public enum ClipSummaryBuilder {
         wordsPerMinute: Double,
         pauseDefaults: PauseDefaults = .standard
     ) -> [ClipProductionItem] {
+        productionItems(
+            clips: clips,
+            scenes: scenes,
+            wordsPerMinute: { _ in wordsPerMinute },
+            pauseDefaults: pauseDefaults
+        )
+    }
+
+    public static func productionItems(
+        clips: [FrameScriptDocument.ShortClip],
+        scenes: [FrameScriptDocument.Scene],
+        wordsPerMinute: (FrameScriptDocument.ShortClip) -> Double,
+        pauseDefaults: PauseDefaults = .standard
+    ) -> [ClipProductionItem] {
         clips.map { clip in
             let estimate = ClipEstimator.estimate(
                 hook: clip.hook,
                 adaptedText: clip.adaptedText,
                 targetSeconds: clip.targetSeconds,
-                wordsPerMinute: wordsPerMinute,
+                wordsPerMinute: wordsPerMinute(clip),
                 pauseDefaults: pauseDefaults
             )
             return ClipProductionItem(

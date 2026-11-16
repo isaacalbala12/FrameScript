@@ -90,14 +90,19 @@ public struct ClipStalenessReport: Sendable, Equatable {
 
     public static let clean = ClipStalenessReport(changes: [])
 
-    public var isStale: Bool { !changes.isEmpty }
+    /// One definition shared by the list badge, the summary and the banner:
+    /// an unresolved anchor is stale even when the stored hash already matches
+    /// the text we can no longer locate.
+    public var isStale: Bool { !changes.isEmpty || hasUnresolvedAnchor }
 }
 
 /// Detects rewritten source text and produces the redline shown in the clip
 /// editor. Hash comparison is the cheap path used by list badges and summaries;
 /// the full report adds a word diff only for scenes that actually changed.
 public enum ClipStaleness {
-    /// Fast check without building a diff.
+    /// Fast check without building a diff. It must agree with
+    /// ``ClipStalenessReport/isStale`` in every case, including an unresolved
+    /// anchor whose stored hash still matches the fragment we cannot find.
     public static func isStale(
         clip: FrameScriptDocument.ShortClip,
         scenes: [FrameScriptDocument.Scene]

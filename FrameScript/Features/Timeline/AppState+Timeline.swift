@@ -28,7 +28,8 @@ extension AppState {
             configuration: configuration,
             selectedTakeIDs: selectedTakeIDs,
             warningsByScene: warningsByScene,
-            projectWarnings: RhythmReviewCenter.shared.projectWarnings
+            projectWarnings: RhythmReviewCenter.shared.projectWarnings,
+            interfaceLanguage: currentLanguage
         )
     }
 
@@ -46,12 +47,17 @@ extension AppState {
         selectMode(.script)
     }
 
-    /// Selects a Visuals or Editing item and opens its workspace.
+    /// Selects a Visuals or Editing item and opens its workspace. Unanchored
+    /// items cannot be selected in their marker list, so the workspace still
+    /// opens with no marker selected: there the user can repair or delete it.
     func openTimelineProductionItem(_ itemID: UUID, sceneID: UUID, mode: WorkspaceMode) {
         guard mode == .bRoll || mode == .editing else { return }
         TimelineNavigation.shared.clear()
         selectScene(sceneID)
-        selectProductionItem(itemID, mode: mode)
+        if !selectProductionItem(itemID, mode: mode) {
+            clearProductionSelection()
+            transitionEditorContext(mode: mode)
+        }
     }
 
     // MARK: Scene reordering

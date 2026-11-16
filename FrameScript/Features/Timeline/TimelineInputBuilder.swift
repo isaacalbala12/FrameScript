@@ -15,7 +15,8 @@ enum TimelineInputBuilder {
         configuration: DurationConfiguration,
         selectedTakeIDs: [UUID: UUID],
         warningsByScene: [UUID: [RhythmWarning]],
-        projectWarnings: [RhythmWarning]
+        projectWarnings: [RhythmWarning],
+        interfaceLanguage: AppLanguage = .spanish
     ) -> TimelineProjectInput {
         let scenes = project.scenes.sortedByOrder.map { scene in
             let selectedID = selectedTakeIDs[scene.id]
@@ -41,7 +42,7 @@ enum TimelineInputBuilder {
                         duration: item.duration,
                         label: firstNonEmpty(
                             item.descriptionText,
-                            item.sourceType.rawValue
+                            L10n.tr("brollSource.\(item.sourceType.rawValue)", language: interfaceLanguage)
                         )
                     )
                 },
