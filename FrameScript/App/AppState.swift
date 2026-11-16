@@ -917,8 +917,11 @@ final class AppState {
     }
 
     func selectScene(_ sceneID: UUID) {
-        guard editorState.selectedSceneID != sceneID else { return }
-        transitionEditorContext(sceneID: .some(sceneID))
+        let leavesFullScript = editorState.isFullScriptSelected
+        guard editorState.selectedSceneID != sceneID || leavesFullScript else { return }
+        transitionEditorContext(sceneID: .some(sceneID)) {
+            editorState.isFullScriptSelected = false
+        }
     }
 
     func transitionEditorContext(
@@ -1521,7 +1524,7 @@ final class AppState {
 
     func analyzeSelectedScene() async {
         guard !aiState.isAnalyzing else { return }
-        guard let scene = selectedScene else { return }
+        guard let scene = activeEditorScene else { return }
         let projectID = project.id
         let sceneID = scene.id
         aiState.isAnalyzing = true
@@ -3129,9 +3132,18 @@ enum ProductionAnchorGrouping {
 final class EditorState {
     var selectedMode: WorkspaceMode = .script
     var selectedSceneID: UUID?
+    /// True while the sidebar's fixed "Guion completo" entry is selected.
+    /// Every scene stays an independent `Scene`; only the editor presentation
+    /// changes.
+    var isFullScriptSelected = false
+    /// Scene whose body contains the caret in the full-script editor. Drives
+    /// the action bar, inspector and window title without changing the
+    /// single-scene navigation selection.
+    var fullScriptCaretSceneID: UUID?
     var selectedProductionItemIDs: [UUID] = []
     var isFocusModeEnabled = false
     private var scriptEditorStates: [ScriptEditorRestorationKey: ScriptEditorRestorationState] = [:]
+    private var fullScriptRestorationState: ScriptEditorRestorationState?
 
     func scriptEditorState(sceneID: UUID, editorIdentity: UUID) -> ScriptEditorRestorationState? {
         scriptEditorStates[ScriptEditorRestorationKey(sceneID: sceneID, editorIdentity: editorIdentity)]
@@ -3141,11 +3153,23 @@ final class EditorState {
         scriptEditorStates[ScriptEditorRestorationKey(sceneID: sceneID, editorIdentity: editorIdentity)] = state
     }
 
+    /// Full-script caret and scroll, kept across single-scene round trips.
+    func fullScriptEditorState() -> ScriptEditorRestorationState? {
+        fullScriptRestorationState
+    }
+
+    func setFullScriptEditorState(_ state: ScriptEditorRestorationState) {
+        fullScriptRestorationState = state
+    }
+
     /// Drops every per-scene caret/scroll restoration entry. Called when the
     /// project closes or is replaced so a new project cannot inherit stale
     /// ranges from the previous one.
     func resetScriptEditorStates() {
         scriptEditorStates.removeAll()
+        isFullScriptSelected = false
+        fullScriptCaretSceneID = nil
+        fullScriptRestorationState = nil
     }
 }
 

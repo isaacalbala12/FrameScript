@@ -232,7 +232,9 @@ struct AppShellView: View {
 
     @ViewBuilder
     private var editorContent: some View {
-        if let scene = appState.selectedScene {
+        if appState.selectedMode == .script && appState.isFullScriptSelected {
+            FullScriptEditorView()
+        } else if let scene = appState.selectedScene {
             switch appState.selectedMode {
             case .script:
                 ScriptEditorView(scene: scene, editorSessionID: editorSessionID)

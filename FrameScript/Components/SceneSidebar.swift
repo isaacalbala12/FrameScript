@@ -61,10 +61,14 @@ struct SceneSidebar: View {
 
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    FullScriptSidebarRow(isSelected: appState.isFullScriptSelected) {
+                        appState.selectFullScript()
+                    }
+
                     ForEach(appState.project.scenes.sortedByOrder) { scene in
                         SidebarRow(
                             scene: scene,
-                            isSelected: scene.id == appState.selectedScene?.id,
+                            isSelected: !appState.isFullScriptSelected && scene.id == appState.selectedScene?.id,
                             researchUnconfirmedCount: unconfirmedCounts[scene.id, default: 0],
                             renameAction: appState.renameSelectedScene,
                             duplicateAction: appState.duplicateSelectedScene,
@@ -119,6 +123,69 @@ struct SceneSidebar: View {
             .padding(10)
         }
         .background(theme.sidebar)
+    }
+}
+
+/// Fixed entry above scene 01. It selects the continuous presentation; it is
+/// not a scene and never participates in scene ordering, duplication or delete.
+struct FullScriptSidebarRow: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.frameTheme) private var theme
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(isSelected ? theme.accent.color : Color.clear)
+                    .frame(width: 2, height: 34)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "rectangle.stack")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isSelected ? theme.accent.color : theme.secondaryText)
+                        Text(appState.localized("fullScript.sidebarEntry"))
+                            .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                            .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
+                            .lineLimit(1)
+                    }
+                    Text(L10n.plural(
+                        "fullScript.sceneCount",
+                        count: appState.project.scenes.count,
+                        language: appState.currentLanguage
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 8)
+            .padding(.trailing, 8)
+            .contentShape(Rectangle())
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(rowFill)
+            }
+        }
+        .buttonStyle(.cursorPlain)
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .help(appState.localized("fullScript.title"))
+    }
+
+    private var rowFill: Color {
+        if isSelected {
+            return theme.softAccent.opacity(0.58)
+        }
+        if isHovering {
+            return theme.hover
+        }
+        return .clear
     }
 }
 
