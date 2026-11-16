@@ -238,7 +238,7 @@ final class ProductionPanelSnapshotTests: ProductionTestCase {
         XCTAssertEqual(L10n.tr("production.title", language: .spanish), "Producción")
         XCTAssertEqual(L10n.tr("production.filter.allScenes", language: .spanish), "Todas las escenas")
         XCTAssertEqual(L10n.tr("production.reason.sceneNeedsTake", language: .spanish), "falta grabar")
-        XCTAssertEqual(L10n.tr("production.reason.bRollNeedsFootage", language: .spanish), "falta grabar")
+        XCTAssertEqual(L10n.tr("production.reason.bRollNeedsFootage", language: .spanish), "falta conseguir")
         XCTAssertTrue(
             appState.productionSnapshot.items.contains {
                 L10n.tr("production.reason.\($0.reason.rawValue)", language: .spanish) == "falta grabar"
@@ -254,6 +254,18 @@ final class ProductionPanelSnapshotTests: ProductionTestCase {
             let labels = elements.map(\.label)
             XCTAssertTrue(labels.contains { $0.contains("Producción") }, "labels: \(labels)")
             XCTAssertTrue(labels.contains { $0.contains("falta grabar") }, "labels: \(labels)")
+            XCTAssertTrue(
+                labels.contains { $0.contains("falta publicar") },
+                "NEW-1: the publishing checklist reason is missing; labels: \(labels)"
+            )
+            XCTAssertTrue(
+                labels.contains { $0.contains("Título elegido") },
+                "NEW-1: the publishing checklist item label is missing; labels: \(labels)"
+            )
+            XCTAssertFalse(
+                labels.contains { $0.contains("publishing.checklist") },
+                "NEW-1: a raw publishing token reached the production panel; labels: \(labels)"
+            )
 
             for element in elements where !element.label.isEmpty {
                 XCTAssertTrue(

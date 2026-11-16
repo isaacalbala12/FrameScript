@@ -17,17 +17,34 @@ public enum ProductionItemKind: String, Codable, Sendable, CaseIterable, Identif
 
 /// Why a checklist item exists. The app localizes these reasons; the core
 /// never stores user-facing text so the same snapshot can feed the MCP.
-public enum ProductionItemReason: String, Codable, Sendable, CaseIterable, Hashable {
+public enum ProductionItemReason: Sendable, Hashable {
     case sceneNeedsTake
     case bRollNeedsFootage
     case bRollNeedsAsset
     case editingNeedsWork
     case claimNeedsVerification
-    case publishingNeedsTitle
-    case publishingNeedsDescription
-    case publishingNeedsTags
-    case publishingNeedsThumbnail
+    case publishingChecklist(PublishingChecklistItem)
     case manualTask
+
+    /// Stable localization key (`production.reason.<rawValue>`).
+    public var rawValue: String {
+        switch self {
+        case .sceneNeedsTake: "sceneNeedsTake"
+        case .bRollNeedsFootage: "bRollNeedsFootage"
+        case .bRollNeedsAsset: "bRollNeedsAsset"
+        case .editingNeedsWork: "editingNeedsWork"
+        case .claimNeedsVerification: "claimNeedsVerification"
+        case .publishingChecklist: "publishingChecklist"
+        case .manualTask: "manualTask"
+        }
+    }
+
+    /// The publishing check this row represents, if any. The app uses its
+    /// localized `titleKey` for the row title.
+    public var publishingChecklistItem: PublishingChecklistItem? {
+        if case .publishingChecklist(let item) = self { return item }
+        return nil
+    }
 }
 
 /// Where clicking an item should take the user. Local destinations are handled
@@ -164,9 +181,12 @@ public enum ProductionLanguage {
 /// - a B-roll item that is not `.done`, or that has no linked asset, needs
 ///   footage or an asset;
 /// - an editing note whose status is `.pending` needs editing;
-/// - a claim that is not `.confirmed` needs research;
-/// - each existing publishing pack is checked for title, description, tags and
-///   a chosen thumbnail;
+/// - a claim needs research while `ResearchSummary.isPending` says so, and a
+///   mirrored `.research` checklist task never produces a second row;
+/// - each project with at least one publishing pack is checked against the
+///   eight items of the Publishing panel checklist (once per project, tied to
+///   the primary-language pack); the raw `publishing.checklist.*` tasks are
+///   never shown as manual rows;
 /// - manual `ChecklistTask` rows are included as-is.
 ///
 /// A take is usable only while its `sceneTextHash` still matches the text it
@@ -196,8 +216,16 @@ public enum ProductionChecklist {
         }
 
         var seenClaimIDs = Set<UUID>()
-        for (index, claim) in project.claims.enumerated()
-        where claim.status != .confirmed && seenClaimIDs.insert(claim.id).inserted {
+        var claimTexts = Set<String>()
+        for (index, claim) in project.claims.enumerated() {
+            // The claim row owns the fact. A stored `.research` task with the
+            // same text is a mirror and must not produce a second row (E-2).
+            let normalizedText = ResearchChecklist.normalized(claim.text)
+            if !normalizedText.isEmpty {
+                claimTexts.insert(normalizedText)
+            }
+            guard ResearchSummary.isPending(claim),
+                  seenClaimIDs.insert(claim.id).inserted else { continue }
             let linkedScene = claim.sceneIDs.lazy.compactMap { scenesByID[$0] }.first
             items.append(
                 ProductionItem(
@@ -214,14 +242,37 @@ public enum ProductionChecklist {
             )
         }
 
-        for languageKey in project.publishingPacks.keys.sorted() where !isBlank(languageKey) {
-            guard let pack = project.publishingPacks[languageKey] else { continue }
-            items.append(contentsOf: publishingItems(pack: pack, languageKey: languageKey))
+        // The Publishing panel stores its eight checks as `ChecklistTask`s with
+        // a stable token. The done state is per project, not per language, so
+        // Production must emit the eight rows exactly once. They point at the
+        // primary language's pack (or the first pack when the primary language
+        // has none) so ticking a check clears one row, not one per language
+        // (NEW-1, must-fix 2).
+        var publishingDone = Set<PublishingChecklistItem>()
+        var seenPublishingItems = Set<PublishingChecklistItem>()
+        for task in project.checklistTasks {
+            guard let item = PublishingChecklistItem.item(forTaskText: task.text),
+                  seenPublishingItems.insert(item).inserted else { continue }
+            if task.isDone { publishingDone.insert(item) }
+        }
+
+        if let languageKey = publishingLanguageKey(for: project) {
+            items.append(contentsOf: publishingItems(
+                languageKey: languageKey,
+                doneItems: publishingDone
+            ))
         }
 
         var seenTaskIDs = Set<UUID>()
         for (index, task) in project.checklistTasks.enumerated()
         where seenTaskIDs.insert(task.id).inserted {
+            if PublishingChecklistItem.item(forTaskText: task.text) != nil {
+                continue
+            }
+            if task.kind == .research,
+               claimTexts.contains(ResearchChecklist.normalized(task.text)) {
+                continue
+            }
             let linkedScene = task.sceneID.flatMap { scenesByID[$0] }
             items.append(
                 ProductionItem(
@@ -364,18 +415,35 @@ public enum ProductionChecklist {
 
     // MARK: - Publishing
 
+    /// The pack the eight project-wide checks belong to: the primary language
+    /// when it has a pack, otherwise the first sorted language.
+    private static func publishingLanguageKey(
+        for project: FrameScriptDocument.Project
+    ) -> String? {
+        let keys = project.publishingPacks.keys
+            .filter { !isBlank($0) }
+            .sorted()
+        guard !keys.isEmpty else { return nil }
+        let primary = ProductionLanguage.normalized(project.primaryLanguage)
+        if !primary.isEmpty,
+           let match = keys.first(where: { ProductionLanguage.normalized($0) == primary }) {
+            return match
+        }
+        return keys.first
+    }
+
     private static func publishingItems(
-        pack: FrameScriptDocument.PublishingPack,
-        languageKey: String
+        languageKey: String,
+        doneItems: Set<PublishingChecklistItem>
     ) -> [ProductionItem] {
         var items: [ProductionItem] = []
 
-        func append(_ reason: ProductionItemReason, field: String, index: Int) {
+        func append(_ item: PublishingChecklistItem, index: Int) {
             items.append(
                 ProductionItem(
-                    id: "publish:\(languageKey):\(field)",
+                    id: "publish:checklist:\(item.rawValue)",
                     kind: .publish,
-                    reason: reason,
+                    reason: .publishingChecklist(item),
                     languageCode: languageKey,
                     sourceIndex: index,
                     target: .publishing(languageCode: languageKey)
@@ -383,17 +451,12 @@ public enum ProductionChecklist {
             )
         }
 
-        if isBlank(pack.chosenTitle) {
-            append(.publishingNeedsTitle, field: "title", index: 0)
-        }
-        if isBlank(pack.description) {
-            append(.publishingNeedsDescription, field: "description", index: 1)
-        }
-        if pack.tags.allSatisfy(isBlank) {
-            append(.publishingNeedsTags, field: "tags", index: 2)
-        }
-        if !pack.thumbnailVariants.contains(where: \.isChosen) {
-            append(.publishingNeedsThumbnail, field: "thumbnail", index: 3)
+        // The Publishing panel shows `done/8`; Production must count exactly
+        // the same eight checks. Field-level checks would duplicate four of
+        // them, so they are intentionally not emitted here.
+        for (index, item) in PublishingChecklistItem.allCases.enumerated()
+        where !doneItems.contains(item) {
+            append(item, index: index)
         }
         return items
     }

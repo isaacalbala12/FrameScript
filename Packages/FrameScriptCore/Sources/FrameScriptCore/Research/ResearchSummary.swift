@@ -1,7 +1,8 @@
 import Foundation
 
-/// Counters for the research panel. `pending` is a flag, not a status: a claim
-/// can be confirmed and still be flagged for a second check, and vice versa.
+/// Counters for the research panel. `pending` is derived from
+/// `ResearchSummary.isPending`: first-hand experience never counts, and
+/// otherwise the `needsVerification` flag decides.
 public struct ResearchCounts: Sendable, Equatable {
     public var confirmed = 0
     public var probable = 0
@@ -101,7 +102,7 @@ public struct ResearchFilter: Sendable, Equatable {
 
     public func matches(_ claim: FrameScriptDocument.Claim) -> Bool {
         guard statuses.contains(claim.status) else { return false }
-        if onlyPending, !claim.needsVerification { return false }
+        if onlyPending, !ResearchSummary.isPending(claim) { return false }
         if let sceneID, !claim.sceneIDs.contains(sceneID) { return false }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return true }
@@ -119,6 +120,17 @@ public struct ResearchFilter: Sendable, Equatable {
 }
 
 public enum ResearchSummary {
+    /// One rule shared by Production, the research panel, the scene badges and
+    /// the board: first-hand experience never needs a fact check, and the
+    /// `needsVerification` flag decides for everyone else. New non-confirmed
+    /// claims start flagged; confirming clears the flag automatically; a
+    /// confirmed claim can be flagged again for a second check. Unticking it
+    /// means "accepted as is", so the claim leaves every pending list (E-3,
+    /// NEW-5, product decision).
+    public static func isPending(_ claim: FrameScriptDocument.Claim) -> Bool {
+        !claim.personalExperience && claim.needsVerification
+    }
+
     public static func counts(claims: [FrameScriptDocument.Claim]) -> ResearchCounts {
         var counts = ResearchCounts()
         for claim in claims {
@@ -128,7 +140,7 @@ public enum ResearchSummary {
             case .rumor: counts.rumor += 1
             case .communityOpinion: counts.communityOpinion += 1
             }
-            if claim.needsVerification, !claim.personalExperience {
+            if isPending(claim) {
                 counts.pending += 1
             }
         }
@@ -138,34 +150,34 @@ public enum ResearchSummary {
     public static func pendingClaims(
         _ claims: [FrameScriptDocument.Claim]
     ) -> [FrameScriptDocument.Claim] {
-        claims.filter { $0.needsVerification && !$0.personalExperience }
+        claims.filter(isPending)
     }
 
-    /// Claims that are not confirmed and are linked to this scene. The badge
-    /// counts these; a confirmed claim never turns a scene amber.
+    /// Claims that still need research and are linked to this scene. The badge
+    /// counts these; a confirmed, unflagged claim never turns a scene amber.
     public static func unconfirmedCount(
         sceneID: UUID,
         claims: [FrameScriptDocument.Claim]
     ) -> Int {
-        claims.filter { $0.status != .confirmed && $0.sceneIDs.contains(sceneID) }.count
+        claims.filter { isPending($0) && $0.sceneIDs.contains(sceneID) }.count
     }
 
     public static func scenesWithUnconfirmedClaims(
         project: FrameScriptDocument.Project
     ) -> [UUID] {
         let ids = project.claims
-            .filter { $0.status != .confirmed }
+            .filter(isPending)
             .flatMap(\.sceneIDs)
         var seen: Set<UUID> = []
         return ids.filter { seen.insert($0).inserted }
     }
 
-    /// Scene IDs with at least one claim still flagged for verification.
+    /// Scene IDs with at least one claim still pending research.
     public static func unconfirmedCountsByScene(
         claims: [FrameScriptDocument.Claim]
     ) -> [UUID: Int] {
         var result: [UUID: Int] = [:]
-        for claim in claims where claim.status != .confirmed {
+        for claim in claims where isPending(claim) {
             for sceneID in Set(claim.sceneIDs) {
                 result[sceneID, default: 0] += 1
             }
@@ -181,8 +193,14 @@ public enum ResearchSummary {
     ) -> [ResearchPendingItem] {
         pendingItems(
             claims: project.claims,
-            sourceTitlesByID: Dictionary(uniqueKeysWithValues: project.sources.map { ($0.id, $0.title) }),
-            sceneTitlesByID: Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0.title) })
+            sourceTitlesByID: Dictionary(
+                project.sources.map { ($0.id, $0.title) },
+                uniquingKeysWith: { first, _ in first }
+            ),
+            sceneTitlesByID: Dictionary(
+                project.scenes.map { ($0.id, $0.title) },
+                uniquingKeysWith: { first, _ in first }
+            )
         )
     }
 

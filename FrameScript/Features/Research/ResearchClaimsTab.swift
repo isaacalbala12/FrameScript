@@ -77,7 +77,7 @@ struct ResearchClaimsTab: View {
                 Label(appState.localized("research.claims.add"), systemImage: "plus")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(.cursorPlain)
+            .buttonStyle(.framePrimary)
             .accessibilityIdentifier("research-add-claim")
 
             Button {
@@ -363,6 +363,10 @@ private struct ResearchClaimCard: View {
     @State private var anchorMissing = false
     @State private var isConfirmingDelete = false
 
+    private var anchorState: ResearchClaimAnchorState {
+        appState.researchClaimAnchorState(claim)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -556,11 +560,13 @@ private struct ResearchClaimCard: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
                 .onSubmit(linkAnchor)
-            Button(appState.localized("research.claims.anchorLink")) {
+            Button(anchorState.isStale
+                ? appState.localized("research.claims.anchorRelink")
+                : appState.localized("research.claims.anchorLink")
+            ) {
                 linkAnchor()
             }
-            .buttonStyle(.cursorPlain)
-            .font(.system(size: 11, weight: .medium))
+            .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
             .disabled(anchorDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if claim.anchor != nil {
                 Button {
@@ -583,18 +589,30 @@ private struct ResearchClaimCard: View {
                 .fill(theme.editorSurface)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(anchorMissing ? theme.warning : theme.divider, lineWidth: 1)
+                        .stroke(
+                            anchorMissing || anchorState.isStale ? theme.warning : theme.divider,
+                            lineWidth: 1
+                        )
                 )
         }
         .overlay(alignment: .bottomLeading) {
             if anchorMissing {
                 Text(appState.localized("research.claims.anchorNotFound"))
                     .font(.system(size: 10))
-                    .foregroundStyle(theme.warning)
+                    .foregroundStyle(theme.ensuredText(theme.warning))
                     .offset(y: 13)
+            } else if anchorState.isStale {
+                Text(anchorState == .missingScene
+                    ? appState.localized("research.claims.anchorSceneMissing")
+                    : appState.localized("research.claims.anchorStale")
+                )
+                .font(.system(size: 10))
+                .foregroundStyle(theme.ensuredText(theme.warning))
+                .offset(y: 13)
+                .accessibilityIdentifier("research-claim-anchor-stale-\(claim.id.uuidString)")
             }
         }
-        .padding(.bottom, anchorMissing ? 8 : 0)
+        .padding(.bottom, anchorMissing || anchorState.isStale ? 10 : 0)
     }
 
     private func linkAnchor() {

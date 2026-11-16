@@ -66,7 +66,9 @@ func boardDocument(
     publishDate: Date? = nil,
     primaryLanguage: String = "es",
     learnedWordsPerMinute: [String: Double] = [:],
+    publishingPacks: [String: FrameScriptDocument.PublishingPack] = [:],
     checklistTasks: [FrameScriptDocument.ChecklistTask] = [],
+    claims: [FrameScriptDocument.Claim] = [],
     scenes: [FrameScriptDocument.Scene] = []
 ) -> FrameScriptDocument {
     FrameScriptDocument(
@@ -81,7 +83,9 @@ func boardDocument(
             targetDate: targetDate,
             publishDate: publishDate,
             learnedWordsPerMinuteByLanguage: learnedWordsPerMinute,
-            checklistTasks: checklistTasks
+            publishingPacks: publishingPacks,
+            checklistTasks: checklistTasks,
+            claims: claims
         )
     )
 }

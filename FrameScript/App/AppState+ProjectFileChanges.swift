@@ -252,6 +252,7 @@ extension AppState {
             // external write is detected on the next check instead of being
             // adopted silently.
             recordProjectFileSnapshot(data: opened.data, at: url)
+            notifyBoardOfProjectFileStateChange(at: url)
             return true
         } catch {
             projectFileChangeLogger.error("Operation project-reload failed. Code: \(Self.diagnosticCode(for: error), privacy: .public)")
@@ -275,6 +276,7 @@ extension AppState {
             }
             recordProjectFileSnapshotAfterSave(at: expectedURL)
             errorCenter.clearAutosaveFailureSuppression()
+            notifyBoardOfProjectFileStateChange(at: expectedURL)
             return true
         } catch {
             projectFileChangeLogger.error("Operation project-overwrite failed. Code: \(Self.diagnosticCode(for: error), privacy: .public)")

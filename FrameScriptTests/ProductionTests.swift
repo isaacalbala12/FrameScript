@@ -10,19 +10,19 @@ final class ProductionTests: ProductionTestCase {
         let appState = makeAppState(project: project)
         let snapshot = appState.productionSnapshot
 
-        XCTAssertEqual(snapshot.summary.totalPending, 8)
+        XCTAssertEqual(snapshot.summary.totalPending, 13)
         XCTAssertEqual(snapshot.summary.pendingCount(for: .record), 2)
         XCTAssertEqual(snapshot.summary.pendingCount(for: .acquire), 1)
         XCTAssertEqual(snapshot.summary.pendingCount(for: .edit), 1)
         XCTAssertEqual(snapshot.summary.pendingCount(for: .research), 1)
-        XCTAssertEqual(snapshot.summary.pendingCount(for: .publish), 3)
+        XCTAssertEqual(snapshot.summary.pendingCount(for: .publish), 8)
         XCTAssertEqual(snapshot.summary.pendingCount(for: .other), 0)
         XCTAssertEqual(snapshot.summary.doneManualCount, 1)
         XCTAssertTrue(snapshot.items.contains { $0.reason == .sceneNeedsTake })
         XCTAssertTrue(snapshot.items.contains { $0.reason == .bRollNeedsFootage })
         XCTAssertTrue(snapshot.items.contains { $0.reason == .editingNeedsWork })
         XCTAssertTrue(snapshot.items.contains { $0.reason == .claimNeedsVerification })
-        XCTAssertTrue(snapshot.items.contains { $0.reason == .publishingNeedsTitle })
+        XCTAssertTrue(snapshot.items.contains { $0.reason.publishingChecklistItem == .chosenTitle })
     }
 
     func testManualTaskLifecycleRefreshesTheChecklistAndMarksTheProjectDirty() throws {
@@ -95,13 +95,32 @@ final class ProductionTests: ProductionTestCase {
         XCTAssertFalse(appState.navigateToProductionTarget(.takes(sceneID: UUID(), languageCode: "")))
     }
 
-    func testPublishingAndResearchUseTheNavigatorSeam() {
+    func testRealProductionNavigatorOpensPublishingAndResearchPanels() {
+        let project = makeSpanishFixtureProject()
+        let appState = makeAppState(project: project)
+        appState.researchWindowPresenter = { _ in }
+        let claim = project.claims[0]
+        PublishingPresentation.shared.isPresented = false
+        PublishingPresentation.shared.selectedLanguageCode = nil
+
+        XCTAssertTrue(appState.navigateToProductionTarget(.publishing(languageCode: "es")))
+        XCTAssertTrue(PublishingPresentation.shared.isPresented)
+        XCTAssertEqual(PublishingPresentation.shared.selectedLanguageCode, "es")
+
+        XCTAssertTrue(appState.navigateToProductionTarget(.research(claimID: claim.id)))
+        XCTAssertEqual(ResearchPresentation.shared.selectedClaimID, claim.id)
+        XCTAssertEqual(ResearchPresentation.shared.focusedSceneID, claim.sceneIDs.first)
+
+        XCTAssertFalse(
+            appState.navigateToProductionTarget(.research(claimID: UUID())),
+            "An unknown claim must not pretend to have opened a panel"
+        )
+    }
+
+    func testPublishingAndResearchStillHonourAnInjectedNavigator() {
         let project = makeSpanishFixtureProject()
         let appState = makeAppState(project: project)
         let claim = project.claims[0]
-
-        XCTAssertFalse(appState.navigateToProductionTarget(.publishing(languageCode: "es")))
-        XCTAssertFalse(appState.navigateToProductionTarget(.research(claimID: claim.id)))
 
         let navigator = RecordingProductionNavigator()
         appState.productionNavigator = navigator
@@ -178,7 +197,8 @@ final class ProductionTests: ProductionTestCase {
         XCTAssertEqual(L10n.tr("production.title", language: .spanish), "Producción")
         XCTAssertEqual(L10n.tr("production.menu", language: .spanish), "Producción")
         XCTAssertEqual(L10n.tr("production.reason.sceneNeedsTake", language: .spanish), "falta grabar")
-        XCTAssertEqual(L10n.tr("production.reason.bRollNeedsAsset", language: .spanish), "falta conseguir")
+        XCTAssertEqual(L10n.tr("production.reason.bRollNeedsAsset", language: .spanish), "falta vincular el archivo")
+        XCTAssertEqual(L10n.tr("production.reason.bRollNeedsFootage", language: .spanish), "falta conseguir")
         XCTAssertEqual(L10n.tr("production.reason.editingNeedsWork", language: .spanish), "falta editar")
         XCTAssertEqual(L10n.tr("production.reason.claimNeedsVerification", language: .spanish), "falta investigar")
         XCTAssertEqual(L10n.tr("production.filter.allScenes", language: .spanish), "Todas las escenas")

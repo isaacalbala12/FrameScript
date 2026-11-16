@@ -21,7 +21,7 @@ final class BoardPlaneExportTests: XCTestCase {
         let summary = try XCTUnwrap(
             harness.board.summaries.first { $0.title.contains("Análisis de la actualización") }
         )
-        let plan = harness.board.planePlan(for: summary, appState: harness.appState)
+        let plan = await harness.board.planePlan(for: summary, appState: harness.appState)
         XCTAssertFalse(plan.entries.isEmpty)
 
         let transport = BoardFakePlaneTransport { request in
@@ -78,7 +78,7 @@ final class BoardPlaneExportTests: XCTestCase {
         let summary = try XCTUnwrap(
             harness.board.summaries.first { $0.title.contains("Análisis de la actualización") }
         )
-        let plan = harness.board.planePlan(for: summary, appState: harness.appState)
+        let plan = await harness.board.planePlan(for: summary, appState: harness.appState)
 
         let transport = BoardFakePlaneTransport { _ in
             PlaneHTTPResponse(statusCode: 500, headers: [:], data: Data())

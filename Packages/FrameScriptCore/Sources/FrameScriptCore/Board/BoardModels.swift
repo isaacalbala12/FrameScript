@@ -239,6 +239,57 @@ public struct BoardProjectSummary: Sendable, Equatable, Identifiable {
             fingerprint: fingerprint
         )
     }
+
+    /// Replaces only the derived pending tasks. The board uses it after an
+    /// in-memory edit so a card never shows stale counts while the project is
+    /// waiting for the normal save (NEW-2).
+    public func replacingPendingTasks(_ pendingTasks: [BoardPendingTask]) -> BoardProjectSummary {
+        BoardProjectSummary(
+            fileURL: fileURL,
+            projectID: projectID,
+            title: title,
+            topic: topic,
+            videoType: videoType,
+            productionStatus: productionStatus,
+            targetDate: targetDate,
+            publishDate: publishDate,
+            updatedAt: updatedAt,
+            createdAt: createdAt,
+            templateID: templateID,
+            sceneCount: sceneCount,
+            duration: duration,
+            pendingTasks: pendingTasks,
+            fingerprint: fingerprint
+        )
+    }
+
+    /// Marks the row as impossible to reuse from the incremental scan. The
+    /// next refresh (or the explicit reload posted when the open project is
+    /// saved/closed/discarded) must decode the file again instead of trusting
+    /// a summary that only exists in memory.
+    public func markingIndexStale() -> BoardProjectSummary {
+        BoardProjectSummary(
+            fileURL: fileURL,
+            projectID: projectID,
+            title: title,
+            topic: topic,
+            videoType: videoType,
+            productionStatus: productionStatus,
+            targetDate: targetDate,
+            publishDate: publishDate,
+            updatedAt: updatedAt,
+            createdAt: createdAt,
+            templateID: templateID,
+            sceneCount: sceneCount,
+            duration: duration,
+            pendingTasks: pendingTasks,
+            fingerprint: BoardFileFingerprint(
+                contentHash: "",
+                fileSize: -1,
+                modificationDate: .distantPast
+            )
+        )
+    }
 }
 
 /// A file or folder the scan could not use. The board shows these instead of
@@ -352,15 +403,19 @@ public struct BoardScanRequest: Sendable, Equatable {
     public var extraFileURLs: [URL]
     /// Index from the previous scan, used for incremental reuse.
     public var previous: BoardLibraryIndex
+    /// Localized labels for the pending-task titles stored in the summaries.
+    public var labels: BoardPendingLabels
 
     public init(
         folderURLs: [URL],
         extraFileURLs: [URL] = [],
-        previous: BoardLibraryIndex = BoardLibraryIndex()
+        previous: BoardLibraryIndex = BoardLibraryIndex(),
+        labels: BoardPendingLabels = .english
     ) {
         self.folderURLs = folderURLs
         self.extraFileURLs = extraFileURLs
         self.previous = previous
+        self.labels = labels
     }
 }
 

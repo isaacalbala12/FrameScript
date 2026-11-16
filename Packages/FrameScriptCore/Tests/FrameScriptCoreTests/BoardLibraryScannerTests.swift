@@ -157,7 +157,7 @@ struct BoardLibraryScannerTests {
         #expect(summary.productionStatus == .script)
         #expect(summary.targetDate == target)
         #expect(summary.publishDate == publish)
-        #expect(summary.pending.count(for: .conseguirBroll) == 1)
+        #expect(summary.pending.count(for: .conseguirBroll) == 2)
         #expect(summary.pending.count(for: .editar) == 1)
         #expect(summary.pending.count(for: .investigar) == 1)
         #expect(summary.pending.count(for: .grabar) == 0)

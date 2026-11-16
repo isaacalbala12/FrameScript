@@ -67,6 +67,7 @@ struct BoardRootView: View {
         }
         .task {
             store.loadFolders()
+            guard store.scansOnAppear else { return }
             guard !didRequestInitialScan else { return }
             didRequestInitialScan = true
             await store.refresh(appState: appState)
@@ -523,16 +524,12 @@ struct BoardRootView: View {
                 Button(appState.localized("board.action.editClassification")) {
                     classificationTarget = summary
                 }
-                .buttonStyle(.borderless)
-                .font(.system(size: 11.5))
-                .clickableCursor()
+                .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
 
                 Button(appState.localized("board.action.exportPlane")) {
                     planeTarget = summary
                 }
-                .buttonStyle(.borderless)
-                .font(.system(size: 11.5))
-                .clickableCursor()
+                .buttonStyle(FramePrimaryButtonStyle(size: .compact))
             }
         }
         .padding(.horizontal, 18)
@@ -579,7 +576,14 @@ struct BoardRootView: View {
     }
 
     private func open(_ summary: BoardProjectSummary) {
-        if !appState.openBoardProject(summary) {
+        switch appState.openBoardProject(summary) {
+        case .opened, .cancelled:
+            // Cancelling the unsaved-changes prompt is not an error.
+            return
+        case .failed:
+            // A real read failure already shows its own error. Only a file that
+            // vanished after the scan needs the board's toast.
+            guard !FileManager.default.fileExists(atPath: summary.fileURL.path) else { return }
             showStatus(appState.localized("board.error.open"))
         }
     }
@@ -736,6 +740,7 @@ private struct BoardKanbanColumn: View {
 private struct BoardProjectCard: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+    @FocusState private var isFocused: Bool
 
     let summary: BoardProjectSummary
     let isSelected: Bool
@@ -832,8 +837,20 @@ private struct BoardProjectCard: View {
                 statusTitle: statusTitle
             )
         }
+        .focusable()
+        .focused($isFocused)
+        .onChange(of: isFocused) { _, focused in
+            if focused { onSelect() }
+        }
+        .onKeyPress(.return) {
+            BoardProjectKeyboard.open(onOpen)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(summary.title), \(statusTitle(summary.productionStatus))")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: BoardProjectAccessibility.openActionName(appState: appState)) {
+            onOpen()
+        }
     }
 }
 
@@ -938,8 +955,29 @@ enum BoardPendingKindStyle {
         case .conseguirBroll: "photo.on.rectangle"
         case .editar: "scissors"
         case .investigar: "magnifyingglass"
+        case .publicar: "paperplane"
         case .manual: "checklist"
         }
+    }
+}
+
+/// Small pure seam for the keyboard/VoiceOver open affordance. Keeping the
+/// decision here lets a unit test cover it even though the offscreen snapshot
+/// renderer has no focused window (G-6).
+@MainActor
+enum BoardProjectAccessibility {
+    static func openActionName(appState: AppState) -> String {
+        appState.localized("board.action.open")
+    }
+}
+
+/// Return opens whichever card has keyboard focus. Cards and rows are always
+/// focusable, so a keyboard user can tab to an unselected project and press
+/// Return without clicking it first (G-6).
+enum BoardProjectKeyboard {
+    static func open(_ onOpen: () -> Void) -> KeyPress.Result {
+        onOpen()
+        return .handled
     }
 }
 
@@ -1179,6 +1217,16 @@ private struct BoardListView: View {
                 onMove: { onStatusChange(summary, $0) },
                 statusTitle: statusTitle
             )
+        }
+        .focusable()
+        .onKeyPress(.return) {
+            BoardProjectKeyboard.open { onOpen(summary) }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(summary.title)
+        .accessibilityAction(named: BoardProjectAccessibility.openActionName(appState: appState)) {
+            onOpen(summary)
         }
     }
 }

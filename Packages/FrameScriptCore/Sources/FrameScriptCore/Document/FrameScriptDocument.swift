@@ -1227,7 +1227,7 @@ extension FrameScriptDocument {
             sceneIDs: [UUID] = [],
             anchorSceneID: UUID? = nil,
             anchor: TextAnchor? = nil,
-            needsVerification: Bool = false,
+            needsVerification: Bool? = nil,
             personalExperience: Bool = false,
             resolutionNote: String = ""
         ) {
@@ -1238,7 +1238,10 @@ extension FrameScriptDocument {
             self.sceneIDs = sceneIDs
             self.anchorSceneID = anchorSceneID
             self.anchor = anchor
-            self.needsVerification = needsVerification
+            // Every non-confirmed claim starts flagged; confirming clears it.
+            // Callers may still pass an explicit true/false (re-check or
+            // "accepted as is").
+            self.needsVerification = needsVerification ?? (status != .confirmed)
             self.personalExperience = personalExperience
             self.resolutionNote = resolutionNote
         }
@@ -1265,7 +1268,11 @@ extension FrameScriptDocument {
             sceneIDs = try container.decodeIfPresent([UUID].self, forKey: .sceneIDs) ?? []
             anchorSceneID = try container.decodeIfPresent(UUID.self, forKey: .anchorSceneID)
             anchor = try container.decodeIfPresent(TextAnchor.self, forKey: .anchor)
-            needsVerification = try container.decodeIfPresent(Bool.self, forKey: .needsVerification) ?? false
+            // A missing key means the file predates the explicit flag: default
+            // it on for every non-confirmed claim, which is the product rule.
+            // Present false/true values are user choices and stay untouched.
+            needsVerification = try container.decodeIfPresent(Bool.self, forKey: .needsVerification)
+                ?? (status != .confirmed)
             personalExperience = try container.decodeIfPresent(Bool.self, forKey: .personalExperience) ?? false
             resolutionNote = try container.decodeIfPresent(String.self, forKey: .resolutionNote) ?? ""
         }

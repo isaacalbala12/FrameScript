@@ -13,6 +13,9 @@ final class PublishingPresentation {
     var isGeneratingTitles = false
     var titleSuggestions: [String] = []
     var titleGenerationError: String?
+    /// Language requested by a production row. Cleared when the sheet closes so
+    /// a normal open starts from the project's primary language (E-1).
+    var selectedLanguageCode: String?
 
     private init() {}
 
@@ -66,9 +69,12 @@ struct PublishingSheetModifier: ViewModifier {
     func body(content: Content) -> some View {
         @Bindable var presentation = PublishingPresentation.shared
         content.sheet(isPresented: $presentation.isPresented) {
-            PublishingPanel()
+            PublishingPanel(initialLanguage: presentation.selectedLanguageCode)
                 .environment(appState)
                 .environment(\.frameTheme, appState.themeManager.frameTheme)
+                .onDisappear {
+                    PublishingPresentation.shared.selectedLanguageCode = nil
+                }
         }
     }
 }

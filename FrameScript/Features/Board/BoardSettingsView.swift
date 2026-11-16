@@ -236,6 +236,19 @@ struct BoardSettingsView: View {
                 .frame(width: 300)
             }
 
+            if plane.settings.isInsecureTransport {
+                Label(
+                    appState.localized("board.settings.plane.insecureTransport"),
+                    systemImage: "lock.open.trianglebadge.exclamationmark"
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(theme.ensuredText(theme.warning))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("board-plane-insecure-warning")
+            }
+
             SettingsRow(
                 appState.localized("board.settings.plane.workspace"),
                 help: appState.localized("board.settings.plane.workspaceHelp")

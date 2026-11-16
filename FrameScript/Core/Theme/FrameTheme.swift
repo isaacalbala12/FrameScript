@@ -129,6 +129,20 @@ struct FrameTheme {
         Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: NSColor(appBackground), minimum: 4.5))
     }
 
+    /// Any colour adjusted until it reaches 4.5:1 on every surface text can be
+    /// drawn on. Used by the production rows so a 10 pt reason keeps the kind
+    /// colour without dropping below WCAG AA (VW3).
+    func ensuredText(_ color: Color) -> Color {
+        let base = MarkupEditorPalette.opaque(NSColor(color))
+        let surfaces = textSurfaces.map { MarkupEditorPalette.opaque(NSColor($0)) }
+        guard let worst = surfaces.min(by: {
+            MarkupEditorPalette.contrastRatio(base, $0) < MarkupEditorPalette.contrastRatio(base, $1)
+        }) else {
+            return color
+        }
+        return Color(nsColor: MarkupEditorPalette.ensuredContrast(base, against: worst, minimum: 4.5))
+    }
+
     /// Foreground for a filled control (record/stop buttons). Picks white or
     /// near-black by contrast so the label never drops below 4.5:1 on the
     /// pastel accent fills, the light `warning` fill in light mode or the light

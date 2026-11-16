@@ -9,7 +9,7 @@ public enum ResearchChecklist {
         claims: [FrameScriptDocument.Claim]
     ) -> [String] {
         claims
-            .filter { $0.needsVerification && !$0.personalExperience }
+            .filter(ResearchSummary.isPending)
             .map { normalized($0.text) }
             .filter { !$0.isEmpty }
     }
@@ -27,7 +27,7 @@ public enum ResearchChecklist {
                 .map { normalized($0.text) }
         )
 
-        for claim in claims where claim.needsVerification && !claim.personalExperience {
+        for claim in claims where ResearchSummary.isPending(claim) {
             let text = normalized(claim.text)
             guard !text.isEmpty, existing.insert(text).inserted else { continue }
             result.append(
@@ -57,6 +57,21 @@ public enum ResearchChecklist {
             var copy = task
             copy.isDone = true
             return copy
+        }
+    }
+
+    /// Removes the open research task that mirrors a deleted claim. A done task
+    /// or a manually written task with the same text only by coincidence keeps
+    /// its identity because the deletion promise is about open verification
+    /// work (I-2).
+    public static func removing(
+        claimText: String,
+        in tasks: [FrameScriptDocument.ChecklistTask]
+    ) -> [FrameScriptDocument.ChecklistTask] {
+        let target = normalized(claimText)
+        guard !target.isEmpty else { return tasks }
+        return tasks.filter { task in
+            !(task.kind == .research && !task.isDone && normalized(task.text) == target)
         }
     }
 

@@ -12,25 +12,24 @@ extension AppState {
 
     // MARK: Opening a project from the board
 
-    /// Opens the board's project in the main window. Returns false when the
-    /// user cancelled or the file can no longer be read.
+    /// Opens the board's project in the main window. Cancelling the
+    /// unsaved-changes prompt is reported as `.cancelled`, never as a failure
+    /// (G-4).
     @discardableResult
     func openBoardProject(
         _ summary: BoardProjectSummary,
         activatesApplication: Bool = true
-    ) -> Bool {
+    ) -> OpenProjectResult {
         let target = summary.fileURL.standardizedFileURL
         if hasOpenProject,
            projectStore.currentFileURL?.standardizedFileURL == target {
             bringProjectWindowForward(activatesApplication: activatesApplication)
-            return true
+            return .opened
         }
-        openProject(at: target)
-        guard projectStore.currentFileURL?.standardizedFileURL == target else {
-            return false
-        }
+        let result = openProject(at: target)
+        guard result == .opened else { return result }
         bringProjectWindowForward(activatesApplication: activatesApplication)
-        return true
+        return .opened
     }
 
     private func bringProjectWindowForward(activatesApplication: Bool) {

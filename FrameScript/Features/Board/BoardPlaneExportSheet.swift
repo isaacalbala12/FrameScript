@@ -20,6 +20,7 @@ struct BoardPlaneExportSheet: View {
     @State private var report: PlaneExportReport?
     @State private var errorMessage: String?
     @State private var isExporting = false
+    @State private var isRefreshingPlan = false
 
     init(
         summary: BoardProjectSummary,
@@ -68,14 +69,22 @@ struct BoardPlaneExportSheet: View {
         .foregroundStyle(theme.primaryText)
         .onAppear {
             plane.refreshTokenStatus()
-            reloadPlan()
+            seedPlan()
+            Task { await reloadPlan() }
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(appState.localized("board.plane.title"))
-                .font(.system(size: 18, weight: .semibold))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(appState.localized("board.plane.title"))
+                    .font(.system(size: 18, weight: .semibold))
+                if isRefreshingPlan {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+                Spacer(minLength: 0)
+            }
             Text(summary.title.isEmpty ? appState.localized("project.untitled") : summary.title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.secondaryText)
@@ -267,12 +276,25 @@ struct BoardPlaneExportSheet: View {
         }
     }
 
-    private func reloadPlan() {
-        guard let live = store.summary(id: summary.id) else {
-            plan = store.planePlan(for: summary, appState: appState)
-            return
-        }
-        plan = store.planePlan(for: live, appState: appState)
+    private func seedPlan() {
+        let dueDate = BoardPlaneDate.make(from: summary.targetDate)
+        plan = PlaneExportPlan(
+            tasks: summary.pendingTasks.map {
+                $0.planeTask(
+                    projectID: summary.projectID.uuidString,
+                    projectTitle: summary.title,
+                    dueDate: dueDate
+                )
+            },
+            labels: store.planeExportLabels(appState: appState)
+        )
+    }
+
+    private func reloadPlan() async {
+        isRefreshingPlan = true
+        defer { isRefreshingPlan = false }
+        let live = store.summary(id: summary.id) ?? summary
+        plan = await store.planePlan(for: live, appState: appState)
     }
 
     private func export() async {

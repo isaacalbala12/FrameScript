@@ -2,7 +2,10 @@ import Foundation
 
 extension FrameScriptDocument {
     /// Validates the version, runs the migration branches for v1-v3 and returns
-    /// a version-4 document. Version-4 documents only get validation.
+    /// a version-4 document. Version-4 documents keep their valid data
+    /// untouched, but lossless repairs (duplicate source ids and dangling
+    /// cross-references) run for every version so a hand-edited or third-party
+    /// v4 file opens instead of trapping or keeping dead links forever.
     public func migrated() throws -> FrameScriptDocument {
         guard FrameScriptFormat.supportedFileVersions.contains(fileVersion) else {
             throw FrameScriptDocumentError.unsupportedVersion(fileVersion)
@@ -24,13 +27,15 @@ extension FrameScriptDocument {
             document.migrateLegacySegmentLinks()
             document.migrateV3ToV4()
         default:
-            // v4 is the current format. Reading it must be lossless: validate
-            // anchors but never rewrite them. Legacy repair belongs to v1-v3.
+            // v4 is the current format. Reading it must not rewrite anchors or
+            // valid data; only the lossless identity/link repairs below run.
             break
         }
         document.fileVersion = FrameScriptFormat.currentFileVersion
         document.normalizePrimaryLanguage()
         try document.validateSceneIdentifiers()
+        document.dedupeSourceIdentifiers()
+        document.normalizeCrossReferences()
         // A single out-of-range anchor used to make the whole project unopenable.
         // Drop the anchor (never the scene text) so the user can reach and repair
         // their script; the next save persists the repair.
@@ -100,11 +105,10 @@ extension FrameScriptDocument {
     // MARK: v3 -> v4
 
     /// v3 is the last pre-v4 schema. Repair any stale anchors (same behavior as
-    /// the old reader), then drop cross-references that cannot resolve now that
-    /// assets, claims, takes and clips are persisted together.
+    /// the old reader). Cross-reference cleanup runs for every version in
+    /// `migrated()`.
     private mutating func migrateV3ToV4() {
         repairAnchors()
-        normalizeCrossReferences()
     }
 
     private mutating func repairAnchors() {
@@ -129,6 +133,19 @@ extension FrameScriptDocument {
                 scene.editingItems[index].textAnchor = repaired
             }
             project.scenes[sceneIndex] = scene
+        }
+    }
+
+    /// Hand-edited and third-party files can repeat a source id, which used to
+    /// trap in `Dictionary(uniqueKeysWithValues:)` on every render. Keep the
+    /// first source under its id (claims and the UI resolve to it) and give the
+    /// later copies fresh identities without dropping their content (I-1).
+    private mutating func dedupeSourceIdentifiers() {
+        var seen: Set<UUID> = []
+        for index in project.sources.indices {
+            if !seen.insert(project.sources[index].id).inserted {
+                project.sources[index].id = UUID()
+            }
         }
     }
 
@@ -220,7 +237,7 @@ extension FrameScriptDocument {
         // that names no scene has no text to validate it against, so an
         // out-of-range claim anchor is dropped like any other stale anchor
         // instead of making the project unreadable.
-        let scenesByID = Dictionary(uniqueKeysWithValues: project.scenes.map { ($0.id, $0) })
+        let scenesByID = Dictionary(project.scenes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in project.claims.indices {
             guard let anchorSceneID = project.claims[index].anchorSceneID,
                   let scene = scenesByID[anchorSceneID] else { continue }

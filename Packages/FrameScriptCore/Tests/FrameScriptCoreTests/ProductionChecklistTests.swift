@@ -281,9 +281,78 @@ struct ProductionChecklistTests {
         #expect(items[0].sceneID == nil)
     }
 
+    @Test func personalExperienceNeverNeedsResearch() {
+        let claim = FrameScriptDocument.Claim(
+            text: "Yo lo probé y me pareció lento",
+            status: .probable,
+            needsVerification: true,
+            personalExperience: true
+        )
+
+        let project = makeProject(claims: [claim])
+        #expect(ProductionChecklist.items(for: project).isEmpty)
+    }
+
+    @Test func confirmedClaimFlaggedForASecondCheckNeedsResearch() {
+        let claim = FrameScriptDocument.Claim(
+            text: "Confirmada pero recheck",
+            status: .confirmed,
+            needsVerification: true
+        )
+
+        let items = ProductionChecklist.items(for: makeProject(claims: [claim]))
+        #expect(items.count == 1)
+        #expect(items[0].reason == .claimNeedsVerification)
+        #expect(items[0].target == .research(claimID: claim.id))
+    }
+
+    @Test func mirroredResearchTaskDoesNotDuplicateTheClaimRow() {
+        let claim = FrameScriptDocument.Claim(
+            text: "El neumático mejora el agarre",
+            status: .probable,
+            needsVerification: true
+        )
+        let task = FrameScriptDocument.ChecklistTask(
+            text: "  el neumático MEJORA el agarre ",
+            kind: .research
+        )
+
+        let items = ProductionChecklist.items(
+            for: makeProject(checklistTasks: [task], claims: [claim])
+        )
+        #expect(items.count == 1)
+        #expect(items[0].kind == .research)
+        #expect(items[0].reason == .claimNeedsVerification)
+    }
+
+    @Test func researchTaskWithoutAClaimStaysAsAManualRow() {
+        let task = FrameScriptDocument.ChecklistTask(text: "Buscar el dato", kind: .research)
+
+        let items = ProductionChecklist.items(for: makeProject(checklistTasks: [task]))
+        #expect(items.count == 1)
+        #expect(items[0].reason == .manualTask)
+        #expect(items[0].kind == .research)
+    }
+
+    @Test func productionResearchCountEqualsTheSharedPendingRule() {
+        let claims = [
+            FrameScriptDocument.Claim(text: "Probable", status: .probable, needsVerification: true),
+            FrameScriptDocument.Claim(text: "Confirmada", status: .confirmed),
+            FrameScriptDocument.Claim(text: "Confirmada con recheck", status: .confirmed, needsVerification: true),
+            FrameScriptDocument.Claim(text: "Rumor sin marcar", status: .rumor),
+            FrameScriptDocument.Claim(text: "Experiencia", status: .probable, personalExperience: true)
+        ]
+        let project = makeProject(claims: claims)
+
+        let production = ProductionChecklist.summary(for: project).pendingCount(for: .research)
+        let research = ResearchSummary.counts(claims: claims).pending
+        #expect(production == research)
+        #expect(production == 3)
+    }
+
     // MARK: - Publishing
 
-    @Test func completePublishingPackHasNoItems() {
+    @Test func completePublishingChecklistHasNoItems() {
         let pack = FrameScriptDocument.PublishingPack(
             chosenTitle: "Título",
             description: "Descripción",
@@ -292,59 +361,106 @@ struct ProductionChecklistTests {
                 FrameScriptDocument.ThumbnailVariant(assetID: UUID(), isChosen: true)
             ]
         )
+        let doneChecks = PublishingChecklistItem.allCases.map {
+            FrameScriptDocument.ChecklistTask(text: $0.taskToken, kind: .other, isDone: true)
+        }
 
-        let project = makeProject(publishingPacks: ["es": pack])
+        let project = makeProject(
+            publishingPacks: ["es": pack],
+            checklistTasks: doneChecks
+        )
         #expect(ProductionChecklist.items(for: project).isEmpty)
     }
 
-    @Test func emptyPublishingPackReportsEveryMissingField() {
+    @Test func emptyPublishingPackReportsTheEightChecklistItems() {
         let project = makeProject(publishingPacks: ["es": FrameScriptDocument.PublishingPack()])
         let items = ProductionChecklist.items(for: project)
 
-        #expect(items.count == 4)
-        #expect(items.map(\.kind) == [.publish, .publish, .publish, .publish])
-        #expect(Set(items.map(\.reason)) == [
-            .publishingNeedsTitle,
-            .publishingNeedsDescription,
-            .publishingNeedsTags,
-            .publishingNeedsThumbnail
-        ])
+        #expect(items.count == PublishingChecklistItem.allCases.count)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.kind == .publish })
+        #expect(Set(items.compactMap(\.reason.publishingChecklistItem)) == Set(PublishingChecklistItem.allCases))
         #expect(items.allSatisfy { $0.languageCode == "es" })
         #expect(items.allSatisfy { $0.target == .publishing(languageCode: "es") })
     }
 
-    @Test func publishingChecksEveryLanguagePack() {
-        let complete = FrameScriptDocument.PublishingPack(
+    @Test func publishingChecklistTokensNeverAppearAsManualRows() {
+        let token = PublishingChecklistItem.endScreen.taskToken
+        let pack = FrameScriptDocument.PublishingPack()
+        let project = makeProject(
+            publishingPacks: ["es": pack],
+            checklistTasks: [FrameScriptDocument.ChecklistTask(text: token, kind: .other)]
+        )
+
+        let items = ProductionChecklist.items(for: project)
+        #expect(items.allSatisfy { $0.reason != .manualTask })
+        #expect(items.contains { $0.reason.publishingChecklistItem == .endScreen })
+        #expect(!items.contains { $0.sourceText == token })
+    }
+
+    @Test func donePublishingChecklistItemDisappearsFromItsPack() {
+        let pack = FrameScriptDocument.PublishingPack()
+        let done = FrameScriptDocument.ChecklistTask(
+            text: PublishingChecklistItem.endScreen.taskToken,
+            kind: .other,
+            isDone: true
+        )
+
+        let items = ProductionChecklist.items(
+            for: makeProject(publishingPacks: ["es": pack], checklistTasks: [done])
+        )
+        #expect(items.count == 7)
+        #expect(!items.contains { $0.reason.publishingChecklistItem == .endScreen })
+    }
+
+    @Test func publishingChecklistIsEmittedOncePerProject() {
+        let primary = FrameScriptDocument.PublishingPack(
             chosenTitle: "Título",
             description: "Descripción",
             tags: ["uno"],
             thumbnailVariants: [FrameScriptDocument.ThumbnailVariant(isChosen: true)]
         )
-        let missingTitle = FrameScriptDocument.PublishingPack(
+        let other = FrameScriptDocument.PublishingPack(
             description: "Descripción",
             tags: ["one"],
             thumbnailVariants: [FrameScriptDocument.ThumbnailVariant(isChosen: true)]
         )
 
-        let project = makeProject(publishingPacks: ["es": complete, "en": missingTitle])
+        let project = makeProject(publishingPacks: ["es": primary, "en": other])
         let items = ProductionChecklist.items(for: project)
 
-        #expect(items.count == 1)
-        #expect(items[0].languageCode == "en")
-        #expect(items[0].reason == .publishingNeedsTitle)
+        // The eight checks have one project-wide done state, so two packs must
+        // not double the rows (must-fix 2).
+        #expect(items.count == PublishingChecklistItem.allCases.count)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "es" })
+        #expect(items.allSatisfy { $0.target == .publishing(languageCode: "es") })
+        #expect(Set(items.map(\.id)).count == 8)
     }
 
-    @Test func publishingWhitespaceTagsCountAsMissing() {
-        let pack = FrameScriptDocument.PublishingPack(
-            chosenTitle: "Título",
-            description: "Descripción",
-            tags: ["  ", ""],
-            thumbnailVariants: [FrameScriptDocument.ThumbnailVariant(isChosen: true)]
+    @Test func publishingChecklistUsesThePrimaryLanguagePack() {
+        let project = makeProject(
+            primaryLanguage: "en",
+            publishingPacks: ["es": FrameScriptDocument.PublishingPack(), "en": FrameScriptDocument.PublishingPack()]
         )
 
-        let items = ProductionChecklist.items(for: makeProject(publishingPacks: ["es": pack]))
-        #expect(items.count == 1)
-        #expect(items[0].reason == .publishingNeedsTags)
+        let items = ProductionChecklist.items(for: project)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "en" })
+    }
+
+    @Test func publishingChecklistFallsBackToTheFirstPackWhenThePrimaryHasNone() {
+        let project = makeProject(
+            primaryLanguage: "es",
+            publishingPacks: [
+                "fr": FrameScriptDocument.PublishingPack(),
+                "de": FrameScriptDocument.PublishingPack()
+            ]
+        )
+
+        let items = ProductionChecklist.items(for: project)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "de" })
     }
 
     // MARK: - Manual tasks
@@ -427,11 +543,11 @@ struct ProductionChecklistTests {
         #expect(summary.pendingCount(for: .acquire) == 1)
         #expect(summary.pendingCount(for: .edit) == 1)
         #expect(summary.pendingCount(for: .research) == 1)
-        #expect(summary.pendingCount(for: .publish) == 4)
+        #expect(summary.pendingCount(for: .publish) == 8)
         #expect(summary.pendingCount(for: .other) == 1)
-        #expect(summary.totalPending == 9)
+        #expect(summary.totalPending == 13)
         #expect(summary.doneManualCount == 1)
-        #expect(summary.totalCount == 10)
+        #expect(summary.totalCount == 14)
     }
 
     @Test func itemsAndIDsAreStableAcrossCalls() {

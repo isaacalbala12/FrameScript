@@ -49,7 +49,7 @@ struct ResearchTests {
         status: FrameScriptDocument.ClaimStatus = .probable,
         sourceIDs: [UUID] = [],
         sceneIDs: [UUID] = [],
-        needsVerification: Bool = false,
+        needsVerification: Bool? = nil,
         personalExperience: Bool = false,
         resolutionNote: String = "",
         anchor: FrameScriptDocument.TextAnchor? = nil,
@@ -95,7 +95,7 @@ struct ResearchTests {
             claim(text: "B", status: .probable, needsVerification: true),
             claim(text: "C", status: .probable, needsVerification: true),
             claim(text: "D", status: .rumor, needsVerification: true),
-            claim(text: "E", status: .communityOpinion),
+            claim(text: "E", status: .communityOpinion, needsVerification: false),
             claim(text: "F", status: .confirmed, needsVerification: true),
             claim(text: "G", status: .probable, needsVerification: true, personalExperience: true)
         ]
@@ -163,7 +163,7 @@ struct ResearchTests {
             sources: [source(id: sourceID, title: "Timing oficial")],
             claims: [
                 claim(text: "Pendiente", sourceIDs: [sourceID], sceneIDs: [sceneID], needsVerification: true),
-                claim(text: "Resuelta", sceneIDs: [sceneID], needsVerification: false)
+                claim(text: "Resuelta", status: .confirmed, sceneIDs: [sceneID], needsVerification: false)
             ]
         )
 

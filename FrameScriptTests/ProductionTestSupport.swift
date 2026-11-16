@@ -28,6 +28,10 @@ class ProductionTestCase: XCTestCase {
     override func tearDown() {
         ProductionPresentation.shared.resetForTesting()
         ProductionChecklistCenter.shared.clear()
+        PublishingPresentation.shared.isPresented = false
+        PublishingPresentation.shared.selectedLanguageCode = nil
+        ResearchPresentation.shared.selectedClaimID = nil
+        ResearchPresentation.shared.focusedSceneID = nil
         XCTAssertNil(lastAppState, "AppState was retained after the test")
         testDefaults?.cleanup()
         testDefaults = nil

@@ -102,6 +102,7 @@ public enum PlaneTaskKind: String, Sendable, Codable, CaseIterable, Hashable {
     case conseguirBroll
     case editar
     case investigar
+    case publicar
     case manual
 }
 
