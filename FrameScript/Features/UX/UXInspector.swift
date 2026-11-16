@@ -9,6 +9,8 @@ enum UXInspectorTab: String, CaseIterable, Identifiable, Codable, Sendable {
     case ai
     case rhythm
     case scene
+    case research
+    case production
 
     var id: String { rawValue }
 }
@@ -44,6 +46,18 @@ enum UXInspectorRegistry {
             titleKey: "ux.inspector.tab.scene",
             systemImage: "film.stack",
             content: { AnyView(UXInspectorSceneTab()) }
+        ),
+        UXInspectorTabDefinition(
+            tab: .research,
+            titleKey: "ux.inspector.tab.research",
+            systemImage: "checkmark.shield",
+            content: { AnyView(UXInspectorResearchTab()) }
+        ),
+        UXInspectorTabDefinition(
+            tab: .production,
+            titleKey: "ux.inspector.tab.production",
+            systemImage: "checklist",
+            content: { AnyView(UXInspectorProductionTab()) }
         )
     ]
 
@@ -127,9 +141,14 @@ struct UXInspectorPanel: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 3) {
-            ForEach(UXInspectorRegistry.definitions) { definition in
-                tabButton(definition)
+        // Five tabs no longer share one 292 pt row with readable labels. Keep
+        // one row when it fits, otherwise split into two rows (3 + 2) so every
+        // tab keeps its name instead of truncating to an icon.
+        ViewThatFits(in: .horizontal) {
+            tabRow(UXInspectorRegistry.definitions)
+            VStack(spacing: 3) {
+                tabRow(Array(UXInspectorRegistry.definitions.prefix(3)))
+                tabRow(Array(UXInspectorRegistry.definitions.dropFirst(3)))
             }
         }
         .padding(3)
@@ -139,6 +158,14 @@ struct UXInspectorPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+
+    private func tabRow(_ definitions: [UXInspectorTabDefinition]) -> some View {
+        HStack(spacing: 3) {
+            ForEach(definitions) { definition in
+                tabButton(definition)
+            }
+        }
     }
 
     private func tabButton(_ definition: UXInspectorTabDefinition) -> some View {
@@ -152,7 +179,9 @@ struct UXInspectorPanel: View {
                 Text(appState.localized(definition.titleKey))
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
+            .padding(.horizontal, 2)
             .frame(maxWidth: .infinity)
             .frame(height: 26)
             .foregroundStyle(isSelected ? theme.accentText : theme.secondaryText)

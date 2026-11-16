@@ -29,9 +29,7 @@ struct TopToolbar: View {
                 Divider()
                 projectMenuButton(appState.localized("project.export"), shortcut: .export) { appState.exportProject() }
                 projectMenuButton(appState.localized("resolvePack.menu"), shortcut: .resolvePack) {
-                    ResolvePackPresenter.shared.present(
-                        languageCode: appState.resolvePackDefaultLanguageCode
-                    )
+                    UXProjectCommandDispatcher.perform(.resolvePack, appState: appState)
                 }
                 Divider()
                 Button(appState.localized("project.browser")) { appState.returnToProjectList() }
@@ -114,19 +112,32 @@ struct TopToolbar: View {
             HStack(spacing: compact ? 3 : 5) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
-                    help: appState.localized("project.export"),
+                    help: UXActionTooltip.text(
+                        title: appState.localized("project.export"),
+                        command: .export,
+                        settings: appState.settings
+                    ),
                     action: appState.exportProject
                 )
 
                 toolbarButton(
                     systemName: "megaphone",
-                    help: appState.localized("publishing.toolbar.help"),
-                    action: appState.showPublishingPanel
-                )
+                    help: UXActionTooltip.text(
+                        title: appState.localized("publishing.toolbar.help"),
+                        command: .publishingPack,
+                        settings: appState.settings
+                    )
+                ) {
+                    UXProjectCommandDispatcher.perform(.publishingPack, appState: appState)
+                }
 
                 toolbarButton(
                     systemName: "text.bubble",
-                    help: appState.localized("toolbar.teleprompter"),
+                    help: UXActionTooltip.text(
+                        title: appState.localized("toolbar.teleprompter"),
+                        command: .teleprompter,
+                        settings: appState.settings
+                    ),
                     action: appState.presentTeleprompter
                 )
 
@@ -134,15 +145,25 @@ struct TopToolbar: View {
 
                 toolbarButton(
                     systemName: "books.vertical",
-                    help: appState.localized("research.toolbarHelp"),
-                    action: { appState.openResearchPanel() }
-                )
+                    help: UXActionTooltip.text(
+                        title: appState.localized("research.toolbarHelp"),
+                        command: .researchPanel,
+                        settings: appState.settings
+                    )
+                ) {
+                    UXProjectCommandDispatcher.perform(.researchPanel, appState: appState)
+                }
 
                 toolbarButton(
                     systemName: "photo.stack",
-                    help: appState.localized("menu.assets"),
-                    action: { appState.isAssetsPresented = true }
-                )
+                    help: UXActionTooltip.text(
+                        title: appState.localized("menu.assets"),
+                        command: .assets,
+                        settings: appState.settings
+                    )
+                ) {
+                    UXProjectCommandDispatcher.perform(.assets, appState: appState)
+                }
 
                 toolbarDivider
 
@@ -159,7 +180,13 @@ struct TopToolbar: View {
                 }
                 .buttonStyle(.cursorPlain)
                 .foregroundStyle(appState.isFocusModeEnabled ? theme.accentText : theme.secondaryText)
-                .help(appState.localized("toolbar.focusMode"))
+                .help(
+                    UXActionTooltip.text(
+                        title: appState.localized("toolbar.focusMode"),
+                        command: .toggleFocusMode,
+                        settings: appState.settings
+                    )
+                )
 
                 toolbarDivider
 

@@ -13,6 +13,11 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
     case analyzeScene
     case recordTake
     case teleprompter
+    case productionChecklist
+    case researchPanel
+    case assets
+    case publishingPack
+    case resolvePack
 
     var id: String { rawValue }
 
@@ -21,6 +26,7 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
         case .insertShortPause, .insertLongPause, .insertBRollCue, .insertImageCue: .insert
         case .generateHook, .suggestRehooks, .analyzeScene: .ai
         case .recordTake, .teleprompter: .production
+        case .productionChecklist, .researchPanel, .assets, .publishingPack, .resolvePack: .project
         }
     }
 
@@ -35,6 +41,11 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
         case .analyzeScene: "ux.action.ai.analyze"
         case .recordTake: "ux.action.production.record"
         case .teleprompter: "ux.action.production.teleprompter"
+        case .productionChecklist: "ux.action.project.production"
+        case .researchPanel: "ux.action.project.research"
+        case .assets: "ux.action.project.assets"
+        case .publishingPack: "ux.action.project.publishing"
+        case .resolvePack: "ux.action.project.resolve"
         }
     }
 
@@ -49,6 +60,11 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
         case .analyzeScene: "sparkles"
         case .recordTake: "record.circle"
         case .teleprompter: "text.bubble"
+        case .productionChecklist: "checklist"
+        case .researchPanel: "books.vertical"
+        case .assets: "photo.stack"
+        case .publishingPack: "megaphone"
+        case .resolvePack: "film.stack"
         }
     }
 
@@ -61,6 +77,11 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
         case .analyzeScene: .analyzeCurrentScene
         case .recordTake: .recordTake
         case .teleprompter: .teleprompter
+        case .productionChecklist: .productionChecklist
+        case .researchPanel: .researchPanel
+        case .assets: .assets
+        case .publishingPack: .publishingPack
+        case .resolvePack: .resolvePack
         case .insertShortPause, .insertLongPause, .insertBRollCue, .insertImageCue: nil
         }
     }
@@ -72,7 +93,9 @@ enum UXEditorAction: String, CaseIterable, Identifiable, Sendable {
         case .insertLongPause: .longPause
         case .insertBRollCue: .bRollCue
         case .insertImageCue: .imageCue
-        case .generateHook, .suggestRehooks, .analyzeScene, .recordTake, .teleprompter: nil
+        case .generateHook, .suggestRehooks, .analyzeScene, .recordTake, .teleprompter,
+             .productionChecklist, .researchPanel, .assets, .publishingPack, .resolvePack:
+            nil
         }
     }
 }
@@ -81,6 +104,7 @@ enum UXActionGroup: String, CaseIterable, Identifiable, Sendable {
     case insert
     case ai
     case production
+    case project
 
     var id: String { rawValue }
 
@@ -89,6 +113,7 @@ enum UXActionGroup: String, CaseIterable, Identifiable, Sendable {
         case .insert: "ux.inspector.group.insert"
         case .ai: "ux.inspector.group.ai"
         case .production: "ux.inspector.group.production"
+        case .project: "ux.inspector.group.project"
         }
     }
 
@@ -132,6 +157,10 @@ struct UXActionBarModel: Equatable {
             case .teleprompter: availability.canOpenTeleprompter
             default: false
             }
+        case .project:
+            // Exactly the menu matrix: a project is enough for these panels,
+            // no selected scene is required.
+            action.shortcutCommand.map(availability.isEnabled) ?? false
         }
     }
 
@@ -148,15 +177,29 @@ struct UXActionBarModel: Equatable {
 
 enum UXActionBarLabelMode {
     case all
-    case insertAndProduction
+    /// Producción and Proyecto keep their labels; Insertar and IA collapse.
+    /// This is the state of a 1440 pt window with the inspector open, or a
+    /// 1180 pt window without it.
+    case projectAndProduction
+    /// Only the new Proyecto group keeps labels (980 pt window).
+    case project
+    /// Tightest labeled stage: the Proyecto buttons keep their text and drop
+    /// the icon, so the five new features stay named even at 1180 pt with the
+    /// inspector open.
+    case projectTextOnly
     case none
 
     func showsLabel(for group: UXActionGroup) -> Bool {
         switch self {
         case .all: true
-        case .insertAndProduction: group != .ai
+        case .projectAndProduction: group == .project || group == .production
+        case .project, .projectTextOnly: group == .project
         case .none: false
         }
+    }
+
+    func showsIcon(for group: UXActionGroup) -> Bool {
+        self == .projectTextOnly ? group != .project : true
     }
 }
 
@@ -206,6 +249,9 @@ enum UXEditorActionPerformer {
             appState.toggleRecordingTake()
         case .teleprompter:
             appState.presentTeleprompter()
+        case .productionChecklist, .researchPanel, .assets, .publishingPack, .resolvePack:
+            guard let command = action.shortcutCommand else { return }
+            UXProjectCommandDispatcher.perform(command, appState: appState)
         }
     }
 }
@@ -228,14 +274,18 @@ struct UXEditorActionBar: View {
     var previewHoveredAction: UXEditorAction?
 
     var body: some View {
-        // Real measurement instead of fixed width thresholds: the full label
-        // set wins when it fits, then labels for the Insert and Production
-        // groups (AI stays icon-only), then all icons. This keeps labels
-        // visible in a 1180 pt window with the inspector open.
-        ViewThatFits(in: .horizontal) {
-            barContent(labelMode: .all)
-            barContent(labelMode: .insertAndProduction)
-            barContent(labelMode: .none)
+        // Real measurement instead of fixed width thresholds. The Proyecto
+        // group is the newest visual entry point, so it keeps its labels
+        // longest: everything labeled first, then Proyecto + Producción, then
+        // only Proyecto (980 pt), then Proyecto text-only when the inspector
+        // leaves the column very narrow, then icons with tooltips.
+        let badges = UXProjectBadges(appState: appState)
+        return ViewThatFits(in: .horizontal) {
+            barContent(labelMode: .all, badges: badges)
+            barContent(labelMode: .projectAndProduction, badges: badges)
+            barContent(labelMode: .project, compactMetrics: true, badges: badges)
+            barContent(labelMode: .projectTextOnly, compactMetrics: true, badges: badges)
+            barContent(labelMode: .none, badges: badges)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 34)
@@ -250,7 +300,11 @@ struct UXEditorActionBar: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func barContent(labelMode: UXActionBarLabelMode) -> some View {
+    private func barContent(
+        labelMode: UXActionBarLabelMode,
+        compactMetrics: Bool = false,
+        badges: UXProjectBadges
+    ) -> some View {
         let model = UXActionBarModel(appState: appState)
 
         return HStack(spacing: 0) {
@@ -259,7 +313,7 @@ struct UXEditorActionBar: View {
                     Rectangle()
                         .fill(theme.divider)
                         .frame(width: 1, height: 16)
-                        .padding(.horizontal, 3)
+                        .padding(.horizontal, compactMetrics ? 2 : 3)
                         .accessibilityHidden(true)
                 }
                 HStack(spacing: 0) {
@@ -268,9 +322,12 @@ struct UXEditorActionBar: View {
                             action: action,
                             title: appState.localized(action.titleKey),
                             showsLabel: labelMode.showsLabel(for: group),
+                            showsIcon: labelMode.showsIcon(for: group),
                             isEnabled: model.isEnabled(action),
                             tooltip: tooltip(for: action, model: model),
                             emphasis: UXActionEmphasisPolicy.emphasis(for: action),
+                            badgeCount: badges.count(for: action),
+                            labelHorizontalPadding: compactMetrics ? 3 : 4,
                             isPreviewHovered: previewHoveredAction == action
                         ) {
                             UXEditorActionPerformer.perform(
@@ -316,16 +373,20 @@ enum UXActionEmphasisPolicy {
 /// One bar button. Deliberately not focusable: clicking it must leave the
 /// script text view as first responder so the insertion lands at the caret.
 struct UXActionButton: View {
+    @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
 
     let action: UXEditorAction
     let title: String
     let showsLabel: Bool
+    let showsIcon: Bool
     let tooltip: String
     let emphasis: UXActionEmphasis
+    var badgeCount: Int?
     var isPreviewHovered = false
     let perform: () -> Void
     private let isEnabledOverride: Bool
+    private let labelHorizontalPadding: CGFloat
 
     @State private var isHovered = false
 
@@ -333,17 +394,23 @@ struct UXActionButton: View {
         action: UXEditorAction,
         title: String,
         showsLabel: Bool,
+        showsIcon: Bool = true,
         isEnabled: Bool,
         tooltip: String,
         emphasis: UXActionEmphasis = .standard,
+        badgeCount: Int? = nil,
+        labelHorizontalPadding: CGFloat = 4,
         isPreviewHovered: Bool = false,
         perform: @escaping () -> Void
     ) {
         self.action = action
         self.title = title
         self.showsLabel = showsLabel
+        self.showsIcon = showsIcon
         self.tooltip = tooltip
         self.emphasis = emphasis
+        self.badgeCount = badgeCount
+        self.labelHorizontalPadding = labelHorizontalPadding
         self.isPreviewHovered = isPreviewHovered
         self.perform = perform
         self.isEnabledOverride = isEnabled
@@ -353,21 +420,43 @@ struct UXActionButton: View {
         (isHovered || isPreviewHovered) && isEnabledOverride
     }
 
+    private var accessibilityTitle: String {
+        guard let badgeCount else { return title }
+        let format = appState.localized("ux.action.badge.accessibility")
+        return "\(title), \(String(format: format, badgeCount))"
+    }
+
     var body: some View {
         Button(action: perform) {
             HStack(spacing: 4) {
-                Image(systemName: action.systemImage)
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 13)
+                if showsIcon {
+                    Image(systemName: action.systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 13)
+                }
                 if showsLabel {
                     Text(title)
                         .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
                         .fixedSize()
                 }
+                if let badgeCount {
+                    Text("\(badgeCount)")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(theme.background)
+                        .padding(.horizontal, 3)
+                        .frame(minWidth: 13, minHeight: 13)
+                        .background {
+                            Capsule().fill(theme.warning)
+                        }
+                        .accessibilityHidden(true)
+                }
             }
-            .padding(.horizontal, showsLabel ? 4 : 0)
-            .frame(width: showsLabel ? nil : 24, height: 26)
+            .padding(.horizontal, showsLabel ? labelHorizontalPadding : 0)
+            .frame(
+                width: showsLabel ? nil : (badgeCount == nil ? 24 : 36),
+                height: 26
+            )
             .foregroundStyle(foreground)
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -382,7 +471,7 @@ struct UXActionButton: View {
         .disabled(!isEnabledOverride)
         .onHover { isHovered = $0 }
         .help(tooltip)
-        .accessibilityLabel(title)
+        .accessibilityLabel(accessibilityTitle)
         .accessibilityHint(tooltip)
         .accessibilityIdentifier("ux-action-\(action.rawValue)")
     }
@@ -410,7 +499,10 @@ struct UXActionButton: View {
     }
 }
 
-/// The two chips in the scene meta line. Both open the inspector's Scene tab.
+/// The chips in the scene meta line. Duration and takes open the Scene tab;
+/// the research chip opens the Investigación tab. This is the single place the
+/// scene's pending-claim count is shown (the former amber badge is folded into
+/// the chip style here).
 struct UXSceneMetaChips: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
@@ -420,8 +512,26 @@ struct UXSceneMetaChips: View {
 
     var body: some View {
         let takes = appState.recording.takes(in: scene)
-        if scene.targetDuration != nil || !takes.isEmpty {
+        let pendingResearch = appState.researchUnconfirmedCount(for: scene.id)
+        if scene.targetDuration != nil || !takes.isEmpty || pendingResearch > 0 {
             HStack(spacing: 6) {
+                if pendingResearch > 0 {
+                    chip(
+                        systemImage: "checkmark.shield",
+                        text: UXSceneResearchChip.text(
+                            pending: pendingResearch,
+                            language: appState.currentLanguage
+                        ),
+                        help: String(
+                            format: appState.localized("ux.chip.research.help"),
+                            pendingResearch
+                        ),
+                        identifier: "ux-chip-research",
+                        tint: theme.warning
+                    ) {
+                        openResearchTab()
+                    }
+                }
                 if let target = scene.targetDuration {
                     chip(
                         systemImage: "target",
@@ -431,7 +541,9 @@ struct UXSceneMetaChips: View {
                             DurationEstimator.formatted(target)
                         ),
                         identifier: "ux-chip-target"
-                    )
+                    ) {
+                        openSceneTab()
+                    }
                 }
                 if !takes.isEmpty {
                     chip(
@@ -443,7 +555,9 @@ struct UXSceneMetaChips: View {
                         ),
                         help: appState.localized("ux.chip.takes.help"),
                         identifier: "ux-chip-takes"
-                    )
+                    ) {
+                        openSceneTab()
+                    }
                 }
             }
         }
@@ -453,16 +567,35 @@ struct UXSceneMetaChips: View {
         systemImage: String,
         text: String,
         help: String,
-        identifier: String
+        identifier: String,
+        tint: Color? = nil,
+        action: @escaping () -> Void
     ) -> some View {
-        UXMetaChip(systemImage: systemImage, text: text, help: help, identifier: identifier) {
-            openSceneTab()
-        }
+        UXMetaChip(
+            systemImage: systemImage,
+            text: text,
+            help: help,
+            identifier: identifier,
+            tint: tint,
+            action: action
+        )
     }
 
     private func openSceneTab() {
         appState.settings.editorPreferences.showAIReviewPanel = true
         inspectorState?.select(.scene)
+    }
+
+    private func openResearchTab() {
+        appState.settings.editorPreferences.showAIReviewPanel = true
+        inspectorState?.select(.research)
+    }
+}
+
+/// Pure text for the scene research chip, exposed for localization tests.
+enum UXSceneResearchChip {
+    static func text(pending: Int, language: AppLanguage) -> String {
+        L10n.plural("ux.chip.research", count: pending, language: language)
     }
 }
 
@@ -472,6 +605,7 @@ private struct UXMetaChip: View {
     let text: String
     let help: String
     let identifier: String
+    var tint: Color?
     let action: () -> Void
 
     @State private var isHovered = false
@@ -488,10 +622,10 @@ private struct UXMetaChip: View {
             }
             .padding(.horizontal, 7)
             .frame(height: 19)
-            .foregroundStyle(isHovered ? theme.accentText : theme.secondaryText)
+            .foregroundStyle(tint ?? (isHovered ? theme.accentText : theme.secondaryText))
             .background {
                 Capsule()
-                    .fill(isHovered ? theme.accentSoft : theme.hover)
+                    .fill(background)
             }
             .contentShape(Capsule())
         }
@@ -502,5 +636,12 @@ private struct UXMetaChip: View {
         .help(help)
         .accessibilityLabel("\(text). \(help)")
         .accessibilityIdentifier(identifier)
+    }
+
+    private var background: Color {
+        if let tint {
+            return tint.opacity(isHovered ? 0.24 : 0.15)
+        }
+        return isHovered ? theme.accentSoft : theme.hover
     }
 }

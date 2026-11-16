@@ -735,7 +735,13 @@ struct ProductionToolbarButton: View {
         }
         .buttonStyle(.cursorPlain)
         .foregroundStyle(theme.secondaryText)
-        .help(appState.localized("production.toolbar.help"))
+        .help(
+            UXActionTooltip.text(
+                title: appState.localized("production.toolbar.help"),
+                command: .productionChecklist,
+                settings: appState.settings
+            )
+        )
         .accessibilityLabel(
             pendingCount > 0
                 ? String(format: appState.localized("production.badge.accessibility"), pendingCount)

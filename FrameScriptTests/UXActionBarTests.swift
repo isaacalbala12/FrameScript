@@ -183,6 +183,14 @@ final class UXActionBarTests: FrameScriptTestCase {
                     let command = action.shortcutCommand
                     let expected = command.map(availability.isEnabled) ?? false
                     XCTAssertEqual(model.isEnabled(action), expected, "\(action) must follow the matrix")
+                case .project:
+                    let command = action.shortcutCommand
+                    let expected = command.map(availability.isEnabled) ?? false
+                    XCTAssertEqual(
+                        model.isEnabled(action),
+                        expected,
+                        "\(action) must use the same matrix as its menu command"
+                    )
                 }
             }
         }
@@ -275,18 +283,34 @@ final class UXActionBarTests: FrameScriptTestCase {
 
     // MARK: - Narrow column
 
-    func testLabelModesDescribeTheThreeFitStages() {
+    func testLabelModesDescribeTheFitStages() {
         XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .insert))
         XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .ai))
         XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .production))
+        XCTAssertTrue(UXActionBarLabelMode.all.showsLabel(for: .project))
 
-        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .insert))
-        XCTAssertFalse(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .ai))
-        XCTAssertTrue(UXActionBarLabelMode.insertAndProduction.showsLabel(for: .production))
+        XCTAssertTrue(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .project))
+        XCTAssertTrue(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .production))
+        XCTAssertFalse(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .insert))
+        XCTAssertFalse(UXActionBarLabelMode.projectAndProduction.showsLabel(for: .ai))
+
+        for mode in [UXActionBarLabelMode.project, .projectTextOnly] {
+            XCTAssertTrue(mode.showsLabel(for: .project))
+            XCTAssertFalse(mode.showsLabel(for: .insert))
+            XCTAssertFalse(mode.showsLabel(for: .ai))
+            XCTAssertFalse(mode.showsLabel(for: .production))
+        }
 
         XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .insert))
         XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .ai))
         XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .production))
+        XCTAssertFalse(UXActionBarLabelMode.none.showsLabel(for: .project))
+
+        // Only the tightest labeled stage drops the Proyecto icons.
+        XCTAssertFalse(UXActionBarLabelMode.projectTextOnly.showsIcon(for: .project))
+        XCTAssertTrue(UXActionBarLabelMode.projectTextOnly.showsIcon(for: .insert))
+        XCTAssertTrue(UXActionBarLabelMode.project.showsIcon(for: .project))
+        XCTAssertTrue(UXActionBarLabelMode.none.showsIcon(for: .project))
     }
 
     func testOnlyRecordTakeUsesTheFilledPrimaryStyle() {
