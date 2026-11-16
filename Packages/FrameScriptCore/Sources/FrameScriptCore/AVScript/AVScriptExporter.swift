@@ -230,6 +230,15 @@ public enum AVScriptExporter {
         return includesBOM ? "\u{FEFF}" + csv : csv
     }
 
+    /// A field that starts with "- " is dialogue prose only when the next
+    /// character is a letter or opening punctuation and no pipe (a spreadsheet
+    /// formula operator) appears anywhere. Everything else stays escaped.
+    static func isDialogueProse(_ field: String) -> Bool {
+        guard field.hasPrefix("- "), !field.contains("|") else { return false }
+        guard let first = field.dropFirst(2).first else { return false }
+        return first.isLetter || "¿¡«\"".contains(first)
+    }
+
     private static func csvRow(
         scene: String,
         paragraph: String,
@@ -253,11 +262,8 @@ public enum AVScriptExporter {
         ]
         return fields.enumerated()
             .map { index, field in
-                // A dialogue dash ("- ...") is prose, not a formula. Only the
-                // two prose columns get that exemption; a bare "-1" still is
-                // escaped because it has no space after the dash.
                 let isProse = index == 2 || index == 4
-                let shouldEscape = escapeFormulas && !(isProse && field.hasPrefix("- "))
+                let shouldEscape = escapeFormulas && !(isProse && isDialogueProse(field))
                 return ShotListCSV.escape(field, escapeFormulas: shouldEscape)
             }
             .joined(separator: ",")

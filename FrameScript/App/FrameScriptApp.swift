@@ -444,7 +444,7 @@ enum PhysicalShortcutMenuDispatcher {
     ) -> Bool {
         let modifiers = shortcutModifiers(from: event.modifierFlags)
         guard !modifiers.isEmpty,
-              let binding = physicalBinding(for: event, modifiers: modifiers),
+              let binding = physicalBinding(for: event, modifiers: modifiers, settings: settings),
               binding.isValid,
               ShortcutRegistry.isAssignable(binding),
               let command = ShortcutRegistry.command(
@@ -465,18 +465,29 @@ enum PhysicalShortcutMenuDispatcher {
         return menu.performKeyEquivalent(with: canonicalEvent)
     }
 
-    /// Layout-aware binding. `+` is produced by different physical keys on a
-    /// US and a Spanish ISO keyboard, so the produced character wins over the
-    /// ANSI key-code table when it is unambiguous.
+    /// Layout-aware binding. The physical key wins when a command is assigned
+    /// to it (the shortcut recorder stores ANSI key codes, so a Spanish `+`
+    /// key is stored as `⌘]`). Only an unassigned physical key falls back to
+    /// the produced `+` character, which is how the timeline zoom alternate
+    /// works on layouts where `+` has its own key.
     private static func physicalBinding(
         for event: NSEvent,
-        modifiers: Set<ShortcutModifier>
+        modifiers: Set<ShortcutModifier>,
+        settings: AppSettings
     ) -> ShortcutBinding? {
+        let physical = ShortcutPhysicalKeyMapper.binding(
+            for: event.keyCode,
+            modifiers: modifiers
+        )
+        if let physical,
+           ShortcutRegistry.command(for: physical, overrides: settings.shortcutOverrides) != nil {
+            return physical
+        }
         let characters = event.charactersIgnoringModifiers ?? event.characters
         if characters == "+" {
             return ShortcutBinding("+", modifiers: modifiers)
         }
-        return ShortcutPhysicalKeyMapper.binding(for: event.keyCode, modifiers: modifiers)
+        return physical
     }
 
     private static func hasEnabledMatchingMenuItem(for event: NSEvent, in menu: NSMenu) -> Bool {

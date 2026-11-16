@@ -147,6 +147,36 @@ final class W3FixABFAVEditorTests: XCTestCase {
         XCTAssertEqual(narrationViews().map(\.string), ["P1 edited", "P2"])
     }
 
+    func testW3FixABFEditInScriptSelectsTheRangeInTheRealScriptEditor() throws {
+        let paragraphRange = (editorScene.scriptText as NSString).range(of: "P2")
+        appState.editAVParagraphInScript(
+            sceneID: editorScene.id,
+            range: paragraphRange
+        )
+
+        host.window.contentView = nil
+        let theme = FrameTheme(colorScheme: .light, accent: .sage)
+        let root = ScriptEditorView(scene: editorScene, editorSessionID: UUID())
+            .environment(appState)
+            .environment(\.frameTheme, theme)
+            .frame(width: 1180, height: 760)
+        let scriptHost = W3FixABFOffscreenHost(
+            root,
+            size: CGSize(width: 1180, height: 760)
+        )
+        scriptHost.pump(0.3)
+        defer { scriptHost.window.contentView = nil }
+
+        XCTAssertEqual(appState.selectedMode, .script)
+        let scriptEditor = try XCTUnwrap(
+            scriptHost.subviews(of: NSTextView.self).first {
+                $0 is PlaceholderTextView && $0.string == editorScene.scriptText
+            },
+            "the Script editor text view is missing: \(scriptHost.subviews(of: NSTextView.self).map(\.string))"
+        )
+        XCTAssertEqual(scriptEditor.selectedRange(), paragraphRange)
+    }
+
     // MARK: - Annotations stay editable
 
     func testW3FixABFAnnotationTextStaysEditable() throws {
@@ -169,13 +199,26 @@ final class W3FixABFAVEditorTests: XCTestCase {
 
     // MARK: - A-6 CSV
 
-    func testW3FixABFAVCSVExemptsDashSpaceNarrationButEscapesFormulas() throws {
-        editorScene.scriptText = "- uno dos\n\n=SUM(1)"
+    func testW3FixABFAVCSVExemptsProseDashesButEscapesFormulaLikeText() throws {
+        editorScene.scriptText = """
+        - Hola, qué tal
+
+        - =cmd|' /C calc'!A0
+
+        - 2+3+cmd|' /C calc'!A0
+
+        - 1+1
+
+        =SUM(1)
+        """
         appState.touchProject()
 
         let csv = appState.avScriptExportText(format: .csv, escapeFormulas: true)
-        XCTAssertTrue(csv.contains(",- uno dos,"), "dialogue dashes must not become apostrophes: \(csv)")
-        XCTAssertFalse(csv.contains("'- uno dos"), csv)
+        XCTAssertTrue(csv.contains("- Hola, qué tal"), "dialogue prose stays untouched: \(csv)")
+        XCTAssertFalse(csv.contains("'- Hola"), csv)
+        XCTAssertTrue(csv.contains("'- =cmd|' /C calc'!A0"), csv)
+        XCTAssertTrue(csv.contains("'- 2+3+cmd|' /C calc'!A0"), csv)
+        XCTAssertTrue(csv.contains("'- 1+1"), csv)
         XCTAssertTrue(csv.contains("'=SUM(1)"), "formula-like narration stays neutralised")
     }
 

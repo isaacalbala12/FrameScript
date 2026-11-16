@@ -136,15 +136,30 @@ struct W3FixABFCoreTests {
             AVScriptSceneInput(
                 id: UUID(),
                 title: "Escena",
-                scriptText: "- uno dos\n\n-1+2\n\nTexto normal",
+                scriptText: """
+                - Hola, qué tal
+
+                - =cmd|' /C calc'!A0
+
+                - 2+3+cmd|' /C calc'!A0
+
+                - 1+1
+
+                -1+2
+
+                Texto normal
+                """,
                 annotations: []
             )
         )
         let document = AVScriptDocument(title: "Prueba", scenes: [scene])
 
         let csv = AVScriptExporter.csv(document: document, escapeFormulas: true)
-        #expect(csv.contains(",- uno dos,"))
-        #expect(!csv.contains("'- uno dos"))
+        #expect(csv.contains("- Hola, qué tal"))
+        #expect(!csv.contains("'- Hola"))
+        #expect(csv.contains("'- =cmd|' /C calc'!A0"))
+        #expect(csv.contains("'- 2+3+cmd|' /C calc'!A0"))
+        #expect(csv.contains("'- 1+1"))
         #expect(csv.contains("'-1+2"))
         #expect(csv.contains("Texto normal"))
     }

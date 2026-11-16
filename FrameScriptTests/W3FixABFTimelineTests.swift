@@ -101,26 +101,13 @@ final class W3FixABFTimelineTests: XCTestCase {
         )
     }
 
-    func testW3FixABFPlusZoomWorksThroughTheRealPhysicalRouter() throws {
+    func testW3FixABFPlusZoomWorksWhenThePhysicalKeyHasNoCommand() throws {
         let settings = AppSettings.defaults
         let menu = NSMenu()
         var performed: ShortcutCommand?
 
-        // Spanish ISO: the "+" key is keyCode 30 with characters "+".
-        let plus = try XCTUnwrap(
-            NSEvent.keyEvent(
-                with: .keyDown,
-                location: .zero,
-                modifierFlags: [.command],
-                timestamp: 0,
-                windowNumber: 0,
-                context: nil,
-                characters: "+",
-                charactersIgnoringModifiers: "+",
-                isARepeat: false,
-                keyCode: 30
-            )
-        )
+        // Spanish ISO: keyCode 30 produces "+" on that layout.
+        let plus = try plusEvent(layout: .spanish)
         XCTAssertTrue(
             PhysicalShortcutMenuDispatcher.dispatch(plus, settings: settings, menu: menu) { command in
                 performed = command
@@ -129,22 +116,9 @@ final class W3FixABFTimelineTests: XCTestCase {
         )
         XCTAssertEqual(performed, .timelineZoomIn)
 
-        // US: ⇧⌘= still reaches the same command through the ANSI key code.
+        // US: ⇧⌘= reports characters "+" and charactersIgnoringModifiers "=".
         performed = nil
-        let shiftEquals = try XCTUnwrap(
-            NSEvent.keyEvent(
-                with: .keyDown,
-                location: .zero,
-                modifierFlags: [.command, .shift],
-                timestamp: 0,
-                windowNumber: 0,
-                context: nil,
-                characters: "=",
-                charactersIgnoringModifiers: "=",
-                isARepeat: false,
-                keyCode: 24
-            )
-        )
+        let shiftEquals = try plusEvent(layout: .usShiftEquals)
         XCTAssertTrue(
             PhysicalShortcutMenuDispatcher.dispatch(shiftEquals, settings: settings, menu: menu) { command in
                 performed = command
@@ -152,6 +126,128 @@ final class W3FixABFTimelineTests: XCTestCase {
             }
         )
         XCTAssertEqual(performed, .timelineZoomIn)
+    }
+
+    func testW3FixABFUserShortcutOnSpanishPlusKeyWins() throws {
+        var settings = AppSettings.defaults
+        XCTAssertNil(
+            settings.setShortcut(
+                .init("]", modifiers: [.command]),
+                for: .saveAs
+            )
+        )
+        let target = W3FixABFMenuTarget()
+        let menu = makeMenu(
+            title: "Save As",
+            keyEquivalent: "]",
+            modifiers: [.command],
+            target: target
+        )
+        var alternate: ShortcutCommand?
+
+        let handled = PhysicalShortcutMenuDispatcher.dispatch(
+            try plusEvent(layout: .spanish),
+            settings: settings,
+            menu: menu
+        ) { command in
+            alternate = command
+            return true
+        }
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(target.fired, "the user's ⌘] command must fire")
+        XCTAssertNil(alternate, "the timeline alternate must not replace a user binding")
+    }
+
+    func testW3FixABFUserShortcutOnShiftCommandEqualsWins() throws {
+        var settings = AppSettings.defaults
+        XCTAssertNil(
+            settings.setShortcut(
+                .init("=", modifiers: [.command, .shift]),
+                for: .saveAs
+            )
+        )
+        let target = W3FixABFMenuTarget()
+        let menu = makeMenu(
+            title: "Save As",
+            keyEquivalent: "=",
+            modifiers: [.command, .shift],
+            target: target
+        )
+        var alternate: ShortcutCommand?
+
+        let handled = PhysicalShortcutMenuDispatcher.dispatch(
+            try plusEvent(layout: .usShiftEquals),
+            settings: settings,
+            menu: menu
+        ) { command in
+            alternate = command
+            return true
+        }
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(target.fired, "the user's ⇧⌘= command must fire")
+        XCTAssertNil(alternate, "the timeline alternate must not replace a user binding")
+    }
+
+    private enum PlusEventLayout {
+        case spanish
+        case usShiftEquals
+    }
+
+    /// The events macOS actually delivers: Spanish "+" is keyCode 30; US ⇧⌘=
+    /// reports the produced "+" while `charactersIgnoringModifiers` is "=".
+    private func plusEvent(layout: PlusEventLayout) throws -> NSEvent {
+        switch layout {
+        case .spanish:
+            return try XCTUnwrap(
+                NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [.command],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "+",
+                    charactersIgnoringModifiers: "+",
+                    isARepeat: false,
+                    keyCode: 30
+                )
+            )
+        case .usShiftEquals:
+            return try XCTUnwrap(
+                NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [.command, .shift],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "+",
+                    charactersIgnoringModifiers: "=",
+                    isARepeat: false,
+                    keyCode: 24
+                )
+            )
+        }
+    }
+
+    private func makeMenu(
+        title: String,
+        keyEquivalent: String,
+        modifiers: NSEvent.ModifierFlags,
+        target: W3FixABFMenuTarget
+    ) -> NSMenu {
+        let menu = NSMenu()
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(W3FixABFMenuTarget.fire(_:)),
+            keyEquivalent: keyEquivalent
+        )
+        item.keyEquivalentModifierMask = modifiers
+        item.target = target
+        menu.addItem(item)
+        return menu
     }
 
     // MARK: - N-2
@@ -328,5 +424,14 @@ final class W3FixABFTimelineTests: XCTestCase {
         applicationState.editorState.selectedSceneID = scene.id
         appState = applicationState
         return applicationState
+    }
+}
+
+@MainActor
+private final class W3FixABFMenuTarget: NSObject {
+    private(set) var fired = false
+
+    @objc func fire(_ sender: Any?) {
+        fired = true
     }
 }
