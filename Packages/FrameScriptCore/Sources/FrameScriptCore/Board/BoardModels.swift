@@ -262,6 +262,34 @@ public struct BoardProjectSummary: Sendable, Equatable, Identifiable {
             fingerprint: fingerprint
         )
     }
+
+    /// Marks the row as impossible to reuse from the incremental scan. The
+    /// next refresh (or the explicit reload posted when the open project is
+    /// saved/closed/discarded) must decode the file again instead of trusting
+    /// a summary that only exists in memory.
+    public func markingIndexStale() -> BoardProjectSummary {
+        BoardProjectSummary(
+            fileURL: fileURL,
+            projectID: projectID,
+            title: title,
+            topic: topic,
+            videoType: videoType,
+            productionStatus: productionStatus,
+            targetDate: targetDate,
+            publishDate: publishDate,
+            updatedAt: updatedAt,
+            createdAt: createdAt,
+            templateID: templateID,
+            sceneCount: sceneCount,
+            duration: duration,
+            pendingTasks: pendingTasks,
+            fingerprint: BoardFileFingerprint(
+                contentHash: "",
+                fileSize: -1,
+                modificationDate: .distantPast
+            )
+        )
+    }
 }
 
 /// A file or folder the scan could not use. The board shows these instead of

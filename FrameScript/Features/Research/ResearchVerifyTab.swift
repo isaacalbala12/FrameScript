@@ -120,7 +120,7 @@ struct ResearchVerifyTab: View {
                         presentation.statusMessage = appState.localized("research.verify.descriptionEmpty")
                     }
                 }
-                .buttonStyle(FrameSecondaryButtonStyle(compact: true))
+                .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
                 .disabled(appState.project.sources.isEmpty && appState.project.claims.isEmpty)
             }
         }

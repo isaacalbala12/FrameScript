@@ -173,12 +173,13 @@ struct W3FixEGIResearchRepairTests {
     }
 
     @Test func w3FixEGIResearchCountsMatchProductionForTheSameFixture() {
+        let sceneID = UUID()
         let claims = [
-            FrameScriptDocument.Claim(text: "Probable", status: .probable, needsVerification: true),
-            FrameScriptDocument.Claim(text: "Confirmada", status: .confirmed),
-            FrameScriptDocument.Claim(text: "Confirmada con recheck", status: .confirmed, needsVerification: true),
-            FrameScriptDocument.Claim(text: "Rumor", status: .rumor),
-            FrameScriptDocument.Claim(text: "Experiencia", status: .probable, personalExperience: true)
+            FrameScriptDocument.Claim(text: "Probable", status: .probable, sceneIDs: [sceneID], needsVerification: true),
+            FrameScriptDocument.Claim(text: "Confirmada", status: .confirmed, sceneIDs: [sceneID]),
+            FrameScriptDocument.Claim(text: "Confirmada con recheck", status: .confirmed, sceneIDs: [sceneID], needsVerification: true),
+            FrameScriptDocument.Claim(text: "Rumor", status: .rumor, sceneIDs: [sceneID]),
+            FrameScriptDocument.Claim(text: "Experiencia", status: .probable, sceneIDs: [sceneID], personalExperience: true)
         ]
         let project = FrameScriptDocument.Project(
             title: "Fixture",
@@ -190,6 +191,45 @@ struct W3FixEGIResearchRepairTests {
             ResearchSummary.counts(claims: claims).pending
                 == ProductionChecklist.summary(for: project).pendingCount(for: .research)
         )
-        #expect(ResearchSummary.unconfirmedCountsByScene(claims: claims).isEmpty)
+        #expect(ResearchSummary.counts(claims: claims).pending == 3)
+        #expect(ResearchSummary.unconfirmedCountsByScene(claims: claims)[sceneID] == 3)
+    }
+
+    @Test func w3FixEGIMissingVerificationFlagDefaultsOnForNonConfirmedClaims() throws {
+        let project = FrameScriptDocument.Project(
+            title: "Flag defaults",
+            primaryLanguage: "es",
+            claims: [
+                FrameScriptDocument.Claim(
+                    text: "Probable sin clave",
+                    status: .probable,
+                    needsVerification: true
+                ),
+                FrameScriptDocument.Claim(
+                    text: "Confirmada sin clave",
+                    status: .confirmed,
+                    needsVerification: false
+                ),
+                FrameScriptDocument.Claim(
+                    text: "Explicitamente aceptada",
+                    status: .probable,
+                    needsVerification: false
+                )
+            ]
+        )
+        let data = try FrameScriptDocumentCodec.encode(FrameScriptDocument(project: project))
+        var root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var projectJSON = try #require(root["project"] as? [String: Any])
+        var claims = try #require(projectJSON["claims"] as? [[String: Any]])
+        claims[0].removeValue(forKey: "needsVerification")
+        claims[1].removeValue(forKey: "needsVerification")
+        projectJSON["claims"] = claims
+        root["project"] = projectJSON
+        let modified = try JSONSerialization.data(withJSONObject: root)
+
+        let decoded = try FrameScriptDocumentCodec.decode(modified)
+        #expect(decoded.project.claims[0].needsVerification)
+        #expect(!decoded.project.claims[1].needsVerification)
+        #expect(!decoded.project.claims[2].needsVerification)
     }
 }

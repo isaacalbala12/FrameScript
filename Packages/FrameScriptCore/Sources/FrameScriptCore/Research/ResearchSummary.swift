@@ -1,8 +1,8 @@
 import Foundation
 
 /// Counters for the research panel. `pending` is derived from
-/// `ResearchSummary.isPending`: first-hand experience never counts, and an
-/// unflagged claim still counts while it is not confirmed.
+/// `ResearchSummary.isPending`: first-hand experience never counts, and
+/// otherwise the `needsVerification` flag decides.
 public struct ResearchCounts: Sendable, Equatable {
     public var confirmed = 0
     public var probable = 0
@@ -121,12 +121,14 @@ public struct ResearchFilter: Sendable, Equatable {
 
 public enum ResearchSummary {
     /// One rule shared by Production, the research panel, the scene badges and
-    /// the board: first-hand experience never needs a fact check, and a claim is
-    /// pending while it is not confirmed or while it is explicitly flagged for a
-    /// second check. Using one predicate keeps the counters and the checklist
-    /// from disagreeing (E-3, NEW-5).
+    /// the board: first-hand experience never needs a fact check, and the
+    /// `needsVerification` flag decides for everyone else. New non-confirmed
+    /// claims start flagged; confirming clears the flag automatically; a
+    /// confirmed claim can be flagged again for a second check. Unticking it
+    /// means "accepted as is", so the claim leaves every pending list (E-3,
+    /// NEW-5, product decision).
     public static func isPending(_ claim: FrameScriptDocument.Claim) -> Bool {
-        !claim.personalExperience && (claim.status != .confirmed || claim.needsVerification)
+        !claim.personalExperience && claim.needsVerification
     }
 
     public static func counts(claims: [FrameScriptDocument.Claim]) -> ResearchCounts {

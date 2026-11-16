@@ -53,9 +53,9 @@ final class ResearchFeatureTests: XCTestCase {
         XCTAssertEqual(counts.confirmed, 1)
         XCTAssertEqual(counts.probable, 1)
         XCTAssertEqual(counts.communityOpinion, 1)
-        XCTAssertEqual(counts.pending, 2)
+        XCTAssertEqual(counts.pending, 1)
         XCTAssertEqual(appState.researchUnconfirmedCount(for: first.id), 1)
-        XCTAssertEqual(appState.researchUnconfirmedCount(for: second.id), 1)
+        XCTAssertEqual(appState.researchUnconfirmedCount(for: second.id), 0)
     }
 
     func testSceneFilterAndPendingFilterNarrowClaims() {

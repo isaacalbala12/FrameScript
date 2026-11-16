@@ -459,8 +459,9 @@ struct ProjectClaim: Identifiable, Codable, Hashable, Sendable {
     var resolutionNote: String
 
     /// Shared pending rule with `ResearchSummary.isPending` (E-3, NEW-5).
+    /// The checkbox decides; confirming clears it automatically.
     var needsResearch: Bool {
-        !personalExperience && (status != .confirmed || needsVerification)
+        !personalExperience && needsVerification
     }
 
     init(
@@ -471,7 +472,7 @@ struct ProjectClaim: Identifiable, Codable, Hashable, Sendable {
         sceneIDs: [UUID] = [],
         anchorSceneID: UUID? = nil,
         anchor: TextAnchor? = nil,
-        needsVerification: Bool = false,
+        needsVerification: Bool? = nil,
         personalExperience: Bool = false,
         resolutionNote: String = ""
     ) {
@@ -482,7 +483,7 @@ struct ProjectClaim: Identifiable, Codable, Hashable, Sendable {
         self.sceneIDs = sceneIDs
         self.anchorSceneID = anchorSceneID
         self.anchor = anchor
-        self.needsVerification = needsVerification
+        self.needsVerification = needsVerification ?? (status != .confirmed)
         self.personalExperience = personalExperience
         self.resolutionNote = resolutionNote
     }

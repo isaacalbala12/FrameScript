@@ -86,6 +86,15 @@ enum OpenProjectResult: Equatable {
     case failed
 }
 
+extension Notification.Name {
+    /// Posted with the file URL when the open project's disk file was saved,
+    /// reloaded, closed or discarded. The board re-reads that row so a card
+    /// never keeps a state that was never written (NEW-2 follow-up).
+    static let frameScriptProjectFileStateDidChange = Notification.Name(
+        "FrameScriptProjectFileStateDidChange"
+    )
+}
+
 /// What the user chose when the project file changed outside FrameScript.
 enum ExternalProjectChangeResolution {
     case reload
@@ -496,6 +505,7 @@ final class AppState {
 
     func createNewProject(named name: String, template: FrameTemplate? = nil) {
         guard prepareForProjectReplacement() else { return }
+        let replacedURL = projectStore.currentFileURL
         let selectedTemplate = template ?? templates.first { $0.name == settings.generalPreferences.defaultNewProjectTemplate } ?? templates.first
         let title = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? localized("project.untitled") : name.trimmingCharacters(in: .whitespacesAndNewlines)
         let project = SampleData.project(
@@ -515,10 +525,12 @@ final class AppState {
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
         editorState.isFocusModeEnabled = false
         windowState.newProjectRequest = nil
+        notifyBoardOfProjectFileStateChange(at: replacedURL)
     }
 
     func openDemoProject() {
         guard prepareForProjectReplacement() else { return }
+        let replacedURL = projectStore.currentFileURL
         let project = SampleData.demoProject(language: resolvedCurrentLanguage)
         willReplaceOpenProject()
         projectStore.openProject(
@@ -533,6 +545,7 @@ final class AppState {
         projectStore.synchronizeTextSegments(splitMode: settings.generalPreferences.defaultSplitMode, wordsPerMinute: currentDurationWordsPerMinute)
         projectStore.clearDemoDirtyState()
         setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id), mode: .script)
+        notifyBoardOfProjectFileStateChange(at: replacedURL)
     }
 
     func openProject() {
@@ -554,6 +567,7 @@ final class AppState {
                 try FrameScriptFileStore.readWithData(from: url)
             }
             let project = opened.project
+            let replacedURL = projectStore.currentFileURL
             // The file was read and decoded: only now may the open project and
             // its teleprompter/AI state be dropped.
             willReplaceOpenProject()
@@ -569,6 +583,7 @@ final class AppState {
             setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
             startTrackingProjectFile(at: url, data: opened.data)
             failedOpenProjectFileURL = nil
+            notifyBoardOfProjectFileStateChange(at: replacedURL)
             return .opened
         } catch {
             Self.projectFilesLogger.error("Operation project-open failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -595,6 +610,7 @@ final class AppState {
             try securityScope.withAccess(to: url) {
                 let opened = try FrameScriptFileStore.readWithData(from: url)
                 let project = opened.project
+                let replacedURL = projectStore.currentFileURL
                 willReplaceOpenProject()
                 projectStore.openProject(
                     project,
@@ -608,6 +624,7 @@ final class AppState {
                 setEditorContextAfterFlush(sceneID: .some(project.scenes.sortedByOrder.first?.id))
                 startTrackingProjectFile(at: url, data: opened.data)
                 failedOpenProjectFileURL = nil
+                notifyBoardOfProjectFileStateChange(at: replacedURL)
             }
         } catch RecentProjectStoreError.missingFile {
             Self.projectFilesLogger.notice("Recent project file is missing; removing the entry.")
@@ -651,6 +668,7 @@ final class AppState {
             recordProjectFileSnapshotAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
+            notifyBoardOfProjectFileStateChange(at: url)
             return true
         } catch {
             Self.projectFilesLogger.error("Operation project-save failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -663,6 +681,7 @@ final class AppState {
     func saveProjectAs() -> Bool {
         guard hasOpenProject else { return false }
         flushActiveEditorBoundary(saveImmediately: false)
+        let previousURL = projectStore.currentFileURL
         let url: URL
         if let saveAsDestinationProvider {
             guard let chosenURL = saveAsDestinationProvider() else { return false }
@@ -681,6 +700,8 @@ final class AppState {
             startTrackingProjectFileAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
             rememberRecentProject(url)
+            notifyBoardOfProjectFileStateChange(at: previousURL)
+            notifyBoardOfProjectFileStateChange(at: url)
             return true
         } catch {
             Self.projectFilesLogger.error("Operation project-save-as failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
@@ -748,6 +769,7 @@ final class AppState {
 
     func duplicateProject() {
         guard hasOpenProject else { return }
+        let replacedURL = projectStore.currentFileURL
         var copy: FrameProject?
         transitionEditorContext {
             copy = projectStore.duplicateProject(copySuffix: localized("templates.copySuffix"))
@@ -755,6 +777,7 @@ final class AppState {
         editorState.resetScriptEditorStates()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(copy?.scenes.sortedByOrder.first?.id))
+        notifyBoardOfProjectFileStateChange(at: replacedURL)
     }
 
     func selectPreviousScene() {
@@ -769,6 +792,7 @@ final class AppState {
         guard !refuseProjectChangeWhileRecording() else { return false }
         flushActiveEditorBoundary()
         guard confirmCloseProjectIfNeeded() else { return false }
+        let closedURL = projectStore.currentFileURL
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
         if let url = projectStore.currentFileURL {
             BackupsCenter.forget(projectID: BackupsCenter.projectID(for: projectStore.project, fileURL: url))
@@ -777,6 +801,7 @@ final class AppState {
         editorState.resetScriptEditorStates()
         resetProjectFileTracking()
         setEditorContextAfterFlush(sceneID: .some(nil))
+        notifyBoardOfProjectFileStateChange(at: closedURL)
         return true
     }
 
@@ -827,6 +852,7 @@ final class AppState {
                   !confirm(title: localized("dialog.deleteProject.title"), message: localized("dialog.deleteProject.message")) {
             return
         }
+        let deletedURL = projectStore.currentFileURL
         NotificationCenter.default.post(name: .frameScriptProjectWillChange, object: self)
         if let url = projectStore.currentFileURL {
             BackupsCenter.forget(projectID: BackupsCenter.projectID(for: projectStore.project, fileURL: url))
@@ -836,6 +862,7 @@ final class AppState {
         }
         editorState.resetScriptEditorStates()
         resetProjectFileTracking()
+        notifyBoardOfProjectFileStateChange(at: deletedURL)
     }
 
     func selectScene(_ sceneID: UUID) {
@@ -892,6 +919,17 @@ final class AppState {
     func touchProject() {
         projectStore.markProjectDirty()
         scheduleAutosaveIfNeeded()
+    }
+
+    /// Tells the board (if it is open) that this file's on-disk state changed
+    /// or that unsaved changes were abandoned. Posting a URL is cheap; every
+    /// `BoardStore` ignores URLs it did not index.
+    func notifyBoardOfProjectFileStateChange(at url: URL?) {
+        guard let url else { return }
+        NotificationCenter.default.post(
+            name: .frameScriptProjectFileStateDidChange,
+            object: url.standardizedFileURL
+        )
     }
 
     /// Refuses to close, replace or delete a project while a take is being
@@ -1742,6 +1780,7 @@ final class AppState {
             }
             recordProjectFileSnapshotAfterSave(at: url)
             errorCenter.clearAutosaveFailureSuppression()
+            notifyBoardOfProjectFileStateChange(at: url)
         } catch {
             Self.projectFilesLogger.error("Operation autosave failed. Code: \(self.diagnosticCode(for: error), privacy: .public)")
             errorCenter.presentAutosave(AppError.project(error, fileURL: projectStore.currentFileURL, operation: .autosave))

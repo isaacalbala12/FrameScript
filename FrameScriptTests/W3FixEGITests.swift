@@ -298,8 +298,16 @@ final class W3FixEGITests: FrameScriptTestCase {
             BoardProjectAccessibility.openActionName(appState: appState),
             appState.localized("board.action.open")
         )
-        XCTAssertTrue(BoardProjectAccessibility.handlesReturnKey(isSelected: true))
-        XCTAssertFalse(BoardProjectAccessibility.handlesReturnKey(isSelected: false))
+    }
+
+    func testW3FixEGIBoardReturnKeyOpensAFocusedProjectWithoutSelection() {
+        var opened: [String] = []
+        let result = BoardProjectKeyboard.open {
+            opened.append("proyecto-sin-seleccionar")
+        }
+
+        XCTAssertEqual(result, .handled)
+        XCTAssertEqual(opened, ["proyecto-sin-seleccionar"])
     }
 
     // MARK: - VW3 · Ensured-contrast kind text
@@ -389,6 +397,231 @@ final class W3FixEGITests: FrameScriptTestCase {
         XCTAssertFalse(plan.entries.contains { $0.task.title.hasPrefix("publishing.checklist.") })
     }
 
+    // MARK: - Must-fix 1 · The board never keeps an unsaved state
+
+    func testW3FixEGIBoardRefreshAfterDiscardingOpenProjectRereadsDisk() async throws {
+        let harness = try BoardTestHarness()
+        addTeardownBlock { harness.tearDown() }
+        let url = try harness.writeProject(
+            BoardTestHarness.makeDocument(
+                title: "Abierto",
+                topic: "Vantare",
+                videoType: "análisis",
+                status: .script,
+                scenes: [],
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            fileName: "abierto.fscr"
+        )
+        harness.appState.openProject(at: url)
+        await harness.refresh()
+        let summary = try XCTUnwrap(harness.board.index.summary(forFileAt: url))
+
+        let outcome = await harness.board.apply(
+            BoardProjectEdit(productionStatus: .recorded),
+            to: summary,
+            appState: harness.appState
+        )
+        guard case .saved(let edited) = outcome else {
+            return XCTFail("Expected a saved outcome, got \(outcome)")
+        }
+        XCTAssertEqual(edited.productionStatus, .recorded)
+        XCTAssertEqual(harness.board.summary(id: summary.id)?.productionStatus, .recorded)
+        XCTAssertEqual(try FrameScriptDocumentCodec.read(from: url).project.productionStatus, .script)
+
+        // A plain refresh must decode the file again: the in-memory summary is
+        // marked stale, so the incremental reuse cannot keep an unsaved state
+        // forever (must-fix 1).
+        await harness.refresh()
+        XCTAssertEqual(harness.board.summary(id: summary.id)?.productionStatus, .script)
+    }
+
+    func testW3FixEGIClosingWithoutSavingReloadsTheBoardRow() async throws {
+        let harness = try BoardTestHarness(closeConfirmation: { .discard })
+        addTeardownBlock { harness.tearDown() }
+        let url = try harness.writeProject(
+            BoardTestHarness.makeDocument(
+                title: "Abierto",
+                topic: "Vantare",
+                videoType: "análisis",
+                status: .script,
+                scenes: [],
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            fileName: "abierto.fscr"
+        )
+        harness.appState.openProject(at: url)
+        await harness.refresh()
+        let summary = try XCTUnwrap(harness.board.index.summary(forFileAt: url))
+        _ = await harness.board.apply(
+            BoardProjectEdit(productionStatus: .recorded),
+            to: summary,
+            appState: harness.appState
+        )
+        XCTAssertEqual(harness.board.summary(id: summary.id)?.productionStatus, .recorded)
+        XCTAssertTrue(harness.appState.projectStore.hasUnsavedFileChanges)
+
+        XCTAssertTrue(harness.appState.closeProject())
+        await harness.board.waitForPendingFileStateReloads()
+
+        XCTAssertEqual(harness.board.summary(id: summary.id)?.productionStatus, .script)
+        XCTAssertEqual(try FrameScriptDocumentCodec.read(from: url).project.productionStatus, .script)
+    }
+
+    // MARK: - Must-fix 2 · One publishing checklist per project
+
+    func testW3FixEGIPlanePlanHasEightPublishingTasksForTwoPacks() async throws {
+        let harness = try BoardTestHarness()
+        addTeardownBlock { harness.tearDown() }
+        let url = try harness.writeProject(
+            BoardTestHarness.makeDocument(
+                title: "Dos idiomas",
+                topic: "Vantare",
+                videoType: "análisis",
+                status: .script,
+                scenes: [],
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            fileName: "dos-idiomas.fscr"
+        )
+        var document = try FrameScriptDocumentCodec.read(from: url)
+        document.project.primaryLanguage = "es"
+        document.project.publishingPacks["es"] = FrameScriptDocument.PublishingPack()
+        document.project.publishingPacks["en"] = FrameScriptDocument.PublishingPack()
+        try FrameScriptDocumentCodec.write(document, to: url)
+        await harness.refresh()
+
+        let summary = try XCTUnwrap(harness.board.summaries.first { $0.title == "Dos idiomas" })
+        let plan = await harness.board.planePlan(for: summary, appState: harness.appState)
+        let publish = plan.entries.filter { $0.task.kind == .publicar }
+
+        XCTAssertEqual(publish.count, 8)
+        XCTAssertEqual(Set(publish.map { $0.task.id }).count, 8)
+        XCTAssertEqual(summary.pending.count(for: .publicar), 8)
+    }
+
+    // MARK: - Must-fix 3 · Backup failures reach BackupHealth
+
+    func testW3FixEGIBoardClosedFileWriteRecordsAFailedBackup() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("W3FixEGIBackups-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let failingStore = BackupStore(
+            rootDirectory: tempRoot,
+            fileManager: W3FixEGIFailingBackupFileManager()
+        )
+        let harness = try BoardTestHarness(backupStore: failingStore)
+        addTeardownBlock { harness.tearDown() }
+        let url = try harness.writeProject(
+            BoardTestHarness.makeDocument(
+                title: "Respaldo roto",
+                topic: "Vantare",
+                videoType: "análisis",
+                status: .script,
+                scenes: [],
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            fileName: "respaldo-roto.fscr"
+        )
+        await harness.refresh()
+        let summary = try XCTUnwrap(harness.board.index.summary(forFileAt: url))
+        let backupProjectID = BackupProjectIdentity.identifier(
+            projectUUID: summary.projectID,
+            fileURL: url
+        )
+        BackupHealth.shared.clear(projectID: backupProjectID)
+        addTeardownBlock { BackupHealth.shared.clear(projectID: backupProjectID) }
+
+        let outcome = await harness.board.apply(
+            BoardProjectEdit(productionStatus: .recorded),
+            to: summary,
+            appState: harness.appState
+        )
+
+        guard case .saved = outcome else {
+            return XCTFail("A failed backup must not cancel the board write: \(outcome)")
+        }
+        XCTAssertNotNil(
+            BackupHealth.shared.failure(for: backupProjectID),
+            "The failed backup was not surfaced through BackupHealth"
+        )
+        XCTAssertEqual(try FrameScriptDocumentCodec.read(from: url).project.productionStatus, .recorded)
+    }
+
+    // MARK: - Must-fix 4 · The checkbox is the pending rule
+
+    func testW3FixEGINewClaimStartsFlaggedAndUntickingAcceptsIt() {
+        let scene = makeScene(order: 0, title: "Escena", text: "Texto.")
+        let appState = makeAppState(project: FrameProject(
+            title: "Proyecto",
+            scenes: [scene],
+            primaryLanguage: "es"
+        ))
+
+        let claim = appState.addResearchClaim(
+            text: "En el foro dicen que llueve",
+            status: .communityOpinion,
+            sceneIDs: [scene.id]
+        )
+        XCTAssertTrue(claim.needsVerification)
+        XCTAssertEqual(appState.researchCounts().pending, 1)
+        XCTAssertEqual(appState.productionSnapshot.summary.pendingCount(for: .research), 1)
+        let boardBefore = ProductionBoardPendingTaskProvider().pendingTasks(
+            for: FrameScriptDocument.Project(project: appState.project),
+            labels: .english
+        )
+        XCTAssertEqual(boardBefore.filter { $0.kind == .investigar }.count, 1)
+
+        appState.toggleResearchClaimVerification(id: claim.id)
+
+        XCTAssertFalse(appState.project.claims[0].needsVerification)
+        XCTAssertEqual(appState.researchCounts().pending, 0)
+        XCTAssertEqual(appState.researchUnconfirmedCount(for: scene.id), 0)
+        XCTAssertEqual(appState.productionSnapshot.summary.pendingCount(for: .research), 0)
+        XCTAssertFalse(appState.researchOpenTasks().contains { $0.text == claim.text })
+        let boardAfter = ProductionBoardPendingTaskProvider().pendingTasks(
+            for: FrameScriptDocument.Project(project: appState.project),
+            labels: .english
+        )
+        XCTAssertFalse(boardAfter.contains { $0.kind == .investigar })
+    }
+
+    func testW3FixEGIConfirmClearsTheFlagAndRecheckSurvivesLaterUpdates() {
+        let appState = makeAppState(project: FrameProject(title: "Proyecto", primaryLanguage: "es"))
+        let claim = appState.addResearchClaim(text: "Dato", status: .probable)
+        XCTAssertTrue(claim.needsVerification)
+
+        appState.setResearchClaimStatus(id: claim.id, status: .confirmed)
+        XCTAssertFalse(appState.project.claims[0].needsVerification)
+        XCTAssertEqual(appState.researchCounts().pending, 0)
+
+        // Ticking a confirmed claim asks for a second check...
+        appState.toggleResearchClaimVerification(id: claim.id)
+        XCTAssertTrue(appState.project.claims[0].needsVerification)
+        XCTAssertEqual(appState.researchCounts().pending, 1)
+
+        // ...and a later edit of that confirmed claim must not clear it.
+        var updated = appState.project.claims[0]
+        updated.resolutionNote = "Revisado otra vez"
+        appState.updateResearchClaim(updated)
+        XCTAssertTrue(appState.project.claims[0].needsVerification)
+        XCTAssertEqual(appState.researchCounts().pending, 1)
+    }
+
+    // MARK: - Must-fix 5 · One shared button style
+
+    func testW3FixEGISharedButtonStylesExposeBothShorthandsAndSizes() {
+        let primary: FramePrimaryButtonStyle = .framePrimary
+        let secondary: FrameSecondaryButtonStyle = .frameSecondary
+
+        XCTAssertEqual(primary.size, .regular)
+        XCTAssertEqual(secondary.size, .regular)
+        XCTAssertEqual(FramePrimaryButtonStyle(size: .compact).size, .compact)
+        XCTAssertEqual(FrameSecondaryButtonStyle(size: .compact).size, .compact)
+        XCTAssertEqual(FramePrimaryButtonStyle(compact: true).size, .compact)
+    }
+
     // MARK: - G-1 · Owned by the parallel publishing fixer
 
     func testW3FixEGIPublishingPromisePreservesTheBoardTopic() throws {
@@ -449,6 +682,49 @@ final class W3FixEGITests: FrameScriptTestCase {
 private struct W3FixEGIEmptyOBSSecretStore: OBSSecretStoring {
     func readPassword() throws -> String? { nil }
     func savePassword(_ password: String) throws {}
+}
+
+/// Lets normal file reads succeed but fails every backup write, so the board's
+/// closed-file path can prove a backup failure is surfaced without touching the
+/// user's real backup folder.
+private struct W3FixEGIFailingBackupFileManager: BackupFileManaging {
+    func fileExists(atPath path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    func createDirectory(
+        at url: URL,
+        withIntermediateDirectories createIntermediates: Bool,
+        attributes: [FileAttributeKey: Any]?
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: createIntermediates,
+            attributes: attributes
+        )
+    }
+
+    func contentsOfDirectory(
+        at url: URL,
+        includingPropertiesForKeys keys: [URLResourceKey]?,
+        options mask: FileManager.DirectoryEnumerationOptions
+    ) throws -> [URL] {
+        []
+    }
+
+    func attributesOfItem(atPath path: String) throws -> [FileAttributeKey: Any] {
+        [:]
+    }
+
+    func read(from url: URL) throws -> Data {
+        try Data(contentsOf: url)
+    }
+
+    func write(_ data: Data, to url: URL) throws {
+        throw CocoaError(.fileWriteNoPermission)
+    }
+
+    func removeItem(at url: URL) throws {}
 }
 
 private let W3FixEGINoSecurityScope = SecurityScopedResourceAccess(

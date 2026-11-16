@@ -524,12 +524,12 @@ struct BoardRootView: View {
                 Button(appState.localized("board.action.editClassification")) {
                     classificationTarget = summary
                 }
-                .buttonStyle(FrameSecondaryButtonStyle(compact: true))
+                .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
 
                 Button(appState.localized("board.action.exportPlane")) {
                     planeTarget = summary
                 }
-                .buttonStyle(FramePrimaryButtonStyle(compact: true))
+                .buttonStyle(FramePrimaryButtonStyle(size: .compact))
             }
         }
         .padding(.horizontal, 18)
@@ -740,6 +740,7 @@ private struct BoardKanbanColumn: View {
 private struct BoardProjectCard: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+    @FocusState private var isFocused: Bool
 
     let summary: BoardProjectSummary
     let isSelected: Bool
@@ -836,13 +837,13 @@ private struct BoardProjectCard: View {
                 statusTitle: statusTitle
             )
         }
-        .focusable(isSelected)
+        .focusable()
+        .focused($isFocused)
+        .onChange(of: isFocused) { _, focused in
+            if focused { onSelect() }
+        }
         .onKeyPress(.return) {
-            guard BoardProjectAccessibility.handlesReturnKey(isSelected: isSelected) else {
-                return .ignored
-            }
-            onOpen()
-            return .handled
+            BoardProjectKeyboard.open(onOpen)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(summary.title), \(statusTitle(summary.productionStatus))")
@@ -968,9 +969,15 @@ enum BoardProjectAccessibility {
     static func openActionName(appState: AppState) -> String {
         appState.localized("board.action.open")
     }
+}
 
-    static func handlesReturnKey(isSelected: Bool) -> Bool {
-        isSelected
+/// Return opens whichever card has keyboard focus. Cards and rows are always
+/// focusable, so a keyboard user can tab to an unselected project and press
+/// Return without clicking it first (G-6).
+enum BoardProjectKeyboard {
+    static func open(_ onOpen: () -> Void) -> KeyPress.Result {
+        onOpen()
+        return .handled
     }
 }
 
@@ -1211,13 +1218,9 @@ private struct BoardListView: View {
                 statusTitle: statusTitle
             )
         }
-        .focusable(selected)
+        .focusable()
         .onKeyPress(.return) {
-            guard BoardProjectAccessibility.handlesReturnKey(isSelected: selected) else {
-                return .ignored
-            }
-            onOpen(summary)
-            return .handled
+            BoardProjectKeyboard.open { onOpen(summary) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)

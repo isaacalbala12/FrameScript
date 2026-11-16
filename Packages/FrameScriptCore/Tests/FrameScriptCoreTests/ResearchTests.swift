@@ -49,7 +49,7 @@ struct ResearchTests {
         status: FrameScriptDocument.ClaimStatus = .probable,
         sourceIDs: [UUID] = [],
         sceneIDs: [UUID] = [],
-        needsVerification: Bool = false,
+        needsVerification: Bool? = nil,
         personalExperience: Bool = false,
         resolutionNote: String = "",
         anchor: FrameScriptDocument.TextAnchor? = nil,
@@ -95,7 +95,7 @@ struct ResearchTests {
             claim(text: "B", status: .probable, needsVerification: true),
             claim(text: "C", status: .probable, needsVerification: true),
             claim(text: "D", status: .rumor, needsVerification: true),
-            claim(text: "E", status: .communityOpinion),
+            claim(text: "E", status: .communityOpinion, needsVerification: false),
             claim(text: "F", status: .confirmed, needsVerification: true),
             claim(text: "G", status: .probable, needsVerification: true, personalExperience: true)
         ]
@@ -106,7 +106,7 @@ struct ResearchTests {
         #expect(counts.probable == 3)
         #expect(counts.rumor == 1)
         #expect(counts.communityOpinion == 1)
-        #expect(counts.pending == 5)
+        #expect(counts.pending == 4)
         #expect(counts.total == 7)
         #expect(counts.count(for: .rumor) == 1)
         #expect(counts.statusParts.map(\.status) == [.confirmed, .probable, .rumor, .communityOpinion])

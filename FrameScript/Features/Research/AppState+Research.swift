@@ -238,7 +238,7 @@ extension AppState {
         sceneIDs: [UUID] = [],
         anchorSceneID: UUID? = nil,
         anchor: TextAnchor? = nil,
-        needsVerification: Bool = true,
+        needsVerification: Bool? = nil,
         personalExperience: Bool = false,
         resolutionNote: String = ""
     ) -> ProjectClaim {
@@ -268,7 +268,9 @@ extension AppState {
         let previous = project.claims[index]
         let wasConfirmed = previous.status == .confirmed
         var updated = claim
-        if updated.status == .confirmed {
+        // Confirming clears the flag once; an explicit re-check on an already
+        // confirmed claim is a user choice and must survive later updates.
+        if updated.status == .confirmed, !wasConfirmed {
             updated.needsVerification = false
         }
         project.claims[index] = updated
@@ -309,8 +311,9 @@ extension AppState {
 
     func setResearchClaimStatus(id: UUID, status: ClaimStatus) {
         guard let index = project.claims.firstIndex(where: { $0.id == id }) else { return }
+        let wasConfirmed = project.claims[index].status == .confirmed
         project.claims[index].status = status
-        if status == .confirmed {
+        if status == .confirmed, !wasConfirmed {
             project.claims[index].needsVerification = false
             project.checklistTasks = markingChecklistResolved(for: project.claims[index])
         } else if project.claims[index].needsResearch {

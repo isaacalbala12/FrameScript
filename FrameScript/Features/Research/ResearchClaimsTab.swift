@@ -77,7 +77,7 @@ struct ResearchClaimsTab: View {
                 Label(appState.localized("research.claims.add"), systemImage: "plus")
                     .font(.system(size: 13, weight: .medium))
             }
-            .buttonStyle(FramePrimaryButtonStyle())
+            .buttonStyle(.framePrimary)
             .accessibilityIdentifier("research-add-claim")
 
             Button {
@@ -566,7 +566,7 @@ private struct ResearchClaimCard: View {
             ) {
                 linkAnchor()
             }
-            .buttonStyle(FrameSecondaryButtonStyle(compact: true))
+            .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
             .disabled(anchorDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if claim.anchor != nil {
                 Button {

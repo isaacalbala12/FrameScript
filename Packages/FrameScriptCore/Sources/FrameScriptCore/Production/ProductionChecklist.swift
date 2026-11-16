@@ -183,8 +183,9 @@ public enum ProductionLanguage {
 /// - an editing note whose status is `.pending` needs editing;
 /// - a claim needs research while `ResearchSummary.isPending` says so, and a
 ///   mirrored `.research` checklist task never produces a second row;
-/// - each existing publishing pack is checked against the eight items of the
-///   Publishing panel checklist; the raw `publishing.checklist.*` tasks are
+/// - each project with at least one publishing pack is checked against the
+///   eight items of the Publishing panel checklist (once per project, tied to
+///   the primary-language pack); the raw `publishing.checklist.*` tasks are
 ///   never shown as manual rows;
 /// - manual `ChecklistTask` rows are included as-is.
 ///
@@ -242,8 +243,11 @@ public enum ProductionChecklist {
         }
 
         // The Publishing panel stores its eight checks as `ChecklistTask`s with
-        // a stable token. They are not manual work: they feed one `.publish`
-        // row per existing pack instead (NEW-1).
+        // a stable token. The done state is per project, not per language, so
+        // Production must emit the eight rows exactly once. They point at the
+        // primary language's pack (or the first pack when the primary language
+        // has none) so ticking a check clears one row, not one per language
+        // (NEW-1, must-fix 2).
         var publishingDone = Set<PublishingChecklistItem>()
         var seenPublishingItems = Set<PublishingChecklistItem>()
         for task in project.checklistTasks {
@@ -252,7 +256,7 @@ public enum ProductionChecklist {
             if task.isDone { publishingDone.insert(item) }
         }
 
-        for languageKey in project.publishingPacks.keys.sorted() where !isBlank(languageKey) {
+        if let languageKey = publishingLanguageKey(for: project) {
             items.append(contentsOf: publishingItems(
                 languageKey: languageKey,
                 doneItems: publishingDone
@@ -411,6 +415,23 @@ public enum ProductionChecklist {
 
     // MARK: - Publishing
 
+    /// The pack the eight project-wide checks belong to: the primary language
+    /// when it has a pack, otherwise the first sorted language.
+    private static func publishingLanguageKey(
+        for project: FrameScriptDocument.Project
+    ) -> String? {
+        let keys = project.publishingPacks.keys
+            .filter { !isBlank($0) }
+            .sorted()
+        guard !keys.isEmpty else { return nil }
+        let primary = ProductionLanguage.normalized(project.primaryLanguage)
+        if !primary.isEmpty,
+           let match = keys.first(where: { ProductionLanguage.normalized($0) == primary }) {
+            return match
+        }
+        return keys.first
+    }
+
     private static func publishingItems(
         languageKey: String,
         doneItems: Set<PublishingChecklistItem>
@@ -420,7 +441,7 @@ public enum ProductionChecklist {
         func append(_ item: PublishingChecklistItem, index: Int) {
             items.append(
                 ProductionItem(
-                    id: "publish:\(languageKey):checklist:\(item.rawValue)",
+                    id: "publish:checklist:\(item.rawValue)",
                     kind: .publish,
                     reason: .publishingChecklist(item),
                     languageCode: languageKey,

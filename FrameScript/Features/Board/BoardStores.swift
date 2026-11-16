@@ -79,6 +79,7 @@ final class BoardStore {
     private let bookmarkResolver: BookmarkResolver
     private let securityScope: SecurityScopedResourceAccess
     private let scanner: BoardLibraryScanner
+    private let backupStore: BackupStore
     private let now: @MainActor () -> Date
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "FrameScript",
@@ -88,6 +89,9 @@ final class BoardStore {
     /// Labels used by the last scan. Kept so a single-file reload keeps the
     /// same localized pending-task titles as the full index.
     private var scanLabels: BoardPendingLabels = .english
+    nonisolated(unsafe) private var projectFileStateObserver: NSObjectProtocol?
+    private var fileStateReloadTask: Task<Void, Never>?
+    private var pendingFileStateURLs: [URL] = []
 
     init(
         userDefaults: UserDefaults = AppEnvironment.defaults,
@@ -109,6 +113,7 @@ final class BoardStore {
         },
         securityScope: SecurityScopedResourceAccess = .live,
         scanner: BoardLibraryScanner = BoardLibraryScanner(),
+        backupStore: BackupStore = BackupsCenter.store,
         now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.userDefaults = AppEnvironment.isolatedDefaults(userDefaults)
@@ -117,7 +122,24 @@ final class BoardStore {
         self.bookmarkResolver = bookmarkResolver
         self.securityScope = securityScope
         self.scanner = scanner
+        self.backupStore = backupStore
         self.now = now
+        projectFileStateObserver = NotificationCenter.default.addObserver(
+            forName: .frameScriptProjectFileStateDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let url = notification.object as? URL else { return }
+            MainActor.assumeIsolated {
+                self?.scheduleFileStateReload(at: url)
+            }
+        }
+    }
+
+    deinit {
+        if let projectFileStateObserver {
+            NotificationCenter.default.removeObserver(projectFileStateObserver)
+        }
     }
 
     // MARK: Folders
@@ -317,6 +339,46 @@ final class BoardStore {
         )
     }
 
+    /// Re-reads one indexed file after the open project's disk state changed
+    /// (saved, reloaded, closed or discarded). Unknown URLs are ignored so a
+    /// board window never adopts a file it did not scan.
+    func reloadFileIfIndexed(at url: URL) async {
+        guard index.summary(forFileAt: url) != nil else { return }
+        await reloadFile(at: url)
+    }
+
+    private func scheduleFileStateReload(at url: URL) {
+        let standardized = url.standardizedFileURL
+        if !pendingFileStateURLs.contains(standardized) {
+            pendingFileStateURLs.append(standardized)
+        }
+        guard fileStateReloadTask == nil else { return }
+        // One serial task drains every queued URL. Saves and autosaves can post
+        // many notifications; this keeps the work bounded and ordered.
+        fileStateReloadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !self.pendingFileStateURLs.isEmpty {
+                let next = self.pendingFileStateURLs.removeFirst()
+                await self.reloadFileIfIndexed(at: next)
+            }
+            self.fileStateReloadTask = nil
+        }
+    }
+
+    /// Test seam: waits for the reloads started by
+    /// `.frameScriptProjectFileStateDidChange` notifications.
+    func waitForPendingFileStateReloads() async {
+        // The notification queue can deliver the block one runloop turn after
+        // `post`, so wait briefly for the serial task to appear.
+        for _ in 0..<50 {
+            if let task = fileStateReloadTask {
+                await task.value
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
     // MARK: Query
 
     var summaries: [BoardProjectSummary] {
@@ -460,7 +522,10 @@ final class BoardStore {
             labels: pendingLabels(appState: appState)
         )
         let refreshed = updated.replacingPendingTasks(pending)
-        index = index.replacing(refreshed)
+        // The file was not written. Keep the row visible for this session but
+        // mark it impossible to reuse: the next scan (and the explicit reload
+        // posted on save/close/discard) must decode the file again (must-fix 1).
+        index = index.replacing(refreshed.markingIndexStale())
         selectedProjectID = refreshed.id
         return edit.isSatisfied(by: refreshed) ? .saved(refreshed) : .conflict(refreshed)
     }
@@ -473,7 +538,12 @@ final class BoardStore {
         let url = summary.fileURL
         let expectedHash = summary.fingerprint.contentHash
         let scope = appState.securityScope
-        let backupStore = BackupsCenter.store
+        let backupStore = self.backupStore
+        let backupProjectID = BackupProjectIdentity.identifier(
+            projectUUID: summary.projectID,
+            fileURL: url
+        )
+        let attemptsBackup = BackupsCenter.shouldAttemptBackup(projectID: backupProjectID)
         let didAccess = scope.start(url)
         defer { if didAccess { scope.stop(url) } }
 
@@ -485,30 +555,27 @@ final class BoardStore {
                     return .changedExternally
                 }
                 var document = try FrameScriptDocumentCodec.decode(data)
-                // Map the untouched document first so the pre-overwrite backup
-                // matches the Backups feature exactly.
-                let currentProject = try document.makeProject()
                 var documentEdit = edit
                 if let topic = edit.topic {
                     documentEdit.topic = BoardProjectTopic.merging(topic, into: document.project.topic)
                 }
                 BoardDocumentEditor.apply(documentEdit, to: &document)
-                backupStore.backUpIfNeeded(
-                    fileURL: url,
-                    projectID: BackupProjectIdentity.identifier(
-                        projectUUID: currentProject.id,
-                        fileURL: url
-                    )
-                )
+                let backupOutcome = attemptsBackup
+                    ? backupStore.backUpIfNeeded(fileURL: url, projectID: backupProjectID)
+                    : BackupOutcome.skipped(.intervalNotElapsed)
                 try FrameScriptDocumentCodec.write(document, to: url)
-                return .written
+                return .written(backup: backupOutcome, projectID: backupProjectID)
             } catch {
                 return .failed(error.localizedDescription)
             }
         }.value
 
         switch result {
-        case .written:
+        case .written(let backupOutcome, let projectID):
+            // The backup copy runs off-main; its result still has to reach the
+            // same logging and BackupHealth path as the editor's writes
+            // (must-fix 3).
+            BackupsCenter.record(backupOutcome, projectID: projectID)
             await reloadFile(at: url)
             if let refreshed = index.summary(forFileAt: url) {
                 selectedProjectID = refreshed.id
@@ -603,7 +670,7 @@ enum BoardFolderError: Error, Equatable {
 }
 
 private enum FileApplyOutcome: Sendable {
-    case written
+    case written(backup: BackupOutcome, projectID: String)
     case changedExternally
     case failed(String)
 }

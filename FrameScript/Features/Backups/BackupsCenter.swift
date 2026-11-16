@@ -144,4 +144,24 @@ enum BackupsCenter {
             break
         }
     }
+
+    /// True when the in-memory minimum interval allows another automatic backup
+    /// for this project. The core policy checks the backup folder as well; this
+    /// only avoids listing it on every board write.
+    @MainActor
+    static func shouldAttemptBackup(projectID: String, now: Date = Date()) -> Bool {
+        guard let last = lastAttempt[projectID] else { return true }
+        return now.timeIntervalSince(last) >= max(0, store.policy.minimumInterval)
+    }
+
+    /// Records a backup outcome produced off the main actor (the board writes
+    /// closed files in a detached task). Keeps the same logging, health
+    /// reporting and minimum-interval bookkeeping as the synchronous path.
+    @MainActor
+    static func record(_ outcome: BackupOutcome, projectID: String, attemptedAt: Date = Date()) {
+        handle(outcome, projectID: projectID)
+        if case .created = outcome {
+            lastAttempt[projectID] = attemptedAt
+        }
+    }
 }

@@ -413,8 +413,8 @@ struct ProductionChecklistTests {
         #expect(!items.contains { $0.reason.publishingChecklistItem == .endScreen })
     }
 
-    @Test func publishingChecksEveryLanguagePack() {
-        let complete = FrameScriptDocument.PublishingPack(
+    @Test func publishingChecklistIsEmittedOncePerProject() {
+        let primary = FrameScriptDocument.PublishingPack(
             chosenTitle: "Título",
             description: "Descripción",
             tags: ["uno"],
@@ -426,12 +426,41 @@ struct ProductionChecklistTests {
             thumbnailVariants: [FrameScriptDocument.ThumbnailVariant(isChosen: true)]
         )
 
-        let project = makeProject(publishingPacks: ["es": complete, "en": other])
+        let project = makeProject(publishingPacks: ["es": primary, "en": other])
         let items = ProductionChecklist.items(for: project)
 
-        #expect(items.count == PublishingChecklistItem.allCases.count * 2)
-        #expect(Set(items.map(\.languageCode)) == ["es", "en"])
-        #expect(items.filter { $0.languageCode == "en" }.count == 8)
+        // The eight checks have one project-wide done state, so two packs must
+        // not double the rows (must-fix 2).
+        #expect(items.count == PublishingChecklistItem.allCases.count)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "es" })
+        #expect(items.allSatisfy { $0.target == .publishing(languageCode: "es") })
+        #expect(Set(items.map(\.id)).count == 8)
+    }
+
+    @Test func publishingChecklistUsesThePrimaryLanguagePack() {
+        let project = makeProject(
+            primaryLanguage: "en",
+            publishingPacks: ["es": FrameScriptDocument.PublishingPack(), "en": FrameScriptDocument.PublishingPack()]
+        )
+
+        let items = ProductionChecklist.items(for: project)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "en" })
+    }
+
+    @Test func publishingChecklistFallsBackToTheFirstPackWhenThePrimaryHasNone() {
+        let project = makeProject(
+            primaryLanguage: "es",
+            publishingPacks: [
+                "fr": FrameScriptDocument.PublishingPack(),
+                "de": FrameScriptDocument.PublishingPack()
+            ]
+        )
+
+        let items = ProductionChecklist.items(for: project)
+        #expect(items.count == 8)
+        #expect(items.allSatisfy { $0.languageCode == "de" })
     }
 
     // MARK: - Manual tasks

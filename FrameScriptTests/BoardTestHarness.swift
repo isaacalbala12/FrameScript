@@ -23,7 +23,10 @@ final class BoardTestHarness {
     let keychain: BoardFakeKeychain
     let externalChange: BoardExternalChangeBox
 
-    init() throws {
+    init(
+        backupStore: BackupStore = BackupsCenter.store,
+        closeConfirmation: AppState.CloseConfirmation? = nil
+    ) throws {
         suiteName = "FrameScript.BoardTests.\(UUID().uuidString)"
         defaults = BoardMemoryDefaults()
 
@@ -71,6 +74,7 @@ final class BoardTestHarness {
             recording: recording,
             aiProviderConfigurationStore: AIProviderConfigurationStore(userDefaults: defaults),
             securityScope: BoardTestHarness.noSecurityScope,
+            closeConfirmation: closeConfirmation,
             externalChangeConfirmation: { externalChange.resolution },
             customTemplates: []
         )
@@ -80,7 +84,8 @@ final class BoardTestHarness {
             foldersStorageKey: "test.board.folders",
             bookmarkCreator: { url in Data(url.path.utf8) },
             bookmarkResolver: { data, _ in URL(fileURLWithPath: String(decoding: data, as: UTF8.self)) },
-            securityScope: BoardTestHarness.noSecurityScope
+            securityScope: BoardTestHarness.noSecurityScope,
+            backupStore: backupStore
         )
         board.loadFolders()
 

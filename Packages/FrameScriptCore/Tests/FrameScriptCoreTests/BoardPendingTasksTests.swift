@@ -242,6 +242,28 @@ struct BoardPendingTasksTests {
         #expect(!tasks.contains { $0.title.hasPrefix("publishing.checklist.") })
     }
 
+    @Test func boardPublishingTasksAreNotDuplicatedPerPack() {
+        let document = boardDocument(
+            status: .script,
+            primaryLanguage: "es",
+            publishingPacks: [
+                "es": FrameScriptDocument.PublishingPack(),
+                "en": FrameScriptDocument.PublishingPack()
+            ]
+        )
+
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(
+            for: document.project,
+            labels: .english
+        )
+        let publish = tasks.filter { $0.kind == .publicar }
+
+        #expect(publish.count == 8)
+        #expect(Set(publish.map(\.id)).count == 8)
+        #expect(publish.filter { $0.title.contains("End screen") }.count == 1)
+        #expect(publish.allSatisfy { $0.title.hasPrefix("Publish · ") })
+    }
+
     @Test func summaryBuilderFallsBackToMarkupEstimateWhenTheStoredEstimateIsMissing() {
         // 150 spoken words at 150 wpm equals 60 seconds.
         let text = Array(repeating: "palabra", count: 150).joined(separator: " ")
