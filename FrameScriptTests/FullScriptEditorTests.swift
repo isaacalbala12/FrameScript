@@ -971,6 +971,23 @@ final class FullScriptEditorTests: FrameScriptTestCase {
         XCTAssertEqual(scenes[0].scriptText, "uno importante")
     }
 
+    func testLeavingScriptModeHandsTheCaretSceneToOtherModesAndAddSceneSelectsTheNewScene() throws {
+        let (harness, scenes) = try harnessWithCaretInSceneThree()
+        defer { harness.teardown() }
+
+        harness.appState.selectMode(.bRoll)
+
+        XCTAssertFalse(harness.appState.isFullScriptSelected)
+        XCTAssertEqual(harness.appState.selectedScene?.id, scenes[2].id, "the caret scene carries over")
+
+        harness.appState.addScene()
+        let newScene = try XCTUnwrap(harness.appState.project.scenes.first { !scenes.map(\.id).contains($0.id) })
+        XCTAssertEqual(harness.appState.selectedScene?.id, newScene.id, "Add scene must show the new scene")
+
+        harness.appState.duplicateSelectedScene()
+        XCTAssertNotEqual(harness.appState.selectedScene?.id, newScene.id, "Duplicate must show the copy")
+    }
+
     func testDeleteSceneConfirmationCancelKeepsEverything() throws {
         let (harness, scenes) = try harnessWithCaretInSceneThree { _, _ in false }
         defer { harness.teardown() }

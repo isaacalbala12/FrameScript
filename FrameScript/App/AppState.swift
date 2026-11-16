@@ -952,6 +952,14 @@ final class AppState {
         if (sceneChanged || modeChanged) && !preservingProductionSelection {
             clearProductionSelection()
         }
+        // Leaving Script mode ends the full-script presentation: the other
+        // workspaces work on one scene, so hand them the caret scene.
+        if let mode, mode != .script, editorState.isFullScriptSelected {
+            if sceneID == nil, let caretID = fullScriptCaretScene?.id {
+                editorState.selectedSceneID = caretID
+            }
+            editorState.isFullScriptSelected = false
+        }
         if let sceneID { editorState.selectedSceneID = sceneID }
         if let mode { editorState.selectedMode = mode }
     }

@@ -28,7 +28,9 @@ extension AppState {
     /// as the caret moves), so every scene command (delete, duplicate, rename,
     /// move, re-hooks, clips, recording) follows the caret scene instead.
     var effectiveSelectedSceneID: UUID? {
-        if isFullScriptSelected, let caretID = fullScriptCaretScene?.id {
+        if isFullScriptSelected,
+           editorState.selectedMode == .script,
+           let caretID = fullScriptCaretScene?.id {
             return caretID
         }
         return editorState.selectedSceneID
