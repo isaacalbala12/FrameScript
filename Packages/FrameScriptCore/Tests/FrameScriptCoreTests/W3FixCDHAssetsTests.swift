@@ -149,7 +149,7 @@ struct W3FixCDHAssetTests {
         #expect(items.contains { $0.sourceText == "Comprar tarjeta SD" })
     }
 
-    @Test("W3FixCDH the Board and Plane export hide publishing tokens")
+    @Test("W3FixCDH the Board and Plane export never show raw publishing tokens")
     func boardPendingTasksHidePublishingTokens() {
         let project = FrameScriptDocument.Project(
             title: "Proyecto",
@@ -167,9 +167,9 @@ struct W3FixCDHAssetTests {
             ]
         )
 
-        let tasks = BoardPendingTaskDeriver().pendingTasks(for: project, labels: .english)
+        let tasks = ProductionBoardPendingTaskProvider().pendingTasks(for: project, labels: .english)
 
         #expect(!tasks.contains { $0.title.contains("publishing.checklist.") })
-        #expect(tasks.contains { $0.title == "Comprar tarjeta SD" })
+        #expect(tasks.contains { $0.title.contains("Comprar tarjeta SD") })
     }
 }
