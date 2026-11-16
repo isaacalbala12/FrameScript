@@ -1,0 +1,571 @@
+import AppKit
+import Foundation
+import FrameScriptCore
+@testable import FrameScript
+import SwiftUI
+import XCTest
+
+// MARK: - Shared fixture
+
+@MainActor
+private final class W3FixCDHFixture {
+    let preferences: TestDefaults
+    let recording: TestDefaults
+    let directory: URL
+    let defaults: UserDefaults
+    private(set) var states: [AppState] = []
+
+    init() throws {
+        preferences = TestDefaults.make()
+        recording = TestDefaults.make()
+        defaults = preferences.defaults
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("W3FixCDH-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    func cleanup() {
+        states.removeAll()
+        preferences.cleanup()
+        recording.cleanup()
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    func makeState(
+        project: FrameProject,
+        fileURL: URL? = nil,
+        language: AppLanguage = .spanish
+    ) -> AppState {
+        var settings = AppSettings.defaults
+        settings.generalPreferences.language = language
+        settings.aiPreferences.provider = .openAICompatible
+        settings.aiPreferences.enableInlineAutocomplete = false
+        let settingsStore = SettingsStore(
+            settings: settings,
+            userDefaults: defaults,
+            key: "FrameScript.settings.v1"
+        )
+        let store = ProjectStore(project: project)
+        store.openProject(project, fileURL: fileURL, wordsPerMinute: 150, markUnsaved: true)
+        let state = AppState(
+            projectStore: store,
+            recentProjectStore: RecentProjectStore(userDefaults: defaults),
+            settingsStore: settingsStore,
+            dependencies: AppDependencies(
+                rewriteService: RewriteService(provider: MockLLMProvider()),
+                analysisService: AnalysisService(provider: MockLLMProvider()),
+                exportService: ExportService(),
+                llmProvider: MockLLMProvider(),
+                providerCredentials: ProviderCredentialSession(reader: { _ in "test-key" })
+            ),
+            recording: RecordingController(
+                preferences: OBSPreferencesStore(defaults: recording.defaults),
+                defaults: recording.defaults
+            ),
+            customTemplates: []
+        )
+        states.append(state)
+        return state
+    }
+}
+
+private func w3LongText(_ count: Int = 18) -> String {
+    (1...count).map { "palabra\($0)" }.joined(separator: " ")
+}
+
+private func w3Scene(
+    order: Int,
+    title: String,
+    text: String? = nil,
+    estimated: TimeInterval = 40
+) -> AppScene {
+    AppScene(
+        order: order,
+        sectionType: order == 0 ? .hook : .explanation,
+        title: title,
+        scriptText: text ?? w3LongText(),
+        estimatedDuration: estimated
+    )
+}
+
+private func w3PNG(at url: URL) throws {
+    let image = NSImage(size: NSSize(width: 4, height: 4))
+    image.lockFocus()
+    NSColor.systemRed.setFill()
+    NSRect(x: 0, y: 0, width: 4, height: 4).fill()
+    image.unlockFocus()
+    let tiff = try XCTUnwrap(image.tiffRepresentation)
+    let rep = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+    let data = try XCTUnwrap(rep.representation(using: .png, properties: [:]))
+    try data.write(to: url, options: .atomic)
+}
+
+// MARK: - C-1 / C-5
+
+@MainActor
+final class W3FixCDHAssetsTests: XCTestCase {
+    private var fixture: W3FixCDHFixture!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixture = try W3FixCDHFixture()
+    }
+
+    override func tearDown() {
+        fixture?.cleanup()
+        fixture = nil
+        super.tearDown()
+    }
+
+    func testW3FixCDHAddedThumbnailSurvivesReachabilityRefresh() async throws {
+        let project = FrameProject(title: "Proyecto", scenes: [w3Scene(order: 0, title: "Gancho")])
+        let projectURL = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        let state = fixture.makeState(project: project, fileURL: projectURL)
+        let source = fixture.directory.appendingPathComponent("portada.png")
+        try w3PNG(at: source)
+
+        let variant = try state.addPublishingThumbnail(from: source, language: "es")
+        let before = try XCTUnwrap(project.assets.first(where: { $0.id == variant.assetID }))
+
+        await state.refreshAssetReachability()
+
+        let after = try XCTUnwrap(project.assets.first(where: { $0.id == variant.assetID }))
+        XCTAssertEqual(after.path, before.path)
+        XCTAssertTrue(AssetPath.isAbsolute(after.path))
+        XCTAssertTrue(after.path.contains("Proyecto assets/"))
+        XCTAssertFalse(after.isLastKnownMissing)
+        let url = try XCTUnwrap(state.publishingThumbnailURL(for: variant))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testW3FixCDHLegacyRelativeThumbnailPathIsMigratedOnLoad() async throws {
+        let assetsDirectory = fixture.directory.appendingPathComponent("Proyecto assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+        let image = assetsDirectory.appendingPathComponent("portada.png")
+        try w3PNG(at: image)
+        let asset = ProjectAsset(
+            path: "Proyecto assets/portada.png",
+            kind: .thumbnail,
+            isCopiedIntoProject: true
+        )
+        let project = FrameProject(title: "Proyecto", scenes: [w3Scene(order: 0, title: "Gancho")])
+        project.assets = [asset]
+        project.publishingPacks["es"] = PublishingPack(
+            thumbnailVariants: [ThumbnailVariant(assetID: asset.id, isChosen: true)]
+        )
+        let projectURL = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        let state = fixture.makeState(project: project, fileURL: projectURL)
+
+        await state.refreshAssetReachability()
+
+        let migrated = try XCTUnwrap(project.assets.first)
+        XCTAssertEqual(migrated.path, image.path)
+        XCTAssertFalse(migrated.isLastKnownMissing)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: image.path), "migration must not move or delete the file")
+        let variant = try XCTUnwrap(project.publishingPacks["es"]?.thumbnailVariants.first)
+        XCTAssertEqual(state.publishingThumbnailURL(for: variant)?.path, image.path)
+    }
+
+    func testW3FixCDHBogusAbsoluteThumbnailPathIsRepairedWithoutLosingTheFile() async throws {
+        let assetsDirectory = fixture.directory.appendingPathComponent("Proyecto assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: assetsDirectory, withIntermediateDirectories: true)
+        let image = assetsDirectory.appendingPathComponent("portada.png")
+        try w3PNG(at: image)
+        // Exactly what the pre-fix reachability pass wrote: an absolute path
+        // that does not exist, built from a project-relative path.
+        let asset = ProjectAsset(
+            path: "/Proyecto assets/portada.png",
+            kind: .thumbnail,
+            isCopiedIntoProject: true
+        )
+        let project = FrameProject(title: "Proyecto", scenes: [w3Scene(order: 0, title: "Gancho")])
+        project.assets = [asset]
+        let projectURL = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        let state = fixture.makeState(project: project, fileURL: projectURL)
+
+        await state.refreshAssetReachability()
+
+        let repaired = try XCTUnwrap(project.assets.first)
+        XCTAssertEqual(repaired.path, image.path)
+        XCTAssertFalse(repaired.isLastKnownMissing)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: image.path))
+    }
+
+    func testW3FixCDHRemovingTheOnlyVariantRemovesItsAsset() throws {
+        let project = FrameProject(title: "Proyecto", scenes: [w3Scene(order: 0, title: "Gancho")])
+        let projectURL = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        let state = fixture.makeState(project: project, fileURL: projectURL)
+        let source = fixture.directory.appendingPathComponent("portada.png")
+        try w3PNG(at: source)
+
+        let variant = try state.addPublishingThumbnail(from: source, language: "es")
+        XCTAssertEqual(project.assets.count, 1)
+
+        state.removePublishingThumbnail(variantID: variant.id, language: "es")
+
+        XCTAssertTrue(project.assets.isEmpty)
+        XCTAssertTrue(project.publishingPacks["es"]?.thumbnailVariants.isEmpty == true)
+    }
+
+    func testW3FixCDHRemovingAReferencedAssetClearsPublishingVariants() throws {
+        let project = FrameProject(title: "Proyecto", scenes: [w3Scene(order: 0, title: "Gancho")])
+        let projectURL = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        let state = fixture.makeState(project: project, fileURL: projectURL)
+        let source = fixture.directory.appendingPathComponent("portada.png")
+        try w3PNG(at: source)
+        let variant = try state.addPublishingThumbnail(from: source, language: "es")
+        let assetID = try XCTUnwrap(variant.assetID)
+        XCTAssertEqual(state.publishingUsageCount(forAssetID: assetID), 1)
+
+        state.removeAsset(id: assetID)
+
+        XCTAssertTrue(project.assets.isEmpty)
+        XCTAssertTrue(project.publishingPacks["es"]?.thumbnailVariants.isEmpty == true)
+    }
+}
+
+// MARK: - D-1 / D-3 / D-6 / N-1
+
+@MainActor
+final class W3FixCDHPublishingTests: XCTestCase {
+    private var fixture: W3FixCDHFixture!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixture = try W3FixCDHFixture()
+    }
+
+    override func tearDown() {
+        fixture?.cleanup()
+        fixture = nil
+        super.tearDown()
+    }
+
+    private func makeProject(titles: [String] = ["Gancho", "Prueba", "Veredicto"]) -> FrameProject {
+        let scenes = titles.enumerated().map { index, title in
+            w3Scene(order: index, title: title)
+        }
+        return FrameProject(title: "Vídeo sintético", scenes: scenes, primaryLanguage: "es")
+    }
+
+    func testW3FixCDHPlainTopicSurvivesTypingAPromise() {
+        let project = makeProject()
+        project.topic = "Assetto Corsa"
+        let state = fixture.makeState(project: project)
+
+        state.setPublishingPromise("Elegir sin gastar de más.")
+
+        XCTAssertEqual(state.publishingPromise, "Elegir sin gastar de más.")
+        XCTAssertEqual(BoardProjectTopic.display(from: project.topic), "Assetto Corsa")
+        XCTAssertTrue(project.topic.hasPrefix(BoardProjectTopic.marker))
+    }
+
+    func testW3FixCDHMarkerNotesAndMetadataSurvivePromiseThesisAndFileRoundTrip() throws {
+        let project = makeProject()
+        let metadata = EscaletaRoundTripMetadata(
+            document: EscaletaDocument(title: "Vídeo sintético"),
+            scenes: []
+        )
+        let originalNotes = EscaletaProjectNotes(
+            promise: "Promesa original",
+            thesis: "Tesis original",
+            versionNote: "v3",
+            scriptIntro: "Entrada",
+            pacingNotes: ["rápido", "pausa"],
+            metadata: metadata
+        )
+        let encoded = Data("Assetto Corsa".utf8).base64EncodedString()
+        project.topic = BoardProjectTopic.marker + encoded + "\n\n" + originalNotes.encoded()
+        let state = fixture.makeState(project: project)
+
+        state.setPublishingPromise("Promesa nueva")
+        state.setPublishingThesis("Tesis nueva")
+
+        let notes = EscaletaProjectNotes.decode(project.topic)
+        XCTAssertEqual(BoardProjectTopic.display(from: project.topic), "Assetto Corsa")
+        XCTAssertEqual(notes.promise, "Promesa nueva")
+        XCTAssertEqual(notes.thesis, "Tesis nueva")
+        XCTAssertEqual(notes.versionNote, "v3")
+        XCTAssertEqual(notes.scriptIntro, "Entrada")
+        XCTAssertEqual(notes.pacingNotes, ["rápido", "pausa"])
+        XCTAssertNotNil(notes.metadata)
+
+        let url = fixture.directory.appendingPathComponent("Proyecto.fscr")
+        try FrameScriptFileStore.write(project: project, to: url)
+        let loaded = try FrameScriptFileStore.read(from: url)
+        XCTAssertEqual(BoardProjectTopic.display(from: loaded.topic), "Assetto Corsa")
+        XCTAssertEqual(EscaletaProjectNotes.decode(loaded.topic).promise, "Promesa nueva")
+        XCTAssertEqual(EscaletaProjectNotes.decode(loaded.topic).versionNote, "v3")
+
+        state.setPublishingPromise("")
+        XCTAssertEqual(BoardProjectTopic.display(from: project.topic), "Assetto Corsa")
+        XCTAssertEqual(EscaletaProjectNotes.decode(project.topic).versionNote, "v3")
+    }
+
+    func testW3FixCDHImportedChapterWithoutSceneReachesBothExports() {
+        let project = makeProject()
+        let scenes = project.scenes.sortedByOrder
+        scenes[0].estimatedDuration = 30
+        scenes[1].estimatedDuration = 60
+        scenes[2].estimatedDuration = 30
+        project.publishingPacks["es"] = PublishingPack(
+            chapterOverrides: [
+                ChapterOverride(
+                    sceneID: nil,
+                    title: "Capítulo importado",
+                    startSeconds: 100
+                )
+            ]
+        )
+        let state = fixture.makeState(project: project)
+
+        let markdown = state.publishingExportMarkdown(language: "es")
+        let studio = state.publishingStudioDescription(language: "es")
+
+        XCTAssertTrue(markdown.contains("1:40 Capítulo importado"))
+        XCTAssertTrue(studio.contains("1:40 Capítulo importado"))
+    }
+
+    func testW3FixCDHFooterIsNotReadyWithAnEmptyPackAndTwoOfEightChecks() {
+        let project = makeProject()
+        let state = fixture.makeState(project: project)
+        state.setPublishingChecklist(.chosenTitle, done: true)
+        state.setPublishingChecklist(.tags, done: true)
+        let issues = state.publishingValidationIssues(language: "es")
+        let errors = issues.filter { $0.severity == .error }.count
+        let warnings = issues.filter { $0.severity == .warning }.count
+
+        let summary = state.publishingFooterSummaryText(errors: errors, warnings: warnings)
+
+        XCTAssertFalse(summary.contains("Todo listo"))
+        XCTAssertTrue(summary.contains("2/8"))
+        XCTAssertGreaterThan(warnings, 0, "an empty title and description must warn")
+    }
+
+    func testW3FixCDHFooterIsReadyOnlyWithCompleteChecklistAndNoIssues() {
+        let project = makeProject()
+        let state = fixture.makeState(project: project)
+        state.updatePublishingPack(language: "es") { pack in
+            pack.chosenTitle = "Un título válido"
+            pack.description = "Una descripción válida."
+        }
+        for item in PublishingChecklistItem.allCases {
+            state.setPublishingChecklist(item, done: true)
+        }
+        let issues = state.publishingValidationIssues(language: "es")
+
+        XCTAssertTrue(issues.isEmpty)
+        XCTAssertEqual(
+            state.publishingFooterSummaryText(errors: 0, warnings: 0),
+            state.localized("publishing.validation.ok")
+        )
+    }
+
+    func testW3FixCDHStudioDescriptionLengthIsCheckedByTheAppValidator() {
+        let project = makeProject()
+        project.publishingPacks["es"] = PublishingPack(
+            chosenTitle: "Título",
+            description: String(repeating: "x", count: 4_900)
+        )
+        project.publishingPacks["es"]?.chapterOverrides = (0..<15).map { index in
+            ChapterOverride(
+                sceneID: nil,
+                title: "Capítulo \(index)",
+                startSeconds: TimeInterval(index * 20)
+            )
+        }
+        let state = fixture.makeState(project: project)
+
+        let rules = Set(state.publishingValidationIssues(language: "es").map(\.rule))
+
+        XCTAssertTrue(rules.contains(.studioDescriptionTooLong))
+    }
+}
+
+// MARK: - H-1 / H-5 / N-6 / N-7
+
+@MainActor
+final class W3FixCDHResolvePackTests: XCTestCase {
+    private var fixture: W3FixCDHFixture!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        fixture = try W3FixCDHFixture()
+    }
+
+    override func tearDown() {
+        fixture?.cleanup()
+        fixture = nil
+        super.tearDown()
+    }
+
+    private func makeProject(title: String = "Prueba sintética") -> FrameProject {
+        let scenes = [
+            w3Scene(order: 0, title: "Gancho", estimated: 40),
+            w3Scene(order: 1, title: "Prueba en mojado", estimated: 40),
+            w3Scene(order: 2, title: "Patrocinio", estimated: 40),
+            w3Scene(order: 3, title: "Veredicto", estimated: 40)
+        ]
+        return FrameProject(title: title, scenes: scenes, primaryLanguage: "es")
+    }
+
+    func testW3FixCDHChaptersFileUsesThePublishingOverrides() throws {
+        let project = makeProject()
+        let scenes = project.scenes.sortedByOrder
+        project.publishingPacks["es"] = PublishingPack(
+            chapterOverrides: [
+                ChapterOverride(sceneID: scenes[1].id, title: "La prueba de verdad", startSeconds: 40),
+                ChapterOverride(sceneID: scenes[2].id, title: "", startSeconds: 80, isExcluded: true)
+            ]
+        )
+        let state = fixture.makeState(project: project)
+        for scene in project.scenes {
+            scene.estimatedDuration = 40
+        }
+        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let plan = try XCTUnwrap(state.makeResolvePackPlan(configuration: configuration))
+
+        XCTAssertEqual(plan.chapters.text, state.publishingChapterPlan(language: "es").text)
+        XCTAssertTrue(plan.chapters.text.contains("La prueba de verdad"))
+        XCTAssertFalse(plan.chapters.text.contains("Patrocinio"))
+        let file = ResolveDeliveryPack.files(for: plan).first { $0.name == plan.names.chapters }
+        XCTAssertEqual(file?.text, plan.chapters.text + "\n")
+    }
+
+    func testW3FixCDHUnlinkedClaimProducesAWarning() throws {
+        let project = makeProject()
+        let claim = ProjectClaim(
+            text: "El circuito cuesta 40 millones",
+            status: .probable,
+            sceneIDs: []
+        )
+        project.claims = [claim]
+        let state = fixture.makeState(project: project)
+        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let plan = try XCTUnwrap(state.makeResolvePackPlan(configuration: configuration))
+
+        XCTAssertTrue(plan.warningItems.contains { item in
+            if case let .unlinkedClaim(_, text) = item.kind { return text == claim.text }
+            return false
+        })
+        XCTAssertTrue(plan.warnings.contains { $0.contains(claim.text) })
+    }
+
+    func testW3FixCDHEnglishPackDoesNotLeakSpanishChapterWarnings() throws {
+        let project = FrameProject(
+            title: "Dos escenas",
+            scenes: [
+                w3Scene(order: 0, title: "Uno", estimated: 20),
+                w3Scene(order: 1, title: "Dos", estimated: 20)
+            ],
+            primaryLanguage: "es"
+        )
+        let state = fixture.makeState(project: project, language: .english)
+        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let plan = try XCTUnwrap(state.makeResolvePackPlan(configuration: configuration))
+        let chapterWarnings = plan.warningItems.filter { item in
+            if case .chapter = item.kind { return true }
+            return false
+        }
+
+        XCTAssertFalse(chapterWarnings.isEmpty)
+        for warning in chapterWarnings {
+            let english = warning.localizedMessage(language: .english)
+            XCTAssertFalse(english.contains("capítulos"))
+            XCTAssertFalse(english.contains("escena"))
+        }
+    }
+
+    func testW3FixCDHInvalidChaptersAreOmittedUnlessTheUserOptsIn() throws {
+        let project = FrameProject(
+            title: "Dos escenas",
+            scenes: [
+                w3Scene(order: 0, title: "Uno", estimated: 20),
+                w3Scene(order: 1, title: "Dos", estimated: 20)
+            ],
+            primaryLanguage: "es"
+        )
+        let state = fixture.makeState(project: project)
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        let plan = try XCTUnwrap(state.makeResolvePackPlan(configuration: configuration))
+
+        XCTAssertFalse(plan.chapters.isValidForYouTube)
+        XCTAssertFalse(ResolveDeliveryPack.files(for: plan).contains { $0.name == plan.names.chapters })
+        XCTAssertTrue(plan.warningItems.contains { item in
+            if case .chaptersOmitted = item.kind { return true }
+            return false
+        })
+
+        configuration.writeInvalidChapters = true
+        let forced = try XCTUnwrap(state.makeResolvePackPlan(configuration: configuration))
+        XCTAssertTrue(ResolveDeliveryPack.files(for: forced).contains { $0.name == forced.names.chapters })
+    }
+}
+
+// MARK: - D-5 / D-4
+
+@MainActor
+final class W3FixCDHThemeAndThumbnailTests: XCTestCase {
+    func testW3FixCDHAccentTextMeetsContrastOnEverySurface() {
+        for scheme in [ColorScheme.light, .dark] {
+            for accent in AccentPalette.allCases {
+                let theme = FrameTheme(colorScheme: scheme, accent: accent)
+                let text = NSColor(theme.accentText)
+                for surface in theme.textSurfaces {
+                    let ratio = MarkupEditorPalette.contrastRatio(text, NSColor(surface))
+                    XCTAssertGreaterThanOrEqual(
+                        ratio,
+                        4.49,
+                        "\(accent) \(scheme) on \(surface): \(ratio)"
+                    )
+                }
+            }
+        }
+    }
+
+    func testW3FixCDHThumbnailCardDoesNotReloadWhenOnlyThePairedTitleChanges() async {
+        let loader = W3FixCDHCountingImageLoader()
+        let model = PublishingThumbnailCardImageModel()
+        let asset = ProjectAsset(path: "/tmp/portada.png", kind: .thumbnail)
+        let directory = FileManager.default.temporaryDirectory
+
+        await model.update(asset: asset, projectDirectory: directory, loader: loader)
+        XCTAssertEqual(model.loadCount, 1)
+
+        // A paired-title keystroke leaves the resource identical.
+        await model.update(asset: asset, projectDirectory: directory, loader: loader)
+        XCTAssertEqual(model.loadCount, 1)
+        XCTAssertEqual(loader.calls, 1)
+
+        var changed = asset
+        changed.modifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        await model.update(asset: changed, projectDirectory: directory, loader: loader)
+        XCTAssertEqual(model.loadCount, 2)
+        XCTAssertEqual(loader.calls, 2)
+    }
+
+    func testW3FixCDHChapterWarningIsLocalized() {
+        let warning = ChapterWarning(
+            kind: .tooFewChapters,
+            message: "YouTube necesita al menos 3 capítulos y solo se han podido formar 2.",
+            chapterCount: 2
+        )
+
+        let english = warning.localizedMessage(language: .english)
+        let spanish = warning.localizedMessage(language: .spanish)
+
+        XCTAssertTrue(english.contains("3 chapters"))
+        XCTAssertFalse(english.contains("capítulos"))
+        XCTAssertTrue(spanish.contains("capítulos"))
+    }
+}
+
+@MainActor
+private final class W3FixCDHCountingImageLoader: ThumbnailCardImageLoading {
+    private(set) var calls = 0
+
+    func image(for asset: ProjectAsset, projectDirectory: URL?) async -> NSImage? {
+        calls += 1
+        return NSImage(size: NSSize(width: 4, height: 4))
+    }
+}

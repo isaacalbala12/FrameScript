@@ -11,8 +11,8 @@ enum AssetFileAccess {
         let didStartAccessing: Bool
     }
 
-    static func resolve(_ asset: ProjectAsset) -> Resolved? {
-        let storedPath = AssetPath.normalized(asset.path)
+    static func resolve(_ asset: ProjectAsset, projectDirectory: URL? = nil) -> Resolved? {
+        let storedPath = AssetPath.resolved(asset.path, relativeTo: projectDirectory)
         if !storedPath.isEmpty, FileManager.default.fileExists(atPath: storedPath) {
             let url = URL(fileURLWithPath: storedPath)
             let started = url.startAccessingSecurityScopedResource()
@@ -39,8 +39,8 @@ enum AssetFileAccess {
 
     @MainActor
     @discardableResult
-    static func quickLook(_ asset: ProjectAsset) -> Bool {
-        guard let file = resolve(asset),
+    static func quickLook(_ asset: ProjectAsset, projectDirectory: URL? = nil) -> Bool {
+        guard let file = resolve(asset, projectDirectory: projectDirectory),
               FileManager.default.fileExists(atPath: file.url.path)
         else { return false }
         QuickLookPresenter.shared.present(
@@ -52,8 +52,8 @@ enum AssetFileAccess {
 
     @MainActor
     @discardableResult
-    static func reveal(_ asset: ProjectAsset) -> Bool {
-        guard let file = resolve(asset) else { return false }
+    static func reveal(_ asset: ProjectAsset, projectDirectory: URL? = nil) -> Bool {
+        guard let file = resolve(asset, projectDirectory: projectDirectory) else { return false }
         defer { stopAccessing(file) }
         guard FileManager.default.fileExists(atPath: file.url.path) else { return false }
         NSWorkspace.shared.activateFileViewerSelecting([file.url])
@@ -62,8 +62,8 @@ enum AssetFileAccess {
 
     @MainActor
     @discardableResult
-    static func open(_ asset: ProjectAsset) -> Bool {
-        guard let file = resolve(asset) else { return false }
+    static func open(_ asset: ProjectAsset, projectDirectory: URL? = nil) -> Bool {
+        guard let file = resolve(asset, projectDirectory: projectDirectory) else { return false }
         defer { stopAccessing(file) }
         guard FileManager.default.fileExists(atPath: file.url.path) else { return false }
         return NSWorkspace.shared.open(file.url)

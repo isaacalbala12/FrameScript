@@ -101,10 +101,13 @@ struct YouTubeChaptersTests {
         let result = YouTubeChapters.make(scenes: scenes)
 
         #expect(result.text == """
-        0:00 A corta
+        0:00 B
         0:35 C
         """)
         #expect(result.warnings.contains { $0.kind == .shortSceneMerged && $0.sceneIndex == 0 })
+        #expect(result.warnings.contains {
+            $0.kind == .shortSceneMerged && $0.message.contains("capítulo siguiente")
+        })
     }
 
     @Test("Merges a short last scene into the previous chapter")
@@ -236,7 +239,7 @@ struct YouTubeChaptersTests {
         ]
         let short = YouTubeChapters.make(scenes: shortScenes, rate: .fps29_97)
         #expect(short.text == """
-        0:00 A
+        0:00 B
         0:29 C
         """)
         #expect(short.warnings.contains { $0.kind == .shortSceneMerged && $0.sceneIndex == 0 })

@@ -12,6 +12,9 @@ public struct ExportScene: Sendable, Hashable, Codable, Identifiable {
     public var duration: TimeInterval
     /// Marks the scene as a re-hook; the pack emits an extra purple marker.
     public var isRehook: Bool
+    /// False when a real re-hook cue already marks the point, so the synthetic
+    /// scene-level marker would duplicate it.
+    public var emitsSceneRehookMarker: Bool
     /// Extra cue markers, with offsets relative to the scene start.
     public var markers: [ExportMarker]
     /// Shot list rows for this scene.
@@ -35,6 +38,7 @@ public struct ExportScene: Sendable, Hashable, Codable, Identifiable {
         start: TimeInterval,
         duration: TimeInterval,
         isRehook: Bool = false,
+        emitsSceneRehookMarker: Bool = true,
         markers: [ExportMarker] = [],
         shots: [ExportShot] = [],
         scriptExcerpt: String? = nil,
@@ -49,6 +53,7 @@ public struct ExportScene: Sendable, Hashable, Codable, Identifiable {
         self.start = start
         self.duration = duration
         self.isRehook = isRehook
+        self.emitsSceneRehookMarker = emitsSceneRehookMarker
         self.markers = markers
         self.shots = shots
         self.scriptExcerpt = scriptExcerpt
@@ -256,14 +261,35 @@ public struct ExportSettings: Sendable, Hashable, Codable {
 
     /// Human-readable issues worth surfacing in the delivery UI.
     public var validationWarnings: [String] {
-        var warnings: [String] = []
+        validationIssues.map(\.message)
+    }
+
+    /// Structured form of `validationWarnings` so the app can render the same
+    /// issue in English, Spanish or Russian instead of leaking Spanish.
+    public var validationIssues: [ExportSettingsIssue] {
+        var issues: [ExportSettingsIssue] = []
         if dropFrame && !fps.supportsDropFrame {
-            warnings.append("Drop frame no existe a \(fps) fps; se exporta como NON-DROP FRAME.")
+            issues.append(.dropFrameUnsupported(fps: String(describing: fps)))
         }
         if projectName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            warnings.append("El proyecto no tiene nombre; se usará «FrameScript».")
+            issues.append(.emptyProjectName)
         }
-        return warnings
+        return issues
+    }
+}
+
+public enum ExportSettingsIssue: Sendable, Hashable {
+    case dropFrameUnsupported(fps: String)
+    case emptyProjectName
+
+    /// Spanish fallback used by the writers and the CLI.
+    public var message: String {
+        switch self {
+        case let .dropFrameUnsupported(fps):
+            "Drop frame no existe a \(fps) fps; se exporta como NON-DROP FRAME."
+        case .emptyProjectName:
+            "El proyecto no tiene nombre; se usará «FrameScript»."
+        }
     }
 }
 
@@ -293,11 +319,27 @@ public struct MarkerWarning: Sendable, Hashable {
     public let kind: Kind
     public let message: String
     public let frame: Int?
+    /// Name of the marker that could not survive the collision.
+    public let name: String?
+    /// Name of the marker that kept the frame.
+    public let otherName: String?
+    /// Marker count for `tooManyEvents`.
+    public let count: Int?
 
-    public init(kind: Kind, message: String, frame: Int? = nil) {
+    public init(
+        kind: Kind,
+        message: String,
+        frame: Int? = nil,
+        name: String? = nil,
+        otherName: String? = nil,
+        count: Int? = nil
+    ) {
         self.kind = kind
         self.message = message
         self.frame = frame
+        self.name = name
+        self.otherName = otherName
+        self.count = count
     }
 }
 
@@ -346,7 +388,7 @@ public enum ExportMarkerResolver {
                 )
             )
 
-            if scene.isRehook {
+            if scene.isRehook && scene.emitsSceneRehookMarker {
                 resolved.append(
                     ResolvedMarker(
                         frame: startFrame + 1,
@@ -413,7 +455,9 @@ public enum ExportMarkerResolver {
                     MarkerWarning(
                         kind: .duplicateFrame,
                         message: "«\(dropped.name)» coincide en el fotograma \(frame) con «\(primary.name)»; se ha fusionado en su nota.",
-                        frame: frame
+                        frame: frame,
+                        name: dropped.name,
+                        otherName: primary.name
                     )
                 )
             }
@@ -424,7 +468,8 @@ public enum ExportMarkerResolver {
             warnings.append(
                 MarkerWarning(
                     kind: .tooManyEvents,
-                    message: "Hay \(merged.count) marcadores; CMX3600 solo admite 999 eventos. Resolve puede ignorar los últimos."
+                    message: "Hay \(merged.count) marcadores; CMX3600 solo admite 999 eventos. Resolve puede ignorar los últimos.",
+                    count: merged.count
                 )
             )
         }

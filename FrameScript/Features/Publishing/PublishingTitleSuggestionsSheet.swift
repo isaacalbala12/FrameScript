@@ -131,7 +131,7 @@ struct PublishingTitleSuggestionsSheet: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(theme.accent.color)
+            .foregroundStyle(theme.accentText)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)

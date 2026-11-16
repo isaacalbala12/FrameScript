@@ -135,6 +135,8 @@ struct ResolvePackConfiguration: Equatable, Sendable {
     var includeChapters: Bool
     var includeChapterMarkersInFCPXML: Bool
     var includeReadme: Bool
+    /// Explicit opt-in for a chapter list YouTube will ignore (fewer than 3).
+    var writeInvalidChapters: Bool
 
     static func defaults(languageCode: String) -> ResolvePackConfiguration {
         let rate = ResolvePackFrameRate.default
@@ -153,7 +155,8 @@ struct ResolvePackConfiguration: Equatable, Sendable {
             includeEditingNotes: true,
             includeChapters: true,
             includeChapterMarkersInFCPXML: true,
-            includeReadme: true
+            includeReadme: true,
+            writeInvalidChapters: false
         )
     }
 
@@ -195,7 +198,8 @@ struct ResolvePackConfiguration: Equatable, Sendable {
             includeEditingNotes: includeEditingNotes,
             includeChapters: includeChapters,
             includeChapterMarkersInFCPXML: includeChapterMarkersInFCPXML && includeFCPXML,
-            includeReadme: includeReadme
+            includeReadme: includeReadme,
+            writeInvalidChapters: writeInvalidChapters
         )
     }
 }

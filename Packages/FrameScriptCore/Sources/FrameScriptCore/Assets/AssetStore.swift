@@ -40,9 +40,10 @@ public enum AssetStore {
 
     /// Copies `sourceURL` into the project assets folder and returns the copy.
     ///
-    /// An existing file with the same name is replaced so republishing a new
-    /// thumbnail does not leave stale copies behind. The returned URL always
-    /// points inside the project folder.
+    /// A name that is already taken becomes `portada 2.png`, `portada 3.png`, …
+    /// An existing file is never replaced: two user images called
+    /// `portada.png` must both survive, because each asset entry points at its
+    /// own copy. The returned URL always points inside the project folder.
     @discardableResult
     public static func copyThumbnail(
         from sourceURL: URL,
@@ -61,14 +62,14 @@ public enum AssetStore {
             throw AssetStoreError.cannotCreateDirectory
         }
 
-        let destination = directory.appendingPathComponent(
-            destinationName(for: sourceURL, preferredName: preferredName)
+        let requestedName = destinationName(for: sourceURL, preferredName: preferredName)
+        let destination = availableDestination(
+            in: directory,
+            name: requestedName,
+            fileManager: fileManager
         )
         do {
             if destination.standardizedFileURL.path != sourceURL.standardizedFileURL.path {
-                if fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.removeItem(at: destination)
-                }
                 try fileManager.copyItem(at: sourceURL, to: destination)
             }
         } catch {
@@ -146,5 +147,35 @@ public enum AssetStore {
             }
         }
         return name.isEmpty ? "thumbnail" : name
+    }
+
+    /// Same collision rule as `ThumbnailAssetPath`: `name.ext`, then
+    /// `name 2.ext`, `name 3.ext`, … Never overwrites an existing file.
+    private static func availableDestination(
+        in directory: URL,
+        name: String,
+        fileManager: FileManager
+    ) -> URL {
+        let base = (name as NSString).deletingPathExtension
+        let fileExtension = (name as NSString).pathExtension
+        func candidate(_ index: Int) -> URL {
+            let fileName: String
+            if index <= 1 {
+                fileName = name
+            } else if fileExtension.isEmpty {
+                fileName = "\(base) \(index)"
+            } else {
+                fileName = "\(base) \(index).\(fileExtension)"
+            }
+            return directory.appendingPathComponent(fileName)
+        }
+
+        var index = 1
+        var destination = candidate(index)
+        while fileManager.fileExists(atPath: destination.path), index < 10_000 {
+            index += 1
+            destination = candidate(index)
+        }
+        return destination
     }
 }

@@ -244,4 +244,50 @@ public enum PublishingChapters {
         }
         return result
     }
+
+    /// Imported chapters that have no scene of their own. The importer maps a
+    /// timestamp to a scene when it falls inside that scene's range, but a
+    /// hand-written chapter can still be unmapped; it must travel to the
+    /// publishing export instead of disappearing.
+    public static func importedChapters(
+        _ overrides: [FrameScriptDocument.ChapterOverride]
+    ) -> [EscaletaChapter] {
+        overrides
+            .filter { $0.sceneID == nil && !$0.isExcluded }
+            .compactMap { override in
+                guard let startSeconds = override.startSeconds,
+                      let title = PublishingText.nonEmpty(override.title) else { return nil }
+                let seconds = max(0, Int(startSeconds.rounded()))
+                return EscaletaChapter(
+                    seconds: seconds,
+                    timestamp: DurationFormat.clock(seconds: seconds),
+                    title: title
+                )
+            }
+            .sorted { $0.seconds < $1.seconds }
+    }
+
+    /// Final chapter list for the publishing export: the generated plan plus
+    /// imported chapters that no scene owns, de-duplicated by start second and
+    /// sorted like YouTube expects.
+    public static func escaletaChapters(
+        plan: ChapterPlan,
+        importedOverrides: [FrameScriptDocument.ChapterOverride]
+    ) -> [EscaletaChapter] {
+        var result = plan.chapters.map { chapter in
+            EscaletaChapter(
+                seconds: chapter.startSeconds,
+                timestamp: DurationFormat.clock(seconds: chapter.startSeconds),
+                title: chapter.title
+            )
+        }
+        let starts = Set(result.map(\.seconds))
+        for imported in importedChapters(importedOverrides) where !starts.contains(imported.seconds) {
+            result.append(imported)
+        }
+        return result.sorted { lhs, rhs in
+            if lhs.seconds == rhs.seconds { return lhs.title < rhs.title }
+            return lhs.seconds < rhs.seconds
+        }
+    }
 }

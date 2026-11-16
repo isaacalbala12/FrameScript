@@ -428,7 +428,10 @@ final class ResolvePackTests: XCTestCase {
     func testPackPlanUsesMapperOutputAndWritesEverySelectedFile() throws {
         let scene = Scene(order: 0, sectionType: .hook, title: "Gancho", scriptText: tenWords)
         let mapping = mapper().map(project: makeProject(scenes: [scene]))
-        let configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        var configuration = ResolvePackConfiguration.defaults(languageCode: "es")
+        // One scene cannot form three chapters; opt in explicitly so this test
+        // keeps exercising the file writer rather than N-7's omission.
+        configuration.writeInvalidChapters = true
         let options = try XCTUnwrap(configuration.options())
         let plan = ResolveDeliveryPack.plan(
             scenes: mapping.scenes,
@@ -489,7 +492,7 @@ final class ResolvePackTests: XCTestCase {
             options: options
         )
         XCTAssertTrue(plan.warnings.contains { $0.contains("60 caracteres") })
-        XCTAssertEqual(plan.markerPreviews.first?.name.count, 60)
+        XCTAssertEqual(plan.markerPreviews.first?.edlName.count, 60)
     }
 
     // MARK: - Layout and chrome
@@ -558,6 +561,22 @@ final class ResolvePackTests: XCTestCase {
         XCTAssertEqual(spanish["resolvePack.legend.graphic"], "Gráfico / tabla")
         XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.subtitle"]).contains("Resolve FREE"))
         XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.note.authoritative"]).contains("EDL"))
+        XCTAssertEqual(spanish["resolvePack.metric.cues"], "Marcas")
+        XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.metric.markersFormat"]).contains("marcas"))
+        XCTAssertTrue(try XCTUnwrap(spanish["resolvePack.preview.empty"]).contains("marcas"))
+        for (key, value) in spanish where value.range(
+            of: "\\bcues\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            XCTFail("Spanish Resolve string \(key) still says cue: \(value)")
+        }
+        XCTAssertEqual(russian["resolvePack.metric.cues"], "Метки")
+        for (key, value) in russian where value.range(
+            of: "\\bКью\\b",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            XCTFail("Russian Resolve string \(key) still says Кью: \(value)")
+        }
     }
 }
 

@@ -145,7 +145,8 @@ public struct BoardPendingTaskDeriver: BoardPendingTaskProviding {
             }
         }
 
-        for task in project.checklistTasks where !task.isDone {
+        for task in project.checklistTasks
+        where !task.isDone && PublishingChecklistItem.item(forTaskText: task.text) == nil {
             let id = "\(task.id.uuidString):checklist"
             guard seen.insert(id).inserted else { continue }
             let sceneTitle = scenes.first(where: { $0.id == task.sceneID })

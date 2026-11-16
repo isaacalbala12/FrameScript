@@ -10,8 +10,19 @@ public enum PublishingValidator {
     public static func issues(for input: PublishingValidationInput) -> [PublishingValidationIssue] {
         var issues: [PublishingValidationIssue] = []
 
+        let trimmedTitle = input.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let titleCount = input.title.count
-        if titleCount > PublishingLimits.titleMaximum {
+        if trimmedTitle.isEmpty {
+            issues.append(
+                PublishingValidationIssue(
+                    field: .title,
+                    rule: .titleMissing,
+                    severity: .warning,
+                    count: 0,
+                    limit: PublishingLimits.titleMaximum
+                )
+            )
+        } else if titleCount > PublishingLimits.titleMaximum {
             issues.append(
                 PublishingValidationIssue(
                     field: .title,
@@ -32,9 +43,31 @@ public enum PublishingValidator {
                 )
             )
         }
+        if let invalid = invalidCharacterCount(input.title), invalid > 0 {
+            issues.append(
+                PublishingValidationIssue(
+                    field: .title,
+                    rule: .titleInvalidCharacters,
+                    severity: .error,
+                    count: invalid,
+                    limit: 0
+                )
+            )
+        }
 
+        let trimmedDescription = input.description.trimmingCharacters(in: .whitespacesAndNewlines)
         let descriptionCount = input.description.count
-        if descriptionCount > PublishingLimits.descriptionMaximum {
+        if trimmedDescription.isEmpty {
+            issues.append(
+                PublishingValidationIssue(
+                    field: .description,
+                    rule: .descriptionMissing,
+                    severity: .warning,
+                    count: 0,
+                    limit: PublishingLimits.descriptionMaximum
+                )
+            )
+        } else if descriptionCount > PublishingLimits.descriptionMaximum {
             issues.append(
                 PublishingValidationIssue(
                     field: .description,
@@ -52,6 +85,30 @@ public enum PublishingValidator {
                     severity: .warning,
                     count: descriptionCount,
                     limit: PublishingLimits.descriptionRecommended
+                )
+            )
+        }
+        if let invalid = invalidCharacterCount(input.description), invalid > 0 {
+            issues.append(
+                PublishingValidationIssue(
+                    field: .description,
+                    rule: .descriptionInvalidCharacters,
+                    severity: .error,
+                    count: invalid,
+                    limit: 0
+                )
+            )
+        }
+
+        let studioCount = input.studioDescription.count
+        if studioCount > PublishingLimits.descriptionMaximum {
+            issues.append(
+                PublishingValidationIssue(
+                    field: .description,
+                    rule: .studioDescriptionTooLong,
+                    severity: .error,
+                    count: studioCount,
+                    limit: PublishingLimits.descriptionMaximum
                 )
             )
         }
@@ -133,5 +190,12 @@ public enum PublishingValidator {
 
     public static func hasErrors(_ issues: [PublishingValidationIssue]) -> Bool {
         issues.contains { $0.severity == .error }
+    }
+
+    /// YouTube rejects angle brackets in the title and description; tag and
+    /// hashtag rules do not matter when the whole upload is refused.
+    private static func invalidCharacterCount(_ value: String) -> Int? {
+        let count = value.unicodeScalars.filter { $0.value == 0x3C || $0.value == 0x3E }.count
+        return count > 0 ? count : nil
     }
 }

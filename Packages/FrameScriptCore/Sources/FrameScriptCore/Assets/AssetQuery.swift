@@ -117,8 +117,32 @@ public enum AssetQuery {
             AssetPath.baseName(asset.path),
             asset.path,
             asset.kind.rawValue,
+            kindSynonyms(asset.kind).joined(separator: " "),
             asset.tags.joined(separator: " ")
         ].filter { !$0.isEmpty }
+    }
+
+    /// The UI badges show a localized kind label, so the search box must match
+    /// the same words. Raw values are `CAM`, `OBS`, `music`, …; «música»,
+    /// «miniatura» and their Russian equivalents would otherwise return zero
+    /// results despite the badge the creator is looking at.
+    private static func kindSynonyms(_ kind: FrameScriptDocument.AssetKind) -> [String] {
+        switch kind {
+        case .camera:
+            ["camera", "cam", "cámara", "camara", "камера"]
+        case .obs:
+            ["obs", "gameplay", "grabación", "grabacion", "запись"]
+        case .screenshot:
+            ["screenshot", "captura", "captura de pantalla", "скриншот"]
+        case .web:
+            ["web", "internet", "referencia web", "веб"]
+        case .music:
+            ["music", "música", "musica", "аудио", "музыка"]
+        case .graphic:
+            ["graphic", "gráfico", "grafico", "imagen", "gráfica", "grafica", "графика", "изображение"]
+        case .thumbnail:
+            ["thumbnail", "miniatura", "portada", "миниатюра", "обложка"]
+        }
     }
 
     private static func compareNames(

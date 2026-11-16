@@ -221,7 +221,8 @@ public enum ProductionChecklist {
 
         var seenTaskIDs = Set<UUID>()
         for (index, task) in project.checklistTasks.enumerated()
-        where seenTaskIDs.insert(task.id).inserted {
+        where seenTaskIDs.insert(task.id).inserted
+            && PublishingChecklistItem.item(forTaskText: task.text) == nil {
             let linkedScene = task.sceneID.flatMap { scenesByID[$0] }
             items.append(
                 ProductionItem(

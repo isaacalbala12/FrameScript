@@ -124,9 +124,19 @@ struct FrameTheme {
         Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: .white, minimum: 4.5))
     }
 
-    /// Accent usable as text: at least 4.5:1 against `appBackground` in light and dark.
+    /// Accent usable as text: at least 4.5:1 against every surface text is
+    /// drawn on, in light and dark. The worst surface is chosen explicitly so a
+    /// value that passes on `appBackground` cannot fail on a white card.
     var accentText: Color {
-        Color(nsColor: MarkupEditorPalette.ensuredContrast(NSColor(accent.color), against: NSColor(appBackground), minimum: 4.5))
+        let base = MarkupEditorPalette.opaque(NSColor(accent.color))
+        let surfaces = textSurfaces.map { MarkupEditorPalette.opaque(NSColor($0)) }
+        let worst = surfaces.min { lhs, rhs in
+            MarkupEditorPalette.contrastRatio(base, lhs)
+                < MarkupEditorPalette.contrastRatio(base, rhs)
+        } ?? MarkupEditorPalette.opaque(NSColor(appBackground))
+        return Color(
+            nsColor: MarkupEditorPalette.ensuredContrast(base, against: worst, minimum: 4.5)
+        )
     }
 
     /// Foreground for a filled control (record/stop buttons). Picks white or

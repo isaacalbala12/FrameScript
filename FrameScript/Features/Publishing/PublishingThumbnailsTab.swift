@@ -88,29 +88,12 @@ struct PublishingThumbnailsTab: View {
     }
 
     private func variantCard(_ variant: ThumbnailVariant, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(theme.editorSurface)
-                if let url = appState.publishingThumbnailURL(for: variant),
-                   let image = NSImage(contentsOf: url) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(height: 112)
-                        .frame(maxWidth: .infinity)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                } else {
-                    VStack(spacing: 5) {
-                        Image(systemName: "photo")
-                            .font(.system(size: 18))
-                        Text(appState.localized("publishing.thumbnails.missingFile"))
-                            .font(.system(size: 10))
-                    }
-                    .foregroundStyle(theme.tertiaryText)
-                }
-            }
+        let asset = appState.project.assets.first { $0.id == variant.assetID }
+        return VStack(alignment: .leading, spacing: 8) {
+            PublishingThumbnailCardImage(
+                asset: asset,
+                projectDirectory: appState.assetProjectDirectory
+            )
             .frame(height: 112)
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -133,7 +116,7 @@ struct PublishingThumbnailsTab: View {
                 if variant.isChosen {
                     Text(appState.localized("publishing.thumbnails.chosen"))
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(theme.accent.color)
+                        .foregroundStyle(theme.accentText)
                         .padding(.horizontal, 4)
                         .frame(height: 15)
                         .background {
@@ -382,6 +365,49 @@ struct PublishingThumbnailsTab: View {
             errorMessage = String(
                 format: appState.localized("publishing.thumbnails.error.copyFailed"),
                 error.localizedDescription
+            )
+        }
+    }
+}
+
+/// Decodes the card image away from the layout pass and only when the file or
+/// its modification date changes. A paired-title keystroke no longer triggers a
+/// synchronous `NSImage(contentsOf:)` on the main actor (D-4).
+private struct PublishingThumbnailCardImage: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.frameTheme) private var theme
+
+    let asset: ProjectAsset?
+    let projectDirectory: URL?
+
+    @State private var model = PublishingThumbnailCardImageModel()
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.editorSurface)
+            if let image = model.image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                VStack(spacing: 5) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 18))
+                    Text(appState.localized("publishing.thumbnails.missingFile"))
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(theme.tertiaryText)
+            }
+        }
+        .task(id: ThumbnailCardImageRequest(asset: asset)) {
+            await model.update(
+                asset: asset,
+                projectDirectory: projectDirectory,
+                loader: AssetThumbnailCache.shared
             )
         }
     }

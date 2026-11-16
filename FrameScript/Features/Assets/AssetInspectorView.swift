@@ -135,10 +135,10 @@ struct AssetInspectorView: View {
     private func actions(_ asset: ProjectAsset) -> some View {
         HStack(spacing: 6) {
             iconAction("play.rectangle", help: appState.localized("assets.preview"), disabled: asset.isLastKnownMissing) {
-                AssetFileAccess.quickLook(asset)
+                AssetFileAccess.quickLook(asset, projectDirectory: appState.assetProjectDirectory)
             }
             iconAction("folder", help: appState.localized("assets.reveal"), disabled: asset.isLastKnownMissing) {
-                AssetFileAccess.reveal(asset)
+                AssetFileAccess.reveal(asset, projectDirectory: appState.assetProjectDirectory)
             }
             iconAction("arrow.triangle.2.circlepath", help: appState.localized("assets.locate"), disabled: false) {
                 onLocate(asset)

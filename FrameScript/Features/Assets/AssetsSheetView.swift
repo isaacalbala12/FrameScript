@@ -108,8 +108,16 @@ struct AssetsSheetView: View {
             Button(appState.localized("assets.cancel"), role: .cancel) {
                 pendingRemoval = nil
             }
-        } message: { _ in
-            Text(appState.localized("assets.remove.message"))
+        } message: { asset in
+            let usage = appState.publishingUsageCount(forAssetID: asset.id)
+            if usage > 0 {
+                Text(String(
+                    format: appState.localized("assets.remove.message.publishing"),
+                    usage
+                ))
+            } else {
+                Text(appState.localized("assets.remove.message"))
+            }
         }
         .onAppear {
             if selection == nil { selection = visibleAssets.first?.id }
@@ -403,7 +411,7 @@ struct AssetsSheetView: View {
                 Text(appState.localized("assets.filter.missingOnly"))
                     .font(.system(size: 11))
             }
-            .foregroundStyle(missingOnly ? theme.accent.color : theme.secondaryText)
+            .foregroundStyle(missingOnly ? theme.accentText : theme.secondaryText)
             .padding(.horizontal, 8)
             .frame(height: 24)
             .background {
@@ -487,7 +495,7 @@ struct AssetsSheetView: View {
                         AssetGridCard(asset: asset, isSelected: selection == asset.id, width: cellWidth)
                             .frame(width: cellWidth)
                             .onTapGesture { selection = asset.id }
-                            .onTapGesture(count: 2) { AssetFileAccess.quickLook(asset) }
+                            .onTapGesture(count: 2) { AssetFileAccess.quickLook(asset, projectDirectory: appState.assetProjectDirectory) }
                             .contextMenu { contextMenu(for: asset) }
                     }
                 }
@@ -502,7 +510,7 @@ struct AssetsSheetView: View {
                 ForEach(visibleAssets) { asset in
                     AssetListRow(asset: asset, isSelected: selection == asset.id)
                         .onTapGesture { selection = asset.id }
-                        .onTapGesture(count: 2) { AssetFileAccess.quickLook(asset) }
+                        .onTapGesture(count: 2) { AssetFileAccess.quickLook(asset, projectDirectory: appState.assetProjectDirectory) }
                         .contextMenu { contextMenu(for: asset) }
                 }
             }
@@ -542,17 +550,17 @@ struct AssetsSheetView: View {
     @ViewBuilder
     private func contextMenu(for asset: ProjectAsset) -> some View {
         Button(appState.localized("assets.preview")) {
-            AssetFileAccess.quickLook(asset)
+            AssetFileAccess.quickLook(asset, projectDirectory: appState.assetProjectDirectory)
         }
         .disabled(!FileManager.default.fileExists(atPath: appState.assetReferenceURL(asset)?.path ?? ""))
 
         Button(appState.localized("assets.reveal")) {
-            AssetFileAccess.reveal(asset)
+            AssetFileAccess.reveal(asset, projectDirectory: appState.assetProjectDirectory)
         }
         .disabled(asset.isLastKnownMissing)
 
         Button(appState.localized("assets.open")) {
-            AssetFileAccess.open(asset)
+            AssetFileAccess.open(asset, projectDirectory: appState.assetProjectDirectory)
         }
         .disabled(asset.isLastKnownMissing)
 

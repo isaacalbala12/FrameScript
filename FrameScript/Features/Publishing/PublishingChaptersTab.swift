@@ -28,6 +28,7 @@ struct PublishingChaptersTab: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 preview
+                importedChapters
                 warnings
                 sceneList
             }
@@ -152,6 +153,62 @@ struct PublishingChaptersTab: View {
             )
     }
 
+    private var importedChapterList: [EscaletaChapter] {
+        appState.publishingImportedChapters(language: language)
+    }
+
+    @ViewBuilder
+    private var importedChapters: some View {
+        let imported = importedChapterList
+        if !imported.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(theme.warning)
+                    Text(appState.localized("publishing.chapters.importedTitle"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.warning)
+                }
+                Text(appState.localized("publishing.chapters.importedWarning"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(Array(imported.enumerated()), id: \.offset) { _, chapter in
+                    HStack(spacing: 8) {
+                        Text(chapter.timestamp)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.secondaryText)
+                        Text(chapter.title)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.primaryText)
+                        Spacer(minLength: 4)
+                        Text(appState.localized("publishing.chapters.importedBadge"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(theme.warning)
+                            .padding(.horizontal, 4)
+                            .frame(height: 15)
+                            .background {
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(theme.warning.opacity(0.12))
+                            }
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(theme.warning.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(theme.warning.opacity(0.3), lineWidth: 1)
+                    )
+            }
+            .accessibilityIdentifier("publishing-imported-chapters")
+        }
+    }
+
     // MARK: - Warnings
 
     @ViewBuilder
@@ -167,7 +224,7 @@ struct PublishingChaptersTab: View {
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(theme.warning)
                             .padding(.top, 3)
-                        Text(warning.message)
+                        Text(warning.localizedMessage(language: appState.currentLanguage))
                             .font(.system(size: 11))
                             .foregroundStyle(theme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -335,7 +392,7 @@ struct ChapterRegenerationSheet: View {
                                     .foregroundStyle(theme.primaryText)
                                 Text("→ \(change.newTitle)")
                                     .font(.system(size: 11))
-                                    .foregroundStyle(theme.accent.color)
+                                    .foregroundStyle(theme.accentText)
                             }
                             Spacer()
                         }

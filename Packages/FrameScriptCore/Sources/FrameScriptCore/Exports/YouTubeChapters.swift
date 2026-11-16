@@ -43,13 +43,40 @@ public struct ChapterWarning: Sendable, Hashable {
     }
 
     public let kind: Kind
+    /// Spanish fallback, kept for the CLI, tests and older callers. The app
+    /// localizes the same warning from the structured fields below.
     public let message: String
     public let sceneIndex: Int?
+    /// Title the warning is about (scene title or generated chapter title).
+    public let title: String?
+    /// The neighbouring title named by the warning, when it has one.
+    public let otherTitle: String?
+    /// Display timestamp involved in the warning, when it has one.
+    public let timestamp: String?
+    /// Chapter count for `tooFewChapters`.
+    public let chapterCount: Int?
+    /// True when a short first chapter merged into the next one (the merged
+    /// chapter keeps 0:00 and takes the next title).
+    public let isFirstChapterMerge: Bool
 
-    public init(kind: Kind, message: String, sceneIndex: Int? = nil) {
+    public init(
+        kind: Kind,
+        message: String,
+        sceneIndex: Int? = nil,
+        title: String? = nil,
+        otherTitle: String? = nil,
+        timestamp: String? = nil,
+        chapterCount: Int? = nil,
+        isFirstChapterMerge: Bool = false
+    ) {
         self.kind = kind
         self.message = message
         self.sceneIndex = sceneIndex
+        self.title = title
+        self.otherTitle = otherTitle
+        self.timestamp = timestamp
+        self.chapterCount = chapterCount
+        self.isFirstChapterMerge = isFirstChapterMerge
     }
 }
 
@@ -159,7 +186,9 @@ public enum YouTubeChapters {
                     ChapterWarning(
                         kind: .duplicateStart,
                         message: "«\(scene.title)» empieza en el mismo fotograma que la escena anterior; se omite como capítulo.",
-                        sceneIndex: index
+                        sceneIndex: index,
+                        title: scene.title,
+                        otherTitle: last.title
                     )
                 )
                 continue
@@ -169,7 +198,10 @@ public enum YouTubeChapters {
                     ChapterWarning(
                         kind: .duplicateTimestamp,
                         message: "«\(scene.title)» comparte el timestamp \(DurationFormat.clock(seconds: seconds)) con la escena anterior; se omite como capítulo.",
-                        sceneIndex: index
+                        sceneIndex: index,
+                        title: scene.title,
+                        otherTitle: last.title,
+                        timestamp: DurationFormat.clock(seconds: seconds)
                     )
                 )
                 continue
@@ -179,7 +211,8 @@ public enum YouTubeChapters {
                     ChapterWarning(
                         kind: .sceneOutsideVideo,
                         message: "«\(scene.title)» empieza en o después del final del vídeo; se omite como capítulo.",
-                        sceneIndex: index
+                        sceneIndex: index,
+                        title: scene.title
                     )
                 )
                 continue
@@ -193,7 +226,8 @@ public enum YouTubeChapters {
                     ChapterWarning(
                         kind: .titleTruncated,
                         message: "El título de «\(scene.title)» supera los 60 caracteres y se ha recortado.",
-                        sceneIndex: index
+                        sceneIndex: index,
+                        title: scene.title
                     )
                 )
             }
@@ -203,7 +237,8 @@ public enum YouTubeChapters {
                     ChapterWarning(
                         kind: .emptyTitle,
                         message: "Una escena no tiene título; se usa «\(title)».",
-                        sceneIndex: index
+                        sceneIndex: index,
+                        title: title
                     )
                 )
             }
@@ -223,7 +258,8 @@ public enum YouTubeChapters {
             warnings.append(
                 ChapterWarning(
                     kind: .tooFewChapters,
-                    message: "Ninguna escena entra en la lista de capítulos."
+                    message: "Ninguna escena entra en la lista de capítulos.",
+                    chapterCount: 0
                 )
             )
             return ChapterList(chapters: [], text: "", warnings: warnings, videoEndSeconds: videoEndSeconds)
@@ -257,25 +293,37 @@ public enum YouTubeChapters {
                 guard span < minimumSeconds else { continue }
 
                 if index == 0 {
-                    // First chapter too short: it absorbs the next boundary.
+                    // The first chapter must stay at 0:00, so the merged
+                    // chapter takes the next chapter's title and identity.
                     let shortTitle = candidates[0].title
                     let shortScene = candidates[0].sceneIndex
                     let nextTitle = candidates[1].title
-                    candidates.remove(at: 1)
+                    candidates.remove(at: 0)
+                    candidates[0].frame = 0
+                    candidates[0].seconds = 0
                     warnings.append(
                         ChapterWarning(
                             kind: .shortSceneMerged,
-                            message: "«\(shortTitle)» dura menos de 10 s; se fusiona con «\(nextTitle)» en un solo capítulo.",
-                            sceneIndex: shortScene
+                            message: "«\(shortTitle)» dura menos de 10 s; se fusiona con el capítulo siguiente («\(nextTitle)») y el capítulo empieza en 0:00.",
+                            sceneIndex: shortScene,
+                            title: shortTitle,
+                            otherTitle: nextTitle,
+                            timestamp: "0:00",
+                            isFirstChapterMerge: true
                         )
                     )
                 } else {
                     let removed = candidates.remove(at: index)
+                    let previous = candidates[index - 1]
+                    let previousClock = DurationFormat.clock(seconds: previous.seconds)
                     warnings.append(
                         ChapterWarning(
                             kind: .shortSceneMerged,
-                            message: "«\(removed.title)» dura menos de 10 s; se ha fusionado con «\(candidates[index - 1].title)».",
-                            sceneIndex: removed.sceneIndex
+                            message: "«\(removed.title)» dura menos de 10 s; se fusiona con el capítulo anterior («\(previous.title)», desde \(previousClock)).",
+                            sceneIndex: removed.sceneIndex,
+                            title: removed.title,
+                            otherTitle: previous.title,
+                            timestamp: previousClock
                         )
                     )
                 }
@@ -298,7 +346,8 @@ public enum YouTubeChapters {
             warnings.append(
                 ChapterWarning(
                     kind: .tooFewChapters,
-                    message: "YouTube necesita al menos 3 capítulos y solo se han podido formar \(chapters.count)."
+                    message: "YouTube necesita al menos 3 capítulos y solo se han podido formar \(chapters.count).",
+                    chapterCount: chapters.count
                 )
             )
         }
