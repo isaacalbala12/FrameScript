@@ -272,6 +272,9 @@ extension AppState {
         // confirmed claim is a user choice and must survive later updates.
         if updated.status == .confirmed, !wasConfirmed {
             updated.needsVerification = false
+        } else if wasConfirmed, updated.status != .confirmed {
+            // Demoting a confirmed claim makes it unverified again.
+            updated.needsVerification = true
         }
         project.claims[index] = updated
         if previous.text != updated.text {
@@ -316,6 +319,12 @@ extension AppState {
         if status == .confirmed, !wasConfirmed {
             project.claims[index].needsVerification = false
             project.checklistTasks = markingChecklistResolved(for: project.claims[index])
+        } else if wasConfirmed, status != .confirmed {
+            // Demoting a confirmed claim makes it unverified again.
+            project.claims[index].needsVerification = true
+            if project.claims[index].needsResearch {
+                _ = syncPendingClaimsToChecklist()
+            }
         } else if project.claims[index].needsResearch {
             _ = syncPendingClaimsToChecklist()
         }
