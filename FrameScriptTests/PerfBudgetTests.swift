@@ -185,7 +185,7 @@ final class PerfBudgetTests: FrameScriptTestCase {
         // The debounced duration refresh rewrites scene headers only.
         let settle = host.measureSettle(1.2)
         // Before: ~330 ms (full document rebuild + restyle). After: ~100 ms.
-        XCTAssertLessThan(settle, 450, "settle CPU \(settle) ms")
+        XCTAssertLessThan(settle, 300, "settle CPU \(settle) ms")
     }
 
     func testSceneSwitchAndInspectorTabsStayWithinBudget() throws {
@@ -201,7 +201,7 @@ final class PerfBudgetTests: FrameScriptTestCase {
             switches.append(host.measure { appState.selectScene(scenes[(index * 2 + 1) % scenes.count].id) })
         }
         // Before: ~147 ms median. After: ~30–55 ms.
-        XCTAssertLessThan(switches.median(\.cpuMilliseconds), 150, "scene switch CPU \(switches.median(\.cpuMilliseconds)) ms")
+        XCTAssertLessThan(switches.median(\.cpuMilliseconds), 100, "scene switch CPU \(switches.median(\.cpuMilliseconds)) ms")
 
         var tabs: [PerfSample] = []
         for tab in [UXInspectorTab.scene, .research, .production, .rhythm] {
