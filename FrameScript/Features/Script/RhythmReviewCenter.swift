@@ -225,13 +225,23 @@ final class RhythmReviewCenter {
     /// Drops the cached analysis for one scene. Called as soon as its text or
     /// anchors change so underlines and click targets never point at stale
     /// UTF-16 offsets.
+    ///
+    /// Typing calls this on every keystroke. Observed state is only written
+    /// when something is actually dropped: an in-place `removeValue` or
+    /// `removeAll` notifies observers even when it removes nothing, which
+    /// re-rendered every sidebar badge and the duration controls per key.
     func invalidate(sceneID: UUID) {
         refreshGeneration += 1
         analysisTask?.cancel()
         analysisTask = nil
-        analysesBySceneID.removeValue(forKey: sceneID)
+        if analysesBySceneID[sceneID] != nil {
+            analysesBySceneID.removeValue(forKey: sceneID)
+        }
         analyzedSnapshotsBySceneID.removeValue(forKey: sceneID)
-        projectWarnings.removeAll { $0.sceneID == sceneID.uuidString }
+        let sceneKey = sceneID.uuidString
+        if projectWarnings.contains(where: { $0.sceneID == sceneKey }) {
+            projectWarnings.removeAll { $0.sceneID == sceneKey }
+        }
         isPending = true
         revision += 1
     }

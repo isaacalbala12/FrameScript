@@ -47,7 +47,18 @@ enum SnapshotAppearance: String, CaseIterable {
 /// asserted.
 @MainActor
 enum SnapshotRenderer {
-    static let outputRoot = URL(fileURLWithPath: "/tmp/fs-snapshots", isDirectory: true)
+    /// `FS_SNAPSHOTS_DIR` lets parallel checkouts write to separate folders.
+    static let outputRoot = URL(
+        fileURLWithPath: ProcessInfo.processInfo.environment["FS_SNAPSHOTS_DIR"] ?? "/tmp/fs-snapshots",
+        isDirectory: true
+    )
+
+    /// Run-loop time given to debounced work before the capture.
+    /// `FS_SNAPSHOT_SETTLE` (seconds) makes async content deterministic when
+    /// comparing two builds pixel by pixel.
+    static var settleInterval: TimeInterval {
+        ProcessInfo.processInfo.environment["FS_SNAPSHOT_SETTLE"].flatMap(TimeInterval.init) ?? 0.08
+    }
 
     static var isEnabled: Bool {
         ProcessInfo.processInfo.environment["FS_SNAPSHOTS"] == "1"
@@ -264,7 +275,7 @@ enum SnapshotRenderer {
         hosting.layoutSubtreeIfNeeded()
         // Let SwiftUI's first layout/observation pass settle without showing
         // the window. A short run-loop turn is enough for static screens.
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.08))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: settleInterval))
         window.layoutIfNeeded()
         canvas.layoutSubtreeIfNeeded()
         hosting.layoutSubtreeIfNeeded()

@@ -2344,25 +2344,29 @@ final class ProjectStore {
     private var segmentSplitMode: SegmentType = AppSettings.defaults.generalPreferences.defaultSplitMode
     /// Text hash per scene at the last full segmentation. Unchanged scenes keep
     /// their segments, so a save does not re-split the whole script.
-    private var segmentedTextHashes: [UUID: String] = [:]
+    @ObservationIgnored private var segmentedTextHashes: [UUID: String] = [:]
     /// Scenes whose stored duration must be recomputed on the next duration
     /// pass. Typing a character dirties one scene, not the whole project.
-    private var durationDirtySceneIDs: Set<UUID> = []
+    @ObservationIgnored private var durationDirtySceneIDs: Set<UUID> = []
     /// Bumped on every document mutation. A background save only clears the
     /// dirty flag when nothing changed after its snapshot.
-    private var contentRevision = 0
+    @ObservationIgnored private var contentRevision = 0
     /// Last background write, used to serialize writes and to let close/quit
     /// wait for a pending save. The whole descriptor is kept so a consumed
     /// write can apply its own revision logic exactly once.
     private var pendingBackgroundSave: BackgroundSave?
     /// Bumped whenever the open document is replaced or reloaded. A completion
     /// from a previous document must never touch the new one.
-    private var documentGeneration = 0
+    @ObservationIgnored private var documentGeneration = 0
     /// True while bytes written off the main actor are not reflected in the
     /// external-change baseline yet.
     var hasPendingBackgroundWrite: Bool { pendingBackgroundSave != nil }
-    private var textRevisions: [UUID: Int] = [:]
-    private var textHashCache: [UUID: (revision: Int, hash: String)] = [:]
+    /// Memo state for `textHash(for:)`. Not observed: every keystroke bumps
+    /// one entry, and as one observed dictionary that invalidated every view
+    /// that ever asked for a hash (all sidebar rows and duration controls).
+    /// Readers depend on the scene's `scriptText` instead (see `textHash`).
+    @ObservationIgnored private var textRevisions: [UUID: Int] = [:]
+    @ObservationIgnored private var textHashCache: [UUID: (revision: Int, hash: String)] = [:]
     /// Configuration used by the last duration pass. A settings change without
     /// a text edit still forces one full pass, exactly like the old save path.
     private var lastDurationConfiguration: DurationConfiguration?
@@ -2404,11 +2408,14 @@ final class ProjectStore {
     /// Cached SHA-256 of a scene's script text. Scenes without takes never ask
     /// for it; scenes with takes asked for it on every keystroke before.
     func textHash(for scene: Scene) -> String {
+        // Read the text first so an observing view depends on this scene's
+        // text only, not on the (unobserved) revision bookkeeping.
+        let text = scene.scriptText
         let revision = textRevisions[scene.id, default: 0]
         if let cached = textHashCache[scene.id], cached.revision == revision {
             return cached.hash
         }
-        let hash = FrameScriptDocument.TextHash.hash(scene.scriptText)
+        let hash = FrameScriptDocument.TextHash.hash(text)
         textHashCache[scene.id] = (revision, hash)
         return hash
     }
