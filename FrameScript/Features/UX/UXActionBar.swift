@@ -563,8 +563,10 @@ struct UXActionButton: View {
                         .fixedSize()
                 }
                 if let badgeCount {
-                    Text("\(badgeCount)")
+                    Text(badgeCount > 99 ? "99+" : "\(badgeCount)")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .fixedSize()
                         .foregroundStyle(theme.background)
                         .padding(.horizontal, 3)
                         .frame(minWidth: 13, minHeight: 13)
@@ -576,8 +578,9 @@ struct UXActionButton: View {
             }
             .padding(.horizontal, showsLabel ? labelHorizontalPadding : 0)
             .frame(
-                width: showsLabel ? nil : (badgeCount == nil ? 24 : 36),
-                height: 26
+                minWidth: showsLabel ? nil : (badgeCount == nil ? 24 : 36),
+                minHeight: 26,
+                maxHeight: 26
             )
             .foregroundStyle(foreground)
             .background {
