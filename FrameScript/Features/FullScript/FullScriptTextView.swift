@@ -216,6 +216,12 @@ struct FullScriptTextView: NSViewRepresentable {
                 return
             }
             deferredExternalScenes = nil
+            // A settled edit refreshes the scene's duration, so its header
+            // text changes after nearly every pause in typing. Rebuilding and
+            // restyling the whole document for that cost ~100 ms on a long
+            // script; replacing only the changed header runs keeps every body
+            // character, attribute and the caret untouched.
+            if applyHeaderOnlyChange(incoming) { return }
             let selection = currentSceneSelection()
             let scroll = currentScrollOrigin()
             // Text written by someone else (AI insert, reload, single-scene
@@ -230,6 +236,61 @@ struct FullScriptTextView: NSViewRepresentable {
             pendingEdit = nil
             pendingModelRefresh = false
             rebuildDocument(preserving: selection, scroll: scroll, restyleBodies: true)
+        }
+
+        /// Replaces only the header runs when nothing but header text changed
+        /// (same scenes, order, bodies and collapse state). Returns false when a
+        /// full rebuild is required.
+        private func applyHeaderOnlyChange(_ incoming: [FullScriptSceneSnapshot]) -> Bool {
+            guard let view,
+                  let storage = view.textView.textStorage,
+                  incoming.count == sceneSnapshots.count,
+                  storage.length == layout.utf16Length else { return false }
+            var changedSceneIDs: Set<UUID> = []
+            for (new, old) in zip(incoming, sceneSnapshots) {
+                guard new.id == old.id,
+                      new.order == old.order,
+                      new.isCollapsed == old.isCollapsed,
+                      new.scriptText == old.scriptText else { return false }
+                if new.headerText != old.headerText
+                    || new.numberText != old.numberText
+                    || new.durationText != old.durationText {
+                    changedSceneIDs.insert(new.id)
+                }
+            }
+            guard !changedSceneIDs.isEmpty else { return false }
+
+            let selection = currentSceneSelection()
+            let scroll = currentScrollOrigin()
+            let previousLayout = layout
+            isApplyingProgrammaticUpdate = true
+            defer { isApplyingProgrammaticUpdate = false }
+
+            sceneSnapshots = incoming
+            let textView = view.textView
+            storage.beginEditing()
+            // Back to front, so the ranges of earlier headers stay valid.
+            for scene in incoming.reversed() where changedSceneIDs.contains(scene.id) {
+                guard let segment = previousLayout.segment(for: scene.id) else { continue }
+                // `headerRange` includes the header's trailing newline.
+                let textRange = NSRange(
+                    location: segment.headerRange.location,
+                    length: max(0, segment.headerRange.length - 1)
+                )
+                storage.replaceCharacters(in: textRange, with: headerAttributedString(for: scene))
+            }
+            storage.endEditing()
+            layout = Self.makeLayout(scenes: incoming)
+            pendingEdit = nil
+            pendingModelRefresh = false
+
+            textView.typingAttributes = bodyAttributes()
+            textView.setSelectedRange(documentRange(for: selection) ?? defaultSelection())
+            restoreScroll(scroll)
+            textView.needsDisplay = true
+            reportCaretSceneIfNeeded()
+            captureRestorationState()
+            return true
         }
 
         func applyAppearanceIfNeeded() {
@@ -1085,8 +1146,19 @@ final class FullScriptEditableTextView: PlaceholderTextView {
               ranges.count > 1,
               let layoutManager, let textContainer else { return }
         let length = (string as NSString).length
+        // Only headers whose line can reach the dirty rect. Asking TextKit for
+        // the line rect of every header forced layout of the whole document on
+        // each redraw (one per keystroke) in a long script.
+        let reach = FullScriptTextView.Coordinator.headerSpacingBefore
+        let containerRect = dirtyRect
+            .insetBy(dx: 0, dy: -reach)
+            .offsetBy(dx: -textContainerOrigin.x, dy: -textContainerOrigin.y)
+        let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: containerRect, in: textContainer)
+        let visibleCharacters = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
         color.setFill()
-        for range in ranges.dropFirst() where range.location < length {
+        for range in ranges.dropFirst() where range.location < length
+            && range.location >= visibleCharacters.location
+            && range.location <= NSMaxRange(visibleCharacters) {
             let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
             let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
             let y = used.minY + textContainerOrigin.y - FullScriptTextView.Coordinator.headerSpacingBefore * 0.5

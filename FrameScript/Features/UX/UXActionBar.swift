@@ -175,7 +175,7 @@ struct UXActionBarModel: Equatable {
     }
 }
 
-enum UXActionBarLabelMode {
+enum UXActionBarLabelMode: CaseIterable, Hashable {
     /// Everything labeled.
     case all
     /// Proyecto collapses first: its buttons become icons and keep the badges.
@@ -186,6 +186,16 @@ enum UXActionBarLabelMode {
     case insertOnly
     case none
 
+    /// Widest first: the order the bar tries the layouts in.
+    static let fittingOrder: [UXActionBarLabelMode] = [
+        .all, .allButProject, .insertAndProduction, .insertOnly, .none
+    ]
+
+    /// The two middle layouts tighten the label padding and dividers.
+    var usesCompactMetrics: Bool {
+        self == .insertAndProduction || self == .insertOnly
+    }
+
     func showsLabel(for group: UXActionGroup) -> Bool {
         switch self {
         case .all: true
@@ -194,6 +204,28 @@ enum UXActionBarLabelMode {
         case .insertOnly: group == .insert
         case .none: false
         }
+    }
+}
+
+/// `ViewThatFits(in: .horizontal)` selection rule for the action bar: the
+/// first layout whose ideal width fits the offered width, otherwise the last.
+/// Before anything is measured the widest layout is shown, exactly like an
+/// unconstrained `ViewThatFits`.
+@MainActor
+enum UXActionBarFit {
+    /// Most recent measurement of any bar. Only a starting value: every bar
+    /// re-measures its own content and replaces it.
+    static var lastIdealWidths: [UXActionBarLabelMode: CGFloat] = [:]
+
+    nonisolated static func labelMode(
+        availableWidth: CGFloat?,
+        idealWidths: [UXActionBarLabelMode: CGFloat]
+    ) -> UXActionBarLabelMode {
+        let order = UXActionBarLabelMode.fittingOrder
+        guard let availableWidth,
+              order.allSatisfy({ idealWidths[$0] != nil }) else { return order[0] }
+        return order.first { (idealWidths[$0] ?? .infinity) <= availableWidth }
+            ?? order[order.count - 1]
     }
 }
 
@@ -267,20 +299,43 @@ struct UXEditorActionBar: View {
     /// and uses the real pointer hover.
     var previewHoveredAction: UXEditorAction?
 
+    /// Ideal width of every label layout, measured by hidden copies. A new
+    /// bar (mode switch, new window) starts from the last measurement so it
+    /// does not need a second pass before it shows the right layout.
+    @State private var idealWidths: [UXActionBarLabelMode: CGFloat] = UXActionBarFit.lastIdealWidths
+
     var body: some View {
         // Real measurement instead of fixed width thresholds. Insertar is the
         // group the writer clicks constantly, so it keeps its labels longest.
         // As the column shrinks: Proyecto first turns into icon buttons (the
         // badges stay), then IA, then Producción, and only then Insertar.
+        //
+        // Same rule as `ViewThatFits(in: .horizontal)` (first layout whose
+        // ideal width fits, else the last), but the candidates are measured by
+        // stable hidden copies. `ViewThatFits` rebuilt all five 14-button bars
+        // on every layout pass of the editor column, which made one keystroke
+        // cost ~130 ms of main-thread time.
         let badges = UXProjectBadges(appState: appState)
-        return ViewThatFits(in: .horizontal) {
-            barContent(labelMode: .all, badges: badges)
-            barContent(labelMode: .allButProject, badges: badges)
-            barContent(labelMode: .insertAndProduction, compactMetrics: true, badges: badges)
-            barContent(labelMode: .insertOnly, compactMetrics: true, badges: badges)
-            barContent(labelMode: .none, badges: badges)
+        let model = UXActionBarModel(appState: appState)
+        // The reader picks the layout from the width of this very layout
+        // pass, so a resize never shows a stale layout for a frame.
+        return GeometryReader { proxy in
+            let labelMode = UXActionBarFit.labelMode(
+                availableWidth: proxy.size.width,
+                idealWidths: idealWidths
+            )
+            barContent(
+                labelMode: labelMode,
+                compactMetrics: labelMode.usesCompactMetrics,
+                badges: badges,
+                model: model
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .topLeading) {
+            measurementCopies(badges: badges, model: model)
+        }
+        .frame(maxWidth: .infinity)
         .frame(height: 34)
         .background {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -293,14 +348,41 @@ struct UXEditorActionBar: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// One fixed-size, hidden, non-interactive copy per label layout. Their
+    /// inputs only change with the badges, the language or the enablement, so
+    /// SwiftUI keeps their identity and cached sizes across keystrokes.
+    private func measurementCopies(badges: UXProjectBadges, model: UXActionBarModel) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(UXActionBarLabelMode.fittingOrder, id: \.self) { mode in
+                barContent(
+                    labelMode: mode,
+                    compactMetrics: mode.usesCompactMetrics,
+                    badges: badges,
+                    model: model
+                )
+                .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.width
+                } action: { width in
+                    guard idealWidths[mode] != width else { return }
+                    idealWidths[mode] = width
+                    UXActionBarFit.lastIdealWidths[mode] = width
+                }
+            }
+        }
+        .frame(width: 0, height: 0, alignment: .topLeading)
+        .hidden()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private func barContent(
         labelMode: UXActionBarLabelMode,
         compactMetrics: Bool = false,
-        badges: UXProjectBadges
+        badges: UXProjectBadges,
+        model: UXActionBarModel
     ) -> some View {
-        let model = UXActionBarModel(appState: appState)
-
-        return HStack(spacing: 0) {
+        HStack(spacing: 0) {
             ForEach(Array(UXActionGroup.allCases.enumerated()), id: \.element.id) { index, group in
                 if index > 0 {
                     Rectangle()
