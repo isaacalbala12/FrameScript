@@ -52,7 +52,7 @@ struct TopToolbar: View {
             .menuStyle(.borderlessButton)
             .buttonStyle(.cursorPlain)
             .frame(
-                minWidth: compact ? 120 : 160,
+                minWidth: compact ? 110 : 160,
                 idealWidth: compact ? 170 : 260,
                 maxWidth: 360,
                 alignment: .leading
@@ -109,7 +109,7 @@ struct TopToolbar: View {
             .accessibilityLabel("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
             .help("\(appState.localized("recording.toolbar.help")) · \(recordingStatusText)")
 
-            HStack(spacing: compact ? 3 : 5) {
+            HStack(spacing: compact ? FrameSpacing.xxs : FrameSpacing.xs) {
                 toolbarButton(
                     systemName: "square.and.arrow.up",
                     help: UXActionTooltip.text(
@@ -131,6 +131,12 @@ struct TopToolbar: View {
                     UXProjectCommandDispatcher.perform(.publishingPack, appState: appState)
                 }
 
+                // Output (export, publishing) | production tools | focus |
+                // command palette | settings: one divider between each group.
+                if !compact {
+                    toolbarDivider(compact: compact)
+                }
+
                 toolbarButton(
                     systemName: "text.bubble",
                     help: UXActionTooltip.text(
@@ -141,7 +147,7 @@ struct TopToolbar: View {
                     action: appState.presentTeleprompter
                 )
 
-                ProductionToolbarButton()
+                ProductionToolbarButton(compact: compact)
 
                 toolbarButton(
                     systemName: "books.vertical",
@@ -165,7 +171,7 @@ struct TopToolbar: View {
                     UXProjectCommandDispatcher.perform(.assets, appState: appState)
                 }
 
-                toolbarDivider
+                toolbarDivider(compact: compact)
 
                 Button {
                     appState.isFocusModeEnabled.toggle()
@@ -188,7 +194,7 @@ struct TopToolbar: View {
                     )
                 )
 
-                toolbarDivider
+                toolbarDivider(compact: compact)
 
                 Button {
                     appState.isCommandPalettePresented = true
@@ -214,13 +220,15 @@ struct TopToolbar: View {
                                     }
                             }
                     }
-                    .frame(height: 30)
+                    .padding(.horizontal, compact ? 0 : FrameSpacing.xs)
+                    .frame(height: FrameControlHeight.regular)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.cursorPlain)
                 .foregroundStyle(theme.secondaryText)
                 .help("\(appState.localized("toolbar.commandPalette")) (\(appState.shortcutDisplay(for: .commandPalette)))")
 
-                toolbarDivider
+                toolbarDivider(compact: compact)
 
                 toolbarButton(systemName: "gearshape", help: appState.localized("toolbar.settings")) {
                     appState.openSettings(tab: .general)
@@ -281,11 +289,11 @@ struct TopToolbar: View {
         .help(help)
     }
 
-    private var toolbarDivider: some View {
+    private func toolbarDivider(compact: Bool) -> some View {
         Rectangle()
             .fill(theme.divider)
             .frame(width: 1, height: 18)
-            .padding(.horizontal, 2)
+            .padding(.horizontal, compact ? FrameSpacing.xxs : FrameSpacing.xs)
     }
 
     /// This is a display-only hint. The application command menu owns the

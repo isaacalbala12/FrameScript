@@ -41,7 +41,9 @@ struct FullScriptEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            // Same header → action bar gap as the single-scene editor.
             header
+                .padding(.bottom, FrameLayout.editorMetaToBar - 14)
 
             if let activeScene {
                 UXEditorActionBar(sceneID: activeScene.id)

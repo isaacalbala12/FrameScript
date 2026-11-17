@@ -283,10 +283,10 @@ struct UXEditorActionBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 34)
         .background {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: FrameRadius.container, style: .continuous)
                 .fill(theme.panelBackground)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: FrameRadius.container, style: .continuous)
                         .stroke(theme.divider, lineWidth: 1)
                 }
         }
@@ -302,14 +302,22 @@ struct UXEditorActionBar: View {
 
         return HStack(spacing: 0) {
             ForEach(Array(UXActionGroup.allCases.enumerated()), id: \.element.id) { index, group in
+                if group == .project {
+                    // Proyecto opens other windows rather than acting on the
+                    // text, so it is pinned to the trailing edge: the bar no
+                    // longer ends in a large empty strip on wide columns.
+                    Spacer(minLength: 0)
+                }
                 if index > 0 {
                     Rectangle()
                         .fill(theme.divider)
                         .frame(width: 1, height: 16)
-                        .padding(.horizontal, compactMetrics ? 2 : 3)
+                        .padding(.horizontal, compactMetrics ? FrameSpacing.xxs : FrameSpacing.s - 2)
                         .accessibilityHidden(true)
                 }
-                HStack(spacing: 0) {
+                // Compact tiers keep the original tight packing so Insertar
+                // keeps its labels at the 1180 pt window with the inspector.
+                HStack(spacing: compactMetrics ? 0 : FrameSpacing.xxs) {
                     ForEach(group.actions) { action in
                         UXActionButton(
                             action: action,
@@ -339,8 +347,8 @@ struct UXEditorActionBar: View {
                 .accessibilityLabel(appState.localized(group.titleKey))
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
+        .padding(.horizontal, FrameSpacing.xs)
+        .padding(.vertical, FrameSpacing.xs)
     }
 
     private func tooltip(for action: UXEditorAction, model: UXActionBarModel) -> String {

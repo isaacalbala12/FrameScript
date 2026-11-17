@@ -52,12 +52,11 @@ struct SceneSidebar: View {
         let unconfirmedCounts = appState.researchUnconfirmedCountsByScene()
         return VStack(spacing: 0) {
             ProductionSidebarEntry()
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
+                .padding(.horizontal, FrameLayout.sidebarOuterInset)
+                .padding(.vertical, FrameSpacing.s)
 
             Divider()
                 .overlay(theme.divider)
-                .padding(.top, 8)
 
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -81,8 +80,8 @@ struct SceneSidebar: View {
                         }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 12)
+                .padding(.horizontal, FrameLayout.sidebarOuterInset)
+                .padding(.vertical, FrameSpacing.s)
             }
             // The move-command handler only fires when the scroll view owns
             // focus; a lazy stack of buttons does not make its container
@@ -101,7 +100,7 @@ struct SceneSidebar: View {
             Divider()
                 .overlay(theme.divider)
 
-            VStack(spacing: 6) {
+            VStack(spacing: FrameSpacing.xxs) {
                 SidebarAction(
                     title: appState.localized("scene.add"),
                     shortcut: appState.shortcutDisplay(for: .addScene),
@@ -120,7 +119,8 @@ struct SceneSidebar: View {
                     action: appState.deleteSelectedScene
                 )
             }
-            .padding(10)
+            .padding(.horizontal, FrameLayout.sidebarOuterInset)
+            .padding(.vertical, FrameSpacing.s)
         }
         .background(theme.sidebar)
     }
@@ -137,38 +137,25 @@ struct FullScriptSidebarRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(isSelected ? theme.accent.color : Color.clear)
-                    .frame(width: 2, height: 34)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "rectangle.stack")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(isSelected ? theme.accent.color : theme.secondaryText)
-                        Text(appState.localized("fullScript.sidebarEntry"))
-                            .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                            .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
-                            .lineLimit(1)
-                    }
-                    Text(L10n.plural(
-                        "fullScript.sceneCount",
-                        count: appState.project.scenes.count,
-                        language: appState.currentLanguage
-                    ))
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.secondaryText)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 8)
-            .padding(.trailing, 8)
-            .contentShape(Rectangle())
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(rowFill)
+            SidebarRowLayout(isSelected: isSelected, trailingInset: FrameLayout.sidebarRowInset, fill: rowFill) {
+                Image(systemName: "rectangle.stack")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isSelected ? theme.accent.color : theme.secondaryText)
+            } title: {
+                Text(appState.localized("fullScript.sidebarEntry"))
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
+                    .lineLimit(1)
+            } detail: {
+                Text(L10n.plural(
+                    "fullScript.sceneCount",
+                    count: appState.project.scenes.count,
+                    language: appState.currentLanguage
+                ))
+                .font(.system(size: 11))
+                .foregroundStyle(theme.secondaryText)
+            } trailing: {
+                EmptyView()
             }
         }
         .buttonStyle(.cursorPlain)
@@ -207,35 +194,27 @@ struct SidebarRow: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             Button(action: action) {
-                HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(isSelected ? theme.accent.color : Color.clear)
-                        .frame(width: 2, height: 34)
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            Text(String(format: "%02d", scene.order + 1))
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(theme.secondaryText)
-                            Text(scene.title)
-                                .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
-                                .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
-                                .lineLimit(1)
-                        }
-
-                        SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
-                    }
-
+                SidebarRowLayout(
+                    isSelected: isSelected,
+                    trailingInset: researchUnconfirmedCount > 0 ? 36 : FrameLayout.sidebarRowInset,
+                    fill: rowFill
+                ) {
+                    Text(String(format: "%02d", scene.order + 1))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(theme.secondaryText)
+                } title: {
+                    // Two lines before truncating: at the default 195 pt width a
+                    // single line cut most Spanish scene titles to two words.
+                    Text(scene.title)
+                        .font(.system(size: 14, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? theme.primaryText : theme.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                } detail: {
+                    SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
+                } trailing: {
                     RhythmSidebarBadge(sceneID: scene.id)
-
-                    Spacer(minLength: 0)
-                }
-                .padding(.vertical, 8)
-                .padding(.trailing, researchUnconfirmedCount > 0 ? 34 : 8)
-                .contentShape(Rectangle())
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(rowFill)
                 }
             }
             .buttonStyle(.cursorPlain)
@@ -243,7 +222,7 @@ struct SidebarRow: View {
             // Sibling button, not nested inside the row button, so the badge
             // opens the research panel instead of only selecting the scene.
             ResearchSidebarBadge(sceneID: scene.id, count: researchUnconfirmedCount)
-                .padding(.trailing, 8)
+                .padding(.trailing, FrameLayout.sidebarRowInset)
         }
         .onHover { isHovering = $0 }
         .accessibilityElement(children: .combine)
@@ -303,16 +282,68 @@ private struct SidebarAction: View {
             HStack {
                 Text(title)
                     .font(.system(size: 13))
+                    .layoutProbe("sidebar.leading")
                 Spacer()
                 Text(shortcut)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.secondaryText)
             }
             .foregroundStyle(theme.secondaryText)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, FrameLayout.sidebarRowInset)
             .frame(height: 28)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.cursorPlain)
         .disabled(!enabled)
+    }
+}
+
+/// Shared geometry for every sidebar row: a fixed leading slot (icon or scene
+/// number), the title column, a trailing badge pinned to the right edge, and
+/// the selection stripe drawn inside the fill instead of taking layout space.
+/// Production, "Guion completo" and the scene rows all start their first glyph
+/// at `FrameLayout.sidebarContentLeading` and their titles at
+/// `FrameLayout.sidebarTitleLeading`.
+struct SidebarRowLayout<Leading: View, Title: View, Detail: View, Trailing: View>: View {
+    @Environment(\.frameTheme) private var theme
+    let isSelected: Bool
+    let trailingInset: CGFloat
+    let fill: Color
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var title: Title
+    @ViewBuilder var detail: Detail
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: FrameLayout.sidebarSlotSpacing) {
+            leading
+                .frame(width: FrameLayout.sidebarLeadingSlot, alignment: .leading)
+                .layoutProbe("sidebar.leading")
+
+            VStack(alignment: .leading, spacing: FrameSpacing.xs) {
+                title
+                detail
+            }
+            .layoutProbe("sidebar.title")
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            trailing
+        }
+        .padding(.leading, FrameLayout.sidebarRowInset)
+        .padding(.trailing, trailingInset)
+        .padding(.vertical, FrameSpacing.s)
+        .contentShape(Rectangle())
+        .background {
+            RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
+                .fill(fill)
+        }
+        .overlay(alignment: .leading) {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(theme.accent.color)
+                    .frame(width: 2)
+                    .padding(.vertical, FrameSpacing.s)
+            }
+        }
     }
 }

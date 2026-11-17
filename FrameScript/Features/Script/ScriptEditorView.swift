@@ -16,13 +16,20 @@ struct ScriptEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: FrameLayout.editorMetaToBar) {
                 sceneHeader
                 UXEditorActionBar(sceneID: scene.id)
+                    .layoutProbe("editor.column")
             }
+            // Action bar → text gets the larger gap; text → Notes keeps 18.
+            .padding(.bottom, FrameLayout.editorBarToText - 18)
 
             scriptTextView
-                .frame(minHeight: appState.isFocusModeEnabled ? 430 : 390, maxHeight: .infinity)
+                .layoutProbe("editor.column")
+                // 12 pt below the old 390/430: the header and action bar gained
+                // 12 pt of breathing room, and the column must still fit the
+                // 712 pt minimum window without pushing the toolbar up.
+                .frame(minHeight: appState.isFocusModeEnabled ? 418 : 378, maxHeight: .infinity)
                 .accessibilityLabel(appState.localized("script.accessibilityLabel"))
 
             DisclosureGroup(isExpanded: Binding(
@@ -45,6 +52,7 @@ struct ScriptEditorView: View {
             }
             .font(.system(size: 13))
             .tint(theme.secondaryText)
+            .layoutProbe("editor.column")
         }
         .frame(maxWidth: ScriptEditorLayout.maximumTextColumnWidth, alignment: .leading)
         .padding(WorkspaceLayout.contentInset(isFocusModeEnabled: appState.isFocusModeEnabled))
@@ -172,11 +180,12 @@ struct ScriptEditorView: View {
     }
 
     private var sceneHeader: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: FrameLayout.editorTitleToMeta) {
             TextField(appState.localized("scene.title"), text: $scene.title)
                 .textFieldStyle(.plain)
                 .font(.system(size: appState.isFocusModeEnabled ? 34 : 30, weight: .semibold))
                 .textCursor()
+                .layoutProbe("editor.column")
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if appState.settings.editorPreferences.showSceneDuration {

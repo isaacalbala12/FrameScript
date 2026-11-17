@@ -46,12 +46,16 @@ struct AIReviewContent: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: FrameSpacing.m) {
                 if comments.isEmpty {
+                    // The empty state is one card: the explanation and the
+                    // action share the same padding and leading edge.
                     SoftCallout(
                         title: appState.localized("ai.quietTitle"),
                         message: appState.localized("ai.quietMessage")
-                    )
+                    ) {
+                        analyzeButton
+                    }
                 } else {
                     ForEach(comments.prefix(3)) { comment in
                         AICommentView(comment: comment)
@@ -67,16 +71,9 @@ struct AIReviewContent: View {
                     .foregroundStyle(theme.secondaryText)
                 }
 
-                Button(appState.localized("ai.analyzeCurrentScene")) {
-                    analyzeCurrentScene()
+                if !comments.isEmpty {
+                    analyzeButton
                 }
-                .disabled(appState.aiState.isAnalyzing)
-                // A bordered button reads as a control, not as a heading, and
-                // shows the disabled state while a review is running.
-                .buttonStyle(.bordered)
-                .font(.system(size: 13, weight: .medium))
-                .help(appState.localized("ai.analyzeCurrentSceneHelp"))
-                .padding(.top, 4)
 
                 if appState.aiState.didFailMostRecentAnalysis {
                     Button(appState.localized("ai.retry")) {
@@ -87,9 +84,20 @@ struct AIReviewContent: View {
                     .foregroundStyle(theme.secondaryText)
                 }
             }
-            .padding(16)
+            .padding(FrameLayout.inspectorInset)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var analyzeButton: some View {
+        Button(appState.localized("ai.analyzeCurrentScene")) {
+            analyzeCurrentScene()
+        }
+        .disabled(appState.aiState.isAnalyzing)
+        // A bordered button reads as a control, not as a heading, and
+        // shows the disabled state while a review is running.
+        .buttonStyle(.frameSecondary)
+        .help(appState.localized("ai.analyzeCurrentSceneHelp"))
     }
 
     private var comments: [AIComment] {
@@ -141,25 +149,33 @@ private struct AICommentView: View {
     }
 }
 
-private struct SoftCallout: View {
+private struct SoftCallout<Action: View>: View {
     @Environment(\.frameTheme) private var theme
     let title: String
     let message: String
+    @ViewBuilder var action: Action
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: FrameSpacing.s) {
             Text(title)
                 .font(.system(size: 14, weight: .medium))
             Text(message)
                 .font(.system(size: 13))
                 .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            action
+                .padding(.top, FrameSpacing.xs)
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutProbe("inspector.leading")
         .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
                 .fill(theme.sidebar.opacity(0.65))
+                .overlay(
+                    RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
+                        .stroke(theme.divider, lineWidth: 1)
+                )
         }
     }
 }

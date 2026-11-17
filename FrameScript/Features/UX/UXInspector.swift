@@ -96,6 +96,27 @@ final class UXInspectorState {
     }
 }
 
+// MARK: - Tab layout
+
+/// Pure tab-bar layout: which tabs share a row and which one is selected.
+/// Rows group the scene tools (IA, Ritmo, Escena) and the project tools
+/// (Investigación, Producción).
+enum UXInspectorTabLayout {
+    static let rows: [[UXInspectorTab]] = [
+        [.ai, .rhythm, .scene],
+        [.research, .production]
+    ]
+
+    static func isSelected(_ tab: UXInspectorTab, in state: UXInspectorState) -> Bool {
+        state.selectedTab == tab
+    }
+
+    /// The tabs that render as selected. Always exactly one.
+    static func selectedTabs(in state: UXInspectorState) -> [UXInspectorTab] {
+        rows.flatMap { $0 }.filter { isSelected($0, in: state) }
+    }
+}
+
 // MARK: - Shell
 
 /// The right inspector: one shell, three registered tabs.
@@ -123,6 +144,7 @@ struct UXInspectorPanel: View {
         HStack(spacing: 8) {
             Text(appState.localized("ux.inspector.title"))
                 .font(.system(size: 14, weight: .semibold))
+                .layoutProbe("inspector.leading")
             Spacer(minLength: 0)
             Button {
                 appState.settings.editorPreferences.showAIReviewPanel = false
@@ -136,44 +158,46 @@ struct UXInspectorPanel: View {
             .help(appState.localized("ux.inspector.close"))
             .accessibilityLabel(appState.localized("ux.inspector.close"))
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, FrameLayout.inspectorInset)
         .frame(height: 46)
     }
 
     private var tabBar: some View {
-        // Five tabs no longer share one 292 pt row with readable labels. Keep
-        // one row when it fits, otherwise split into two rows (3 + 2) so every
-        // tab keeps its name instead of truncating to an icon.
-        ViewThatFits(in: .horizontal) {
-            tabRow(UXInspectorRegistry.definitions)
-            VStack(spacing: 3) {
-                tabRow(Array(UXInspectorRegistry.definitions.prefix(3)))
-                tabRow(Array(UXInspectorRegistry.definitions.dropFirst(3)))
+        // The column is a fixed 292 pt, where five labelled tabs never fit one
+        // row. The rows are fixed (scene tools, then project tools) instead of
+        // a `ViewThatFits`: the unused one-row candidate kept a second set of
+        // tab buttons alive. Both rows span the same width and split it
+        // evenly, so their outer edges line up.
+        VStack(spacing: FrameSpacing.xxs) {
+            ForEach(Array(UXInspectorTabLayout.rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: FrameSpacing.xxs) {
+                    ForEach(row, id: \.self) { tab in
+                        if let definition = UXInspectorRegistry.definition(for: tab) {
+                            tabButton(definition)
+                        }
+                    }
+                }
+                .layoutProbe("inspector.tabRow")
             }
         }
-        .padding(3)
+        .padding(FrameSpacing.xxs + 1)
         .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: FrameRadius.container, style: .continuous)
                 .fill(theme.sidebar.opacity(0.82))
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
-    }
-
-    private func tabRow(_ definitions: [UXInspectorTabDefinition]) -> some View {
-        HStack(spacing: 3) {
-            ForEach(definitions) { definition in
-                tabButton(definition)
-            }
-        }
+        .layoutProbe("inspector.leading")
+        .padding(.horizontal, FrameLayout.inspectorInset)
+        .padding(.bottom, FrameSpacing.m)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ux-inspector-tabbar")
     }
 
     private func tabButton(_ definition: UXInspectorTabDefinition) -> some View {
-        let isSelected = state.selectedTab == definition.tab
+        let isSelected = UXInspectorTabLayout.isSelected(definition.tab, in: state)
         return Button {
             state.select(definition.tab)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: FrameSpacing.xs) {
                 Image(systemName: definition.systemImage)
                     .font(.system(size: 10, weight: .medium))
                 Text(appState.localized(definition.titleKey))
@@ -181,19 +205,23 @@ struct UXInspectorPanel: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, FrameSpacing.xxs)
             .frame(maxWidth: .infinity)
-            .frame(height: 26)
+            .frame(height: FrameControlHeight.compact)
             .foregroundStyle(isSelected ? theme.accentText : theme.secondaryText)
             .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: FrameRadius.control, style: .continuous)
                     .fill(isSelected ? theme.accentSoft : Color.clear)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: FrameRadius.control, style: .continuous))
         }
         .buttonStyle(.cursorPlain)
+        // One element per tab with an explicit state, like the mode switcher:
+        // VoiceOver reads exactly one "selected" tab.
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(appState.localized(definition.titleKey))
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+        .accessibilityValue(appState.localized(isSelected ? "accessibility.selected" : "accessibility.notSelected"))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityIdentifier("ux-inspector-tab-\(definition.tab.rawValue)")
     }
 
@@ -216,7 +244,7 @@ struct UXInspectorRhythmTab: View {
     var body: some View {
         ScrollView {
             RhythmReviewSection()
-                .padding(14)
+                .padding(FrameLayout.inspectorInset)
         }
         .background(theme.background)
     }
@@ -238,13 +266,13 @@ struct UXInspectorSceneTab: View {
                     obsCard
                     quickActions(scene)
                 }
-                .padding(14)
+                .padding(FrameLayout.inspectorInset)
             } else {
                 Text(appState.localized("ux.scene.noScene"))
                     .font(.system(size: 12))
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(14)
+                    .padding(FrameLayout.inspectorInset)
             }
         }
         .background(theme.background)
@@ -252,7 +280,7 @@ struct UXInspectorSceneTab: View {
 
     private func durationCard(_ scene: Scene) -> some View {
         SceneDurationDetails(scene: scene)
-            .padding(12)
+            .padding(FrameLayout.cardPadding)
             .background(cardBackground)
     }
 
@@ -291,7 +319,7 @@ struct UXInspectorSceneTab: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
     }
 
@@ -310,7 +338,7 @@ struct UXInspectorSceneTab: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
     }
 
@@ -347,7 +375,7 @@ struct UXInspectorSceneTab: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
     }
 
