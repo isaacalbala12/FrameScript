@@ -162,7 +162,7 @@ private struct GeneralSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 180)
+                .frame(width: 180, alignment: .trailing)
             }
 
             SettingsRow(appState.localized("settings.launchBehavior")) {
@@ -200,7 +200,7 @@ private struct GeneralSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 220)
+                .frame(width: 220, alignment: .trailing)
             }
 
             SettingsRow(appState.localized("settings.blankProjectStart")) {
@@ -210,7 +210,7 @@ private struct GeneralSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 180)
+                .frame(width: 180, alignment: .trailing)
             }
 
             SettingsRow(appState.localized("settings.confirmDelete")) {
@@ -248,7 +248,7 @@ private struct AppearanceSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 160)
+                .frame(width: 160, alignment: .trailing)
             }
 
             SettingsRow(appState.localized("settings.accent")) {
@@ -281,7 +281,7 @@ private struct AppearanceSettings: View {
                     ForEach(FocusModeBehavior.allCases) { Text(appState.displayName($0)).tag($0) }
                 }
                 .labelsHidden()
-                .frame(width: 180)
+                .frame(width: 180, alignment: .trailing)
             }
         }
     }
@@ -351,7 +351,7 @@ private struct EditorSettings: View {
                     ForEach(SegmentType.allCases) { Text(appState.displayName($0)).tag($0) }
                 }
                 .labelsHidden()
-                .frame(width: 180)
+                .frame(width: 180, alignment: .trailing)
                 .onChange(of: settings.generalPreferences.defaultSplitMode) { _, _ in
                     appState.rebuildProductionSegments()
                 }
@@ -364,7 +364,7 @@ private struct EditorSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 160)
+                .frame(width: 160, alignment: .trailing)
             }
         }
     }
@@ -701,7 +701,7 @@ private struct AISettings: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 220)
+                    .frame(width: 220, alignment: .trailing)
                 }
 
                 SettingsRow(appState.localized("settings.model"), help: appState.localized("help.model")) {
@@ -974,7 +974,7 @@ private struct ExportSettings: View {
                     ForEach(ExportFormat.allCases) { Text(appState.displayName($0)).tag($0) }
                 }
                 .labelsHidden()
-                .frame(width: 220)
+                .frame(width: 220, alignment: .trailing)
             }
 
             SettingsRow(appState.localized("settings.timestamps"), help: appState.localized("help.timestamps")) {

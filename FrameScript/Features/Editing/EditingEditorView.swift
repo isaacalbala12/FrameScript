@@ -8,10 +8,15 @@ struct EditingEditorView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: FrameLayout.editorBarToText) {
                     EditorModeHeader(title: scene.title, subtitle: appState.localized("editing.linkedSubtitle"))
                     if scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && scene.editingItems.isEmpty {
                         EmptyProductionState(message: appState.localized("editing.writeScriptFirst"))
+                    } else if anchorSections.isEmpty && unlinkedItems.isEmpty {
+                        EmptyProductionState(
+                            message: appState.localized("editing.emptyMessage"),
+                            title: appState.localized("editing.emptyTitle")
+                        )
                     } else {
                         ForEach(anchorSections) { section in anchorSection(section).id(section.id) }
                         if !unlinkedItems.isEmpty {

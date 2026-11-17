@@ -520,9 +520,17 @@ private struct WelcomeAction: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+            // Fixed icon slot: SF Symbols have different widths, and a plain
+            // Label started every title on a different x.
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: systemImage)
+                    .frame(width: 20, alignment: .center)
+                    .layoutProbe("welcome.actionIcon")
+            }
+            .frame(maxWidth: .infinity, minHeight: FrameControlHeight.regular, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .clickableCursor()

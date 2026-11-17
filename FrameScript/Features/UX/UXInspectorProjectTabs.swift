@@ -147,13 +147,13 @@ struct UXInspectorResearchTab: View {
                     }
                     openButton(sceneID: model.sceneID)
                 }
-                .padding(14)
+                .padding(FrameLayout.inspectorInset)
             } else {
                 Text(appState.localized("ux.inspector.research.noScene"))
                     .font(.system(size: 12))
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(14)
+                    .padding(FrameLayout.inspectorInset)
             }
         }
         .background(theme.background)
@@ -174,7 +174,7 @@ struct UXInspectorResearchTab: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("ux-inspector-research-summary")
@@ -200,7 +200,7 @@ struct UXInspectorResearchTab: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(14)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
         .accessibilityIdentifier("ux-inspector-research-empty")
     }
@@ -269,7 +269,7 @@ private struct UXResearchClaimRow: View {
                 .help(appState.localized("ux.inspector.research.verifyHelp"))
                 .accessibilityIdentifier("ux-inspector-claim-toggle-\(claimID.uuidString)")
             }
-            .padding(10)
+            .padding(FrameLayout.cardPadding)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(theme.cardBackground)
@@ -316,13 +316,13 @@ struct UXInspectorProductionTab: View {
                     }
                     openButton
                 }
-                .padding(14)
+                .padding(FrameLayout.inspectorInset)
             } else {
                 Text(appState.localized("ux.inspector.production.noScene"))
                     .font(.system(size: 12))
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(14)
+                    .padding(FrameLayout.inspectorInset)
             }
         }
         .background(theme.background)
@@ -356,7 +356,7 @@ struct UXInspectorProductionTab: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("ux-inspector-production-summary")
@@ -376,7 +376,7 @@ struct UXInspectorProductionTab: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(14)
+        .padding(FrameLayout.cardPadding)
         .background(cardBackground)
         .accessibilityIdentifier("ux-inspector-production-empty")
     }
@@ -434,7 +434,7 @@ private struct UXProductionTaskRow: View {
                 }
             }
             .toggleStyle(.checkbox)
-            .padding(10)
+            .padding(FrameLayout.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

@@ -8,13 +8,20 @@ struct BRollEditorView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: FrameLayout.editorBarToText) {
                     EditorModeHeader(title: scene.title, subtitle: appState.localized("broll.linkedSubtitle"))
                     if scene.scriptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && scene.bRollItems.isEmpty {
                         EmptyProductionState(
                             message: appState.localized("broll.writeScriptFirst"),
                             actionTitle: appState.localized("production.goToScript"),
                             action: { appState.selectMode(.script) }
+                        )
+                    } else if anchorSections.isEmpty && unlinkedItems.isEmpty {
+                        // Script text but no visuals: show the existing empty
+                        // copy instead of a bare header over a blank page.
+                        EmptyProductionState(
+                            message: appState.localized("broll.emptyMessage"),
+                            title: appState.localized("broll.emptyTitle")
                         )
                     } else {
                         ForEach(anchorSections) { section in

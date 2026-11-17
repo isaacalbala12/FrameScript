@@ -545,7 +545,9 @@ struct RecordingPanel: View {
                     .foregroundStyle(theme.tertiaryText)
             }
         }
-        .padding(12)
+        // Same 14 pt inset as the header and the scroll content above, so
+        // the record button and the countdown line up with the cards.
+        .padding(14)
     }
 
     private func stopOnlyButton(_ recording: RecordingController) -> some View {

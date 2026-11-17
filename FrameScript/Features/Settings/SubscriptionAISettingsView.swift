@@ -199,7 +199,7 @@ struct SubscriptionAISettingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: 150, alignment: .trailing)
             }
 
             if selection.wrappedValue.kind == .t3 {

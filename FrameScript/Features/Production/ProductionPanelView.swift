@@ -169,7 +169,9 @@ struct ProductionPanelView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 190)
+                // Leading-aligned so the menu starts on the panel's 24 pt edge
+                // with the title and the kind chips (was centered in 190 pt).
+                .frame(width: 190, alignment: .leading)
 
                 Picker("", selection: $grouping) {
                     Text(appState.localized("production.group.scene"))
@@ -179,7 +181,7 @@ struct ProductionPanelView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 190)
+                .frame(width: 190, alignment: .leading)
 
                 Toggle(appState.localized("production.filter.showDone"), isOn: $showsDone)
                     .toggleStyle(.checkbox)
@@ -671,11 +673,14 @@ struct ProductionSidebarEntry: View {
         Button {
             ProductionPresentation.shared.present()
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: FrameLayout.sidebarSlotSpacing) {
                 Image(systemName: "checklist")
                     .font(.system(size: 12, weight: .medium))
+                    .frame(width: FrameLayout.sidebarLeadingSlot, alignment: .leading)
+                    .layoutProbe("sidebar.leading")
                 Text(appState.localized("production.title"))
                     .font(.system(size: 13, weight: .medium))
+                    .layoutProbe("sidebar.title")
                 Spacer(minLength: 6)
                 if pendingCount > 0 {
                     Text("\(pendingCount)")
@@ -688,8 +693,8 @@ struct ProductionSidebarEntry: View {
                         }
                 }
             }
-            .padding(.horizontal, 8)
-            .frame(height: 30)
+            .padding(.horizontal, FrameLayout.sidebarRowInset)
+            .frame(height: FrameControlHeight.regular)
             .contentShape(Rectangle())
         }
         .buttonStyle(.cursorPlain)
@@ -707,31 +712,43 @@ struct ProductionSidebarEntry: View {
 struct ProductionToolbarButton: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
+    /// The 980–1250 pt toolbar tier packs the count tighter.
+    var compact = false
 
     private var pendingCount: Int {
         ProductionChecklistCenter.shared.snapshot.summary.totalPending
+    }
+
+    private var badge: some View {
+        Text("\(pendingCount)")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(theme.background)
+            .padding(.horizontal, compact ? 3 : 4)
+            .frame(minWidth: compact ? 14 : 15, minHeight: compact ? 14 : 15)
+            .background {
+                Capsule().fill(theme.warning)
+            }
+            .fixedSize()
     }
 
     var body: some View {
         Button {
             ProductionPresentation.shared.present()
         } label: {
-            ZStack(alignment: .topTrailing) {
+            // The count sits beside the glyph in both toolbar tiers; a corner
+            // badge covered the checklist icon and poked above the button.
+            HStack(spacing: compact ? 2 : 3) {
                 Image(systemName: "checklist")
                     .font(.system(size: 14, weight: .medium))
-                    .frame(width: 30, height: 30)
                 if pendingCount > 0 {
-                    Text("\(pendingCount)")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(theme.background)
-                        .padding(.horizontal, 3)
-                        .frame(minWidth: 14, minHeight: 14)
-                        .background {
-                            Capsule().fill(theme.warning)
-                        }
-                        .offset(x: 3, y: -2)
+                    badge
                 }
             }
+            .padding(.horizontal, pendingCount > 0 ? (compact ? 3 : 5) : 0)
+            .frame(minWidth: FrameControlHeight.regular, minHeight: FrameControlHeight.regular)
+            .fixedSize()
+            .contentShape(Rectangle())
         }
         .buttonStyle(.cursorPlain)
         .foregroundStyle(theme.secondaryText)
