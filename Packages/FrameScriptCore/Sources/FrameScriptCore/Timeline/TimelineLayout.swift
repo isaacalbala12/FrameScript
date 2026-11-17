@@ -308,7 +308,7 @@ public enum TimelineLayoutBuilder {
     /// Takes are grouped into this many sub-lanes before they overlap.
     public static let maximumTakeLanes = 3
     /// Longest label copied from a paragraph or item.
-    public static let maximumLabelLength = 64
+    public static let maximumLabelLength = 160
 
     public static func build(_ input: TimelineProjectInput) -> TimelineLayout {
         var scenes: [TimelineScene] = []
@@ -478,7 +478,14 @@ public enum TimelineLayoutBuilder {
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
         guard collapsed.count > maximumLabelLength else { return collapsed }
-        return String(collapsed.prefix(maximumLabelLength)).trimmingCharacters(in: .whitespaces) + "…"
+        // Cut at a word boundary so a wide block never shows a half word; the
+        // app truncates further on whole words when the block is narrower.
+        var cut = String(collapsed.prefix(maximumLabelLength))
+        let next = collapsed[collapsed.index(collapsed.startIndex, offsetBy: maximumLabelLength)]
+        if next != " ", let space = cut.lastIndex(of: " ") {
+            cut = String(cut[..<space])
+        }
+        return cut.trimmingCharacters(in: .whitespaces) + "…"
     }
 
     // MARK: Scene duration

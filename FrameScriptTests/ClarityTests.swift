@@ -477,6 +477,7 @@ final class TimelineClarityTests: FrameScriptTestCase {
 
     func testSharedStateKeepsTheManualZoomAcrossVisits() {
         let shared = TimelineViewState.shared
+        defer { shared.reset() }
         shared.fitAndFollow(totalDuration: 300, availableWidth: 900)
         shared.zoomOut()
         shared.refitIfFollowing(totalDuration: 300, availableWidth: 900)
@@ -485,8 +486,33 @@ final class TimelineClarityTests: FrameScriptTestCase {
         // A new Timeline view reads the same object: nothing refits it.
         TimelineViewState.shared.refitIfFollowing(totalDuration: 300, availableWidth: 900)
         XCTAssertEqual(TimelineViewState.shared.pointsPerSecond, manual)
-        shared.reset()
-        shared.fitAndFollow(totalDuration: 300, availableWidth: 900)
+    }
+
+    func testOpeningADifferentProjectResetsTheManualZoom() {
+        let state = TimelineViewState()
+        let first = UUID()
+        state.adopt(projectID: first)
+        state.fitAndFollow(totalDuration: 300, availableWidth: 900)
+        state.zoomIn()
+        state.refitIfFollowing(totalDuration: 300, availableWidth: 900)
+        XCTAssertFalse(state.followsFit)
+        state.adopt(projectID: first) // same project: untouched
+        XCTAssertFalse(state.followsFit)
+        state.adopt(projectID: UUID())
+        XCTAssertTrue(state.followsFit)
+        XCTAssertEqual(state.pointsPerSecond, TimelineZoom.defaultPointsPerSecond)
+    }
+
+    func testLongNarrationLabelsCutAtAWordBoundary() {
+        let words = (0..<60).map { "palabra\($0)" }.joined(separator: " ")
+        let layout = TimelineLayoutBuilder.build(TimelineProjectInput(
+            scenes: [TimelineSceneInput(id: UUID(), title: "S", text: words)],
+            configuration: TimelineConfiguration(wordsPerMinute: 150, pauseDefaults: PauseDefaults(short: 0.5, long: 1.2))
+        ))
+        let label = layout.blocks(on: .narration).first?.label ?? ""
+        XCTAssertTrue(label.hasSuffix("…"), label)
+        let last = label.dropLast().split(separator: " ").last.map(String.init) ?? ""
+        XCTAssertTrue(words.split(separator: " ").contains { $0 == last }, "ends on a whole word: \(last)")
     }
 }
 
@@ -529,6 +555,41 @@ final class SidebarBadgeAlignmentTests: FrameScriptTestCase {
                 XCTAssertGreaterThanOrEqual(r.minX, duration.maxX - 1, "badges come after the duration")
             }
             XCTAssertLessThan(r.maxX, c.minX, "rhythm sits left of research, not on top of it: \(r) vs \(c)")
+        }
+    }
+
+    func testResearchBadgeWithTwoAndThreeDigitsNeverTouchesTheRhythmBadge() throws {
+        let sink = LayoutProbeSink()
+        var project = ClarityFixtures.realistic()
+        project.claims = []
+        let scenes = project.scenes.sortedByOrder
+        for (scene, count) in [(scenes[0], 12), (scenes[1], 123)] {
+            scene.scriptText = Array(repeating: "palabra", count: 90).joined(separator: " ") + "."
+            for index in 0..<count {
+                project.claims.append(ProjectClaim(
+                    text: "Dato \(scene.order)-\(index)", status: .probable,
+                    sceneIDs: [scene.id], anchorSceneID: scene.id, needsVerification: true
+                ))
+            }
+        }
+        let (appState, inspector) = DesignReviewSnapshotTests.makeAppState(project: project, defaults: makeDefaults())
+        RhythmReviewCenter.shared.refreshNow(project: appState.project, settings: appState.settings)
+        defer { RhythmReviewCenter.shared.clear() }
+        for _ in 0..<100 where RhythmReviewCenter.shared.warningCount(for: scenes[1].id) == 0 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        SnapshotRenderer.render(
+            AppShellView(inspectorState: inspector).environment(\.layoutProbeSink, sink),
+            name: "sidebar-badges-wide-counts", suite: "SidebarBadgeAlignmentTests",
+            size: CGSize(width: 1512, height: 949), appearance: .light, language: .spanish, appState: appState
+        )
+        let research = sink.frames("sidebar.badge.research")
+        XCTAssertEqual(research.count, 2, "\(research)")
+        XCTAssertGreaterThan(research.map(\.width).max() ?? 0, research.map(\.width).min() ?? 0, "three digits are wider than two")
+        let rhythm = sink.frames("sidebar.badge.rhythm")
+        for c in research {
+            let r = try XCTUnwrap(rhythm.min { abs($0.midY - c.midY) < abs($1.midY - c.midY) })
+            XCTAssertLessThanOrEqual(r.maxX + 2, c.minX, "rhythm \(r) must not touch research \(c)")
         }
     }
 

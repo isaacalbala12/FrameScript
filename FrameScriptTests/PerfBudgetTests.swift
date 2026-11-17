@@ -138,6 +138,84 @@ final class PerfBudgetTests: FrameScriptTestCase {
         XCTAssertTrue(center.isPending)
     }
 
+    // MARK: - Timeline labels
+
+    /// ~300 narration paragraphs: the label path of a redraw must not measure
+    /// text again once the layout has been drawn (every pinch tick, drag move
+    /// and selection change redraws the canvas).
+    private func longTimelineLayout() -> TimelineLayout {
+        let paragraph = "Cuando la curva llega el piloto frena tarde y el coche gira sobre el piano"
+        let text = (0..<300).map { "\($0) \(paragraph)" }.joined(separator: "\n\n")
+        let scene = TimelineSceneInput(id: UUID(), title: "Escena larga con un título bastante largo", text: text)
+        return TimelineLayoutBuilder.build(TimelineProjectInput(
+            scenes: [scene],
+            configuration: TimelineConfiguration(wordsPerMinute: 150, pauseDefaults: PauseDefaults(short: 0.5, long: 1.2))
+        ))
+    }
+
+    func testTimelineLabelPathDoesNotMeasureTextOnRedraw() {
+        let layout = longTimelineLayout()
+        XCTAssertGreaterThanOrEqual(layout.blocks(on: .narration).count, 290)
+        func pass() {
+            for pointsPerSecond in [1.5, 4.0, 10.0] {
+                for block in layout.blocks where block.track == .narration || block.track == .scenes {
+                    _ = TimelineBlockLabel.canvasLabel(
+                        for: block, layout: layout,
+                        blockWidth: CGFloat(block.duration * pointsPerSecond),
+                        minimumWidth: 48, language: .spanish
+                    )
+                }
+            }
+        }
+        TimelineLabelMetrics.shared.removeAll()
+        pass() // warm-up: measures once per label
+        let measured = TimelineLabelMetrics.shared.measurementCount
+        XCTAssertGreaterThan(measured, 0)
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            let start = PerfClock.threadCPUNanoseconds()
+            pass()
+            samples.append(Double(PerfClock.threadCPUNanoseconds() - start) / 1_000_000)
+        }
+        XCTAssertEqual(TimelineLabelMetrics.shared.measurementCount, measured, "redraws must not measure text")
+        // Uncached this was ~30-37 ms per pass at 300 paragraphs (one zoom).
+        let median = samples.sorted()[samples.count / 2]
+        XCTAssertLessThan(median, 8, "label path for 3 zoom levels: \(median) ms")
+    }
+
+    func testTimelineCanvasRedrawStaysWithinBudget() throws {
+        let layout = longTimelineLayout()
+        let theme = FrameTheme(colorScheme: .light, accent: AppSettings.defaults.accentColor)
+        let size = CGSize(width: 1100, height: 700)
+        let root = TimelinePanelView(
+            layout: layout, language: .spanish, theme: theme,
+            pointsPerSecond: 6,
+            zoomFraction: .constant(0.5),
+            selectedBlockID: nil, selectedSceneID: nil, isPending: false,
+            onSelectBlock: { _ in }, onMoveScene: { _, _ in },
+            onZoomIn: {}, onZoomOut: {}, onZoomChange: { _ in }
+        )
+        .frame(width: size.width, height: size.height)
+        .environment(\.frameTheme, theme)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = CGRect(origin: .zero, size: size)
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        window.contentView = hosting
+        defer { window.contentView = nil }
+        hosting.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: rep) // warm-up fills the label cache
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            let start = PerfClock.threadCPUNanoseconds()
+            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            samples.append(Double(PerfClock.threadCPUNanoseconds() - start) / 1_000_000)
+        }
+        let median = samples.sorted()[samples.count / 2]
+        // Measured ~13 ms (Debug test host) for ~300 paragraphs.
+        XCTAssertLessThan(median, 60, "canvas redraw median \(median) ms")
+    }
+
     // MARK: - Main window budgets
 
     func testSingleSceneKeystrokeStaysWithinBudget() throws {

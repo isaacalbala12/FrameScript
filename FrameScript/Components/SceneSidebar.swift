@@ -221,7 +221,9 @@ struct SidebarRow: View {
                         RhythmSidebarBadge(sceneID: scene.id)
                     }
                     // Room for the research badge, which is a sibling button.
-                    .padding(.trailing, researchUnconfirmedCount > 0 ? 34 : 0)
+                    .padding(.trailing, researchUnconfirmedCount > 0
+                        ? ResearchSidebarBadge.badgeWidth(count: researchUnconfirmedCount) + FrameSpacing.xs
+                        : 0)
                 } trailing: {
                     EmptyView()
                 }

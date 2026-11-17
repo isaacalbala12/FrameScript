@@ -295,6 +295,18 @@ final class TimelineViewState {
         pointsPerSecond = TimelineZoom.clamp(value)
     }
 
+    // MARK: Project identity
+
+    private var projectID: UUID?
+
+    /// Call when the Timeline shows a project. Opening a different project
+    /// resets the zoom and the follow state, so a manual zoom never carries
+    /// over from another project.
+    func adopt(projectID newID: UUID) {
+        if let projectID, projectID != newID { reset() }
+        projectID = newID
+    }
+
     // MARK: Fit-to-width following
 
     /// True until the writer zooms by hand. Lives here (not in the view) so a

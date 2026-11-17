@@ -61,7 +61,11 @@ struct TimelineWorkspaceView: View {
             }
         }
         .onAppear {
+            zoom.adopt(projectID: appState.project.id)
             selectedSceneID = appState.selectedScene?.id
+        }
+        .onChange(of: appState.project.id) { _, id in
+            zoom.adopt(projectID: id)
         }
         .onChange(of: appState.selectedScene?.id) { _, newValue in
             selectedSceneID = newValue

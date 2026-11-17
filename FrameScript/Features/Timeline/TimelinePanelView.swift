@@ -39,8 +39,10 @@ struct TimelinePanelView: View {
             } else {
                 timelineBody
             }
-            Divider().overlay(theme.divider)
-            footer
+            if !showsEmptyState {
+                Divider().overlay(theme.divider)
+                footer
+            }
         }
         .background(theme.windowBackground)
         .accessibilityElement(children: .contain)
@@ -535,21 +537,13 @@ private struct TimelineCanvasView: View {
             context.stroke(shape, with: .color(theme.focus), lineWidth: 2)
         }
 
-        var label = label(for: block)
-        var labelWidthNeeded = minimumLabelWidth(for: block.track)
-        if block.track == .scenes {
-            // Number plus as many whole words of the title as fit, then «…»;
-            // the number alone only when not even one word fits.
-            let reserved: CGFloat = width > 120 ? 48 : 12
-            label = TimelineBlockLabel.sceneLabel(
-                for: block, layout: layout, inWidth: width - reserved, language: language
-            )
-            labelWidthNeeded = 0
-        }
-        if block.track == .narration {
-            label = TimelineBlockLabel.wholeWords(label, inWidth: width - 12, fontSize: 10)
-        }
-        if !label.isEmpty, width >= labelWidthNeeded {
+        if let label = TimelineBlockLabel.canvasLabel(
+            for: block,
+            layout: layout,
+            blockWidth: width,
+            minimumWidth: minimumLabelWidth(for: block.track),
+            language: language
+        ), !label.isEmpty {
             let textColor = theme.primaryText
             context.drawLayer { layer in
                 if block.track == .scenes {
@@ -741,10 +735,36 @@ enum TimelineBlockLabel {
         }
     }
 
-    /// Real width of `text` in the canvas font (system, medium).
+    /// The text drawn on a block, or `nil` when the block is too small to
+    /// carry any. The width checks run before any text is measured, and all
+    /// measuring is cached (`TimelineLabelMetrics`), so a redraw never calls
+    /// `NSString.size` once the layout has been drawn.
+    static func canvasLabel(
+        for block: TimelineBlock,
+        layout: TimelineLayout,
+        blockWidth width: CGFloat,
+        minimumWidth: CGFloat,
+        language: AppLanguage
+    ) -> String? {
+        switch block.track {
+        case .scenes:
+            guard width >= 14 else { return nil }
+            // Number plus as many whole words of the title as fit, then «…»;
+            // the number alone only when not even one word fits.
+            let reserved: CGFloat = width > 120 ? 48 : 12
+            return sceneLabel(for: block, layout: layout, inWidth: width - reserved, language: language)
+        case .narration:
+            guard width >= minimumWidth else { return nil }
+            return wholeWords(block.label, inWidth: width - 12, fontSize: 10)
+        default:
+            guard width >= minimumWidth else { return nil }
+            return label(for: block, layout: layout, language: language)
+        }
+    }
+
+    /// Real width of `text` in the canvas font (system, medium), cached.
     static func textWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
-        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        TimelineLabelMetrics.shared.entry(for: text, fontSize: fontSize).full
     }
 
     static func fits(_ label: String, inWidth width: CGFloat, fontSize: CGFloat = 11) -> Bool {
@@ -752,16 +772,17 @@ enum TimelineBlockLabel {
     }
 
     /// Longest run of whole words that fits `width`, with an ellipsis when
-    /// words were dropped; empty when not even one word fits.
+    /// words were dropped; empty when not even one word fits. Uses the cached
+    /// prefix widths, so no text is measured after the first call per label.
     static func wholeWords(_ label: String, inWidth width: CGFloat, fontSize: CGFloat = 11) -> String {
-        if fits(label, inWidth: width, fontSize: fontSize) { return label }
-        var kept: [Substring] = []
-        for word in label.split(separator: " ") {
-            let candidate = (kept + [word]).joined(separator: " ") + "…"
-            guard fits(candidate, inWidth: width, fontSize: fontSize) else { break }
-            kept.append(word)
+        guard width > 0, !label.isEmpty else { return "" }
+        let entry = TimelineLabelMetrics.shared.entry(for: label, fontSize: fontSize)
+        if entry.full <= width { return label }
+        var count = 0
+        for (index, prefixWidth) in entry.prefixWidths.enumerated() where prefixWidth <= width {
+            count = index + 1
         }
-        return kept.isEmpty ? "" : kept.joined(separator: " ") + "…"
+        return count == 0 ? "" : entry.words[0..<count].joined(separator: " ") + "…"
     }
 
     /// «02 · Qué es…»: the number plus whole title words that fit, or just the
@@ -834,5 +855,61 @@ enum TimelineZoomText {
             recorded,
             layout.scenes.count
         )
+    }
+}
+
+/// Measured label widths, computed once per (text, font size) and reused by
+/// every redraw: the width of the whole text and of each whole-word prefix
+/// followed by «…». Truncating to a given width is then a scan over numbers.
+/// Bounded; a full cache is simply dropped and refilled.
+final class TimelineLabelMetrics: @unchecked Sendable {
+    struct Entry {
+        let full: CGFloat
+        let words: [String]
+        /// `prefixWidths[i]` is the width of the first `i + 1` words plus «…».
+        let prefixWidths: [CGFloat]
+    }
+
+    private struct Key: Hashable {
+        let text: String
+        let fontSize: CGFloat
+    }
+
+    static let shared = TimelineLabelMetrics()
+    static let capacity = 4_096
+
+    private let lock = NSLock()
+    private var entries: [Key: Entry] = [:]
+    private(set) var measurementCount = 0
+
+    func entry(for text: String, fontSize: CGFloat) -> Entry {
+        let key = Key(text: text, fontSize: fontSize)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = entries[key] { return cached }
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        func width(_ string: String) -> CGFloat {
+            measurementCount += 1
+            return ceil((string as NSString).size(withAttributes: [.font: font]).width)
+        }
+        // A label ending in «…» was already cut upstream; its words continue.
+        let base = text.hasSuffix("…") ? String(text.dropLast()) : text
+        let words = base.split(separator: " ").map(String.init)
+        var prefixWidths: [CGFloat] = []
+        var running = ""
+        for word in words {
+            running += running.isEmpty ? word : " " + word
+            prefixWidths.append(width(running + "…"))
+        }
+        let entry = Entry(full: width(text), words: words, prefixWidths: prefixWidths)
+        if entries.count >= Self.capacity { entries.removeAll(keepingCapacity: true) }
+        entries[key] = entry
+        return entry
+    }
+
+    func removeAll() {
+        lock.lock()
+        entries.removeAll()
+        lock.unlock()
     }
 }

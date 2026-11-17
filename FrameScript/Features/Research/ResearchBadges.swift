@@ -7,6 +7,12 @@ import SwiftUI
 /// single «N por verificar» chip there (it opens the inspector instead of the
 /// research window).
 struct ResearchSidebarBadge: View {
+    /// Width of the badge for `count`: padding, glyph, gap and the digits.
+    /// Slightly generous so a row can reserve room that never under-counts.
+    static func badgeWidth(count: Int) -> CGFloat {
+        10 + 9 + 2 + CGFloat(String(max(0, count)).count) * 6
+    }
+
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
     let sceneID: UUID
