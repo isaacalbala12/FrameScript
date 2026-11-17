@@ -18,12 +18,22 @@ struct TimelinePanelView: View {
     let onZoomIn: () -> Void
     let onZoomOut: () -> Void
     let onZoomChange: (Double) -> Void
+    /// "Ajustar": make the whole video fill the canvas.
+    var onFit: () -> Void = {}
+    /// True while the current zoom is the fitted one (the button then rests).
+    var isFitted = false
+    /// Empty-state button that goes back to the script.
+    var onGoToScript: () -> Void = {}
+
+    private var showsEmptyState: Bool {
+        TimelineEmptyState.shouldShow(for: layout)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().overlay(theme.divider)
-            if layout.isEmpty {
+            if showsEmptyState {
                 emptyState
             } else {
                 timelineBody
@@ -39,59 +49,89 @@ struct TimelinePanelView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: FrameSpacing.l) {
+            VStack(alignment: .leading, spacing: FrameSpacing.xs) {
                 Text(text("timeline.title"))
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(theme.primaryText)
                     .lineLimit(1)
                 Text(subtitle)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(theme.secondaryText)
                     .lineLimit(1)
+                Text(text("timeline.explainer"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("timeline-explainer")
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: FrameSpacing.m)
 
-            HStack(spacing: 8) {
-                Button(action: onZoomOut) {
-                    Image(systemName: "minus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.cursorPlain)
-                .help(text("timeline.zoomOut"))
-                .accessibilityLabel(text("timeline.zoomOut"))
-                .accessibilityIdentifier("timeline-zoom-out")
-
-                Slider(value: zoomFraction, in: 0...1)
-                    .controlSize(.small)
-                    .frame(width: 110)
-                    .help(text("timeline.zoomHelp"))
-                    .accessibilityLabel(text("timeline.zoom"))
-                    .accessibilityIdentifier("timeline-zoom-slider")
-
-                Button(action: onZoomIn) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.cursorPlain)
-                .help(text("timeline.zoomIn"))
-                .accessibilityLabel(text("timeline.zoomIn"))
-                .accessibilityIdentifier("timeline-zoom-in")
-
-                Text("\(Int((pointsPerSecond / TimelineZoom.defaultPointsPerSecond * 100).rounded()))%")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(theme.tertiaryText)
-                    .frame(width: 40, alignment: .trailing)
-                    .accessibilityIdentifier("timeline-zoom-percent")
+            if !showsEmptyState {
+                zoomControls
             }
-            .foregroundStyle(theme.secondaryText)
         }
-        .padding(.horizontal, 18)
-        .frame(height: 60)
+        .padding(.horizontal, FrameSpacing.l + 2)
+        .padding(.vertical, FrameSpacing.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.panelBackground)
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: FrameSpacing.s) {
+            Button(action: onZoomOut) {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.cursorPlain)
+            .help(text("timeline.zoomOut"))
+            .accessibilityLabel(text("timeline.zoomOut"))
+            .accessibilityIdentifier("timeline-zoom-out")
+
+            Slider(value: zoomFraction, in: 0...1)
+                .controlSize(.small)
+                .tint(theme.accent.color)
+                .frame(width: 110)
+                .help(text("timeline.zoomHelp"))
+                .accessibilityLabel(text("timeline.zoom"))
+                .accessibilityIdentifier("timeline-zoom-slider")
+
+            Button(action: onZoomIn) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.cursorPlain)
+            .help(text("timeline.zoomIn"))
+            .accessibilityLabel(text("timeline.zoomIn"))
+            .accessibilityIdentifier("timeline-zoom-in")
+
+            Text(zoomScaleText)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(theme.secondaryText)
+                .lineLimit(1)
+                .fixedSize()
+                .help(zoomPercentHelp)
+                .accessibilityIdentifier("timeline-zoom-percent")
+
+            Button(text("timeline.fit"), action: onFit)
+                .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
+                .disabled(isFitted)
+                .help(text("timeline.fit.help"))
+                .accessibilityIdentifier("timeline-fit")
+        }
+        .foregroundStyle(theme.secondaryText)
+    }
+
+    private var zoomScaleText: String {
+        TimelineZoomText.scale(pointsPerSecond: pointsPerSecond, language: language)
+    }
+
+    private var zoomPercentHelp: String {
+        let percent = Int((pointsPerSecond / TimelineZoom.defaultPointsPerSecond * 100).rounded())
+        return "\(text("timeline.zoom")): \(percent)%"
     }
 
     private var subtitle: String {
@@ -159,6 +199,8 @@ struct TimelinePanelView: View {
                 }
                 .padding(.horizontal, 10)
                 .frame(height: metrics.height(for: track))
+                .contentShape(Rectangle())
+                .help(text("timeline.track.\(track.rawValue).help"))
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(track == .scenes ? theme.softAccent.opacity(0.35) : Color.clear)
@@ -175,15 +217,13 @@ struct TimelinePanelView: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: 14) {
-            Label(text("timeline.dragHint"), systemImage: "arrow.left.and.right")
-                .font(.system(size: 11))
-                .foregroundStyle(theme.tertiaryText)
-                .labelStyle(.titleAndIcon)
-
-            legendChip(color: theme.accent.color.opacity(0.8), title: text("timeline.real"))
-            legendChip(color: theme.accent.color.opacity(0.2), title: text("timeline.estimated"))
+        HStack(spacing: FrameSpacing.l) {
+            legendChip(color: theme.accent.color.opacity(0.8), title: text("timeline.legend.real"))
+                .help(text("timeline.legend.real.help"))
+            legendChip(color: theme.accent.color.opacity(0.2), title: text("timeline.legend.estimated"))
+                .help(text("timeline.legend.estimated.help"))
             legendChip(color: theme.warning, title: text("timeline.legend.pause"))
+                .help(text("timeline.legend.pause.help"))
             if warningCount > 0 {
                 legendChip(
                     color: theme.warning,
@@ -195,18 +235,22 @@ struct TimelinePanelView: View {
                 )
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: FrameSpacing.s)
 
-            Text(L10n.plural(
-                "timeline.blockCount",
-                count: layout.blocks.count,
-                language: language
-            ))
-                .font(.system(size: 11))
-                .foregroundStyle(theme.tertiaryText)
-                .accessibilityIdentifier("timeline-block-count")
+            if !showsEmptyState {
+                Label(text("timeline.dragHint"), systemImage: "arrow.left.and.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.tertiaryText)
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+                Text(TimelineZoomText.recordedSummary(layout: layout, language: language))
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.tertiaryText)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("timeline-recorded-summary")
+            }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, FrameSpacing.l + 2)
         .frame(height: 34)
         .background(theme.panelBackground)
     }
@@ -228,20 +272,22 @@ struct TimelinePanelView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: FrameSpacing.m) {
             Image(systemName: "rectangle.split.3x1")
-                .font(.system(size: 26, weight: .light))
+                .font(.system(size: 28, weight: .light))
                 .foregroundStyle(theme.tertiaryText)
-            Text(text("timeline.empty.title"))
-                .font(.system(size: 16, weight: .medium))
+            Text(text("timeline.empty.friendly"))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(theme.primaryText)
-            Text(text("timeline.empty.message"))
-                .font(.system(size: 13))
-                .foregroundStyle(theme.secondaryText)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 380)
+            Button(text("timeline.empty.goToScript"), action: onGoToScript)
+                .buttonStyle(.framePrimary)
+                .accessibilityIdentifier("timeline-go-to-script")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(FrameSpacing.xl)
         .accessibilityIdentifier("timeline-empty-state")
     }
 
@@ -291,12 +337,28 @@ private struct TimelineCanvasView: View {
             draw(context: &context, size: size)
         }
         .contentShape(Rectangle())
+        .background(alignment: .topLeading) { sceneTooltips }
         .gesture(dragGesture)
         .simultaneousGesture(pinchGesture)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(L10n.tr("timeline.canvas.accessibilityLabel", language: language))
         .accessibilityHint(L10n.tr("timeline.canvas.accessibilityHint", language: language))
         .accessibilityIdentifier("timeline-canvas")
+    }
+
+    /// Hover tooltips with the full scene title, since a narrow block only
+    /// shows its number.
+    private var sceneTooltips: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(layout.blocks(on: .scenes)) { block in
+                let x = viewport.x(for: block.start)
+                let width = max(6, viewport.width(for: block.duration))
+                Color.clear
+                    .frame(width: width, height: metrics.height(for: .scenes))
+                    .offset(x: x, y: metrics.yOffset(for: .scenes))
+                    .help(TimelineBlockLabel.sceneTooltip(for: block, layout: layout))
+            }
+        }
     }
 
     private var dragGesture: some Gesture {
@@ -415,12 +477,17 @@ private struct TimelineCanvasView: View {
     private func draw(block: TimelineBlock, context: inout GraphicsContext, size: CGSize) {
         let top = metrics.yOffset(for: block.track)
         let height = metrics.height(for: block.track)
-        let padding: CGFloat = block.track == .takes ? 2 : 4
-        let laneHeight = block.track == .takes
-            ? height / CGFloat(TimelineLayoutBuilder.maximumTakeLanes)
-            : height
-        let y = top + padding + (block.track == .takes ? CGFloat(block.lane) * laneHeight : 0)
-        let blockHeight = max(6, laneHeight - padding * 2)
+        let padding: CGFloat = 4
+        var y = top + padding
+        var blockHeight = max(6, height - padding * 2)
+        if block.track == .takes {
+            let rect = metrics.takeLaneRect(
+                lane: block.lane,
+                lanesUsed: layout.maximumLane(on: .takes) + 1
+            )
+            y = top + rect.offset
+            blockHeight = rect.height
+        }
 
         let x = viewport.x(for: block.start)
         var width = viewport.width(for: block.duration)
@@ -465,8 +532,20 @@ private struct TimelineCanvasView: View {
             context.stroke(shape, with: .color(theme.focus), lineWidth: 2)
         }
 
-        let label = label(for: block)
-        if !label.isEmpty, width >= minimumLabelWidth(for: block.track) {
+        var label = label(for: block)
+        var labelWidthNeeded = minimumLabelWidth(for: block.track)
+        if block.track == .scenes {
+            // Full "01 · Title" only when it fits whole; otherwise just the
+            // number (the title stays in the tooltip). Never a cut-off word.
+            let reserved: CGFloat = width > 120 ? 48 : 12
+            if !TimelineBlockLabel.fits(label, inWidth: width - reserved) {
+                label = TimelineBlockLabel.sceneNumber(for: block, layout: layout)
+                labelWidthNeeded = 22
+            } else {
+                labelWidthNeeded = 0
+            }
+        }
+        if !label.isEmpty, width >= labelWidthNeeded {
             let textColor = theme.primaryText
             context.drawLayer { layer in
                 if block.track == .scenes {
@@ -634,7 +713,10 @@ enum TimelineBlockLabel {
         switch block.track {
         case .scenes:
             let hasReal = layout.scene(id: block.sceneID)?.hasRealTake == true
-            return hasReal ? "\(block.label) · \(text("timeline.real", language: language))" : block.label
+            let number = sceneNumber(for: block, layout: layout)
+            let title = block.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = title.isEmpty ? number : "\(number) · \(title)"
+            return hasReal ? "\(base) · \(text("timeline.real", language: language))" : base
         case .narration:
             return block.label
         case .pauses:
@@ -654,6 +736,25 @@ enum TimelineBlockLabel {
         }
     }
 
+    /// Rough text width at the canvas font, to decide between the full label
+    /// and the bare number without drawing a cut-off word.
+    static func fits(_ label: String, inWidth width: CGFloat) -> Bool {
+        CGFloat(label.count) * 6.3 + 4 <= width
+    }
+
+    /// Full "01 · Title" for the hover tooltip.
+    static func sceneTooltip(for block: TimelineBlock, layout: TimelineLayout) -> String {
+        let number = sceneNumber(for: block, layout: layout)
+        let title = block.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? number : "\(number) · \(title)"
+    }
+
+    /// Two-digit scene number (`01`), matching the sidebar.
+    static func sceneNumber(for block: TimelineBlock, layout: TimelineLayout) -> String {
+        let order = layout.scene(id: block.sceneID)?.order ?? 0
+        return String(format: "%02d", max(0, order) + 1)
+    }
+
     private static func formattedPause(_ seconds: TimeInterval) -> String {
         if abs(seconds - seconds.rounded()) < 0.001 {
             return "\(Int(seconds.rounded()))"
@@ -663,5 +764,31 @@ enum TimelineBlockLabel {
 
     private static func text(_ key: String, language: AppLanguage) -> String {
         L10n.tr(key, language: language)
+    }
+}
+
+/// Zoom and footer text for the timeline header and footer.
+enum TimelineZoomText {
+    /// «10 s por división» / «2 min por división».
+    static func scale(pointsPerSecond: Double, language: AppLanguage) -> String {
+        let seconds = Int(TimelineZoom.secondsPerDivision(pointsPerSecond: pointsPerSecond).rounded())
+        let unit: String
+        if seconds >= 60, seconds % 60 == 0 {
+            unit = String(format: L10n.tr("timeline.scale.minutes", language: language), seconds / 60)
+        } else {
+            unit = String(format: L10n.tr("timeline.scale.seconds", language: language), seconds)
+        }
+        return String(format: L10n.tr("timeline.scale.perDivision", language: language), unit)
+    }
+
+    /// «Tomas reales: 3 de 9 escenas», the footer figure that replaced the
+    /// bare block count.
+    static func recordedSummary(layout: TimelineLayout, language: AppLanguage) -> String {
+        let recorded = layout.scenes.filter(\.hasRealTake).count
+        return String(
+            format: L10n.tr("timeline.recordedSummary", language: language),
+            recorded,
+            layout.scenes.count
+        )
     }
 }

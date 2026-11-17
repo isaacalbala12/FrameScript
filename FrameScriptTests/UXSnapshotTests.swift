@@ -553,8 +553,11 @@ final class UXSnapshotTests: FrameScriptTestCase {
                             result.textFragments.contains { $0.contains("Grabar el gancho") },
                             "\(name): scene task missing"
                         )
-                        XCTAssertFalse(
-                            result.textFragments.contains { $0.contains("El circuito se reasfaltó en 2025") },
+                        // The claim may appear once, as its derived research row;
+                        // the stored research copy must not add a second one.
+                        XCTAssertLessThanOrEqual(
+                            result.textFragments.filter { $0.contains("El circuito se reasfaltó en 2025") }.count,
+                            1,
                             "\(name): E-2 research copy leaked into the production tab"
                         )
                         XCTAssertTrue(

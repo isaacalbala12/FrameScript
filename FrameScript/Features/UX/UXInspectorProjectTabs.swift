@@ -34,35 +34,53 @@ struct UXInspectorResearchModel: Equatable {
 
 /// What the Producción tab needs for the current scene.
 ///
-/// The rows come from the same `ProductionChecklist` snapshot the full panel
-/// renders, filtered to its toggleable manual rows for this scene. That keeps
-/// the inspector from re-introducing the E-2 research copy (the snapshot hides
-/// a stored `.research` task that mirrors a claim) and from showing publishing
-/// rows twice.
+/// Everything comes from the same `ProductionChecklist` snapshot the full
+/// panel renders: the scene's automatic rows (falta grabar, B-roll sin
+/// archivo, ...) shown read-only with their explanation, plus its manual tasks
+/// with checkboxes. Using the snapshot keeps the E-2 rule (the stored research
+/// copy of a claim stays hidden) and guarantees the tab never says "Sin
+/// pendientes" while the panel lists something for the scene.
 struct UXInspectorProductionModel: Equatable {
     let sceneID: UUID
+    /// Derived rows for this scene, in panel order.
+    let autoItems: [ProductionItem]
     let tasks: [ChecklistTask]
 
+    /// Open automatic rows plus open manual tasks: the same number the panel
+    /// shows when filtered to this scene.
     var openCount: Int {
-        tasks.filter { !$0.isDone }.count
+        autoItems.filter { !$0.isDone }.count + tasks.filter { !$0.isDone }.count
     }
 
-    init(sceneID: UUID, tasks: [ChecklistTask]) {
+    var isEmpty: Bool { autoItems.isEmpty && tasks.isEmpty }
+
+    init(sceneID: UUID, autoItems: [ProductionItem] = [], tasks: [ChecklistTask]) {
         self.sceneID = sceneID
+        self.autoItems = autoItems
         self.tasks = tasks
     }
 
     @MainActor
     init?(appState: AppState) {
         guard let scene = appState.activeEditorScene else { return nil }
+        let snapshot = ProductionChecklistCenter.shared.snapshot
         self.init(
             sceneID: scene.id,
+            autoItems: Self.automaticSceneItems(sceneID: scene.id, snapshot: snapshot),
             tasks: Self.visibleSceneTasks(
                 appState: appState,
                 sceneID: scene.id,
-                snapshot: ProductionChecklistCenter.shared.snapshot
+                snapshot: snapshot
             )
         )
+    }
+
+    /// Derived (non-manual) rows the panel lists for this scene.
+    static func automaticSceneItems(
+        sceneID: UUID,
+        snapshot: ProductionSnapshot
+    ) -> [ProductionItem] {
+        snapshot.items.filter { $0.sceneID == sceneID && $0.reason != .manualTask }
     }
 
     /// Manual rows the production panel can toggle, in panel order.
@@ -307,9 +325,12 @@ struct UXInspectorProductionTab: View {
             if let model = UXInspectorProductionModel(appState: appState) {
                 VStack(alignment: .leading, spacing: 12) {
                     summaryCard(model)
-                    if model.tasks.isEmpty {
+                    if model.isEmpty {
                         emptyCard
                     } else {
+                        ForEach(model.autoItems) { item in
+                            UXProductionAutoRow(item: item)
+                        }
                         ForEach(model.tasks) { task in
                             UXProductionTaskRow(taskID: task.id)
                         }
@@ -404,6 +425,62 @@ struct UXInspectorProductionTab: View {
     }
 }
 
+/// A derived pending item: read-only, with the reason it exists and the same
+/// one-click action the panel offers.
+private struct UXProductionAutoRow: View {
+    @Environment(AppState.self) private var appState
+    @Environment(\.frameTheme) private var theme
+
+    let item: ProductionItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: FrameSpacing.xs + 2) {
+            HStack(spacing: FrameSpacing.s - 2) {
+                Text(ProductionExplanation.title(for: item, language: appState.currentLanguage))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.primaryText)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Text(appState.localized("production.tag.auto"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(theme.accentText)
+                    .padding(.horizontal, 6)
+                    .frame(height: 15)
+                    .background { Capsule().fill(theme.accentSoft) }
+            }
+            Text(
+                ProductionExplanation.explanation(
+                    for: item,
+                    language: appState.currentLanguage,
+                    recordShortcut: appState.settings.activeShortcut(for: .recordTake)?.display
+                )
+            )
+            .font(.system(size: 11))
+            .foregroundStyle(theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            if let key = ProductionExplanation.actionKey(for: item) {
+                Button(appState.localized(key)) {
+                    _ = appState.navigateToProductionTarget(item.target)
+                }
+                .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
+            }
+        }
+        .padding(FrameLayout.cardPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
+                .fill(theme.cardBackground)
+                .overlay {
+                    RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
+                        .stroke(theme.divider, lineWidth: 1)
+                }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("ux-inspector-auto-\(item.id)")
+    }
+}
+
 private struct UXProductionTaskRow: View {
     @Environment(AppState.self) private var appState
     @Environment(\.frameTheme) private var theme
@@ -433,7 +510,7 @@ private struct UXProductionTaskRow: View {
                     .foregroundStyle(theme.tertiaryText)
                 }
             }
-            .toggleStyle(.checkbox)
+            .toggleStyle(FrameCheckboxToggleStyle())
             .padding(FrameLayout.cardPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {

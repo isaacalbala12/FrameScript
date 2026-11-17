@@ -14,7 +14,19 @@ struct TimelineWorkspaceView: View {
     @State private var isPending = true
     @State private var selectedBlockID: String?
     @State private var selectedSceneID: UUID?
-    @State private var didAutoFit = false
+    /// True until the writer zooms by hand: the canvas then keeps the whole
+    /// video fitted through rebuilds and window resizes.
+    @State private var followsFit = true
+    @State private var canvasWidth: CGFloat = 0
+    @State private var lastFitPointsPerSecond: Double?
+
+    /// Width the timeline canvas gets: the pane minus the track-label column
+    /// (112 + divider) and a small right margin.
+    static let canvasInset: CGFloat = 113 + 12
+
+    private var fitWidth: Double {
+        max(320, Double(canvasWidth) - Double(Self.canvasInset))
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -32,12 +44,24 @@ struct TimelineWorkspaceView: View {
                 isPending: isPending,
                 onSelectBlock: select,
                 onMoveScene: moveScene,
-                onZoomIn: zoom.zoomIn,
-                onZoomOut: zoom.zoomOut,
-                onZoomChange: { zoom.setPointsPerSecond($0) }
+                onZoomIn: { followsFit = false; zoom.zoomIn() },
+                onZoomOut: { followsFit = false; zoom.zoomOut() },
+                onZoomChange: { followsFit = false; zoom.setPointsPerSecond($0) },
+                onFit: fitToWidth,
+                isFitted: TimelineZoom.isFitted(
+                    pointsPerSecond: zoom.pointsPerSecond,
+                    totalDuration: layout.totalDuration,
+                    availableWidth: fitWidth
+                ),
+                onGoToScript: { appState.selectMode(.script) }
             )
             .task(id: refreshKey) {
-                await rebuild(availableWidth: proxy.size.width)
+                canvasWidth = proxy.size.width
+                await rebuild()
+            }
+            .onChange(of: proxy.size.width, initial: true) { _, width in
+                canvasWidth = width
+                refitIfFollowing()
             }
         }
         .onAppear {
@@ -62,7 +86,7 @@ struct TimelineWorkspaceView: View {
     }
 
     @MainActor
-    private func rebuild(availableWidth: CGFloat) async {
+    private func rebuild() async {
         if !layout.isEmpty {
             do {
                 try await Task.sleep(for: .milliseconds(120))
@@ -80,15 +104,33 @@ struct TimelineWorkspaceView: View {
         layout = built
         isPending = false
 
-        // First look at a project: use the whole canvas instead of the global
-        // default zoom. Later rebuilds keep whatever the user chose.
-        if !didAutoFit, built.totalDuration > 0 {
-            didAutoFit = true
-            if zoom.pointsPerSecond == TimelineZoom.defaultPointsPerSecond {
-                let available = max(320, availableWidth - 113 - 12)
-                zoom.setPointsPerSecond(available / built.totalDuration)
-            }
+        // The default zoom fits the whole video to the canvas; it keeps
+        // doing so until the writer zooms by hand.
+        refitIfFollowing()
+    }
+
+    /// Explicit «Ajustar»: fit now and resume following the canvas.
+    private func fitToWidth() {
+        followsFit = true
+        applyFit()
+    }
+
+    /// Rebuilds and resizes re-fit only while the zoom is still the one the
+    /// last fit chose. A manual zoom (slider, pinch, ⌘+/⌘-) stops the following.
+    private func refitIfFollowing() {
+        guard followsFit else { return }
+        if let lastFitPointsPerSecond,
+           abs(zoom.pointsPerSecond - lastFitPointsPerSecond) > 0.0001 {
+            followsFit = false
+            return
         }
+        applyFit()
+    }
+
+    private func applyFit() {
+        guard layout.totalDuration > 0 else { return }
+        zoom.fit(totalDuration: layout.totalDuration, availableWidth: fitWidth)
+        lastFitPointsPerSecond = zoom.pointsPerSecond
     }
 
     // MARK: Actions

@@ -150,13 +150,42 @@ struct TimelineTrackMetrics: Equatable {
         TimelineTrack.allCases.first { yRange(for: $0).contains(y) }
     }
 
-    /// Take sub-row (0...2) from a point inside the takes track.
-    func takeLane(atY y: CGFloat) -> Int {
+    /// Gap between stacked take lanes.
+    static let takeLaneGap: CGFloat = 2
+    /// Height of a take block when only one lane is used.
+    static let takeBlockHeight: CGFloat = 26
+
+    /// Vertical placement of a take lane inside the takes row. The stack of
+    /// lanes actually in use is centered in the row; a single lane gets a
+    /// normal block height instead of a sliver at the top edge.
+    func takeLaneRect(lane: Int, lanesUsed: Int) -> (offset: CGFloat, height: CGFloat) {
+        let lanes = min(max(1, lanesUsed), TimelineLayoutBuilder.maximumTakeLanes)
+        let available = takeRowHeight - 8
+        let gaps = CGFloat(lanes - 1) * Self.takeLaneGap
+        let laneHeight = lanes == 1
+            ? min(Self.takeBlockHeight, available)
+            : (available - gaps) / CGFloat(lanes)
+        let total = laneHeight * CGFloat(lanes) + gaps
+        let start = (takeRowHeight - total) / 2
+        let index = min(max(lane, 0), lanes - 1)
+        return (start + CGFloat(index) * (laneHeight + Self.takeLaneGap), laneHeight)
+    }
+
+    /// Take lane nearest to a point inside the takes track.
+    func takeLane(atY y: CGFloat, lanesUsed: Int) -> Int {
         let top = yOffset(for: .takes)
-        let height = takeRowHeight / CGFloat(TimelineLayoutBuilder.maximumTakeLanes)
-        guard height > 0 else { return 0 }
-        let lane = Int(floor((y - top) / height))
-        return min(max(lane, 0), TimelineLayoutBuilder.maximumTakeLanes - 1)
+        let lanes = min(max(1, lanesUsed), TimelineLayoutBuilder.maximumTakeLanes)
+        var best = 0
+        var bestDistance = CGFloat.infinity
+        for lane in 0..<lanes {
+            let rect = takeLaneRect(lane: lane, lanesUsed: lanes)
+            let distance = abs(y - (top + rect.offset + rect.height / 2))
+            if distance < bestDistance {
+                best = lane
+                bestDistance = distance
+            }
+        }
+        return best
     }
 }
 
@@ -176,7 +205,7 @@ enum TimelineHitTester {
               let track = metrics.track(atY: point.y) else { return nil }
         let time = viewport.time(forX: Double(point.x))
         let slack = Double(hitSlackPoints) / viewport.pointsPerSecond
-        let lane = track == .takes ? metrics.takeLane(atY: point.y) : 0
+        let lane = track == .takes ? metrics.takeLane(atY: point.y, lanesUsed: layout.maximumLane(on: .takes) + 1) : 0
 
         let candidates = layout.blocks(on: track).filter { block in
             guard block.lane == lane else { return false }
@@ -262,6 +291,14 @@ final class TimelineViewState {
 
     func setPointsPerSecond(_ value: Double) {
         pointsPerSecond = TimelineZoom.clamp(value)
+    }
+
+    /// «Ajustar»: the whole video across `availableWidth`.
+    func fit(totalDuration: TimeInterval, availableWidth: Double) {
+        pointsPerSecond = TimelineZoom.fitPointsPerSecond(
+            totalDuration: totalDuration,
+            availableWidth: availableWidth
+        )
     }
 }
 

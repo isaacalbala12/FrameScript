@@ -175,6 +175,46 @@ struct UXActionBarModel: Equatable {
     }
 }
 
+/// Spacing of the action bar. One place so the bar, the hidden measuring
+/// copies and the tests agree on the numbers.
+struct UXActionBarMetrics: Equatable {
+    /// Space between the rounded container and its first/last button.
+    var horizontalInset: CGFloat
+    var verticalInset: CGFloat
+    /// Gap between neighbouring buttons of one group.
+    var buttonGap: CGFloat
+    /// Space on each side of a group separator.
+    var dividerInset: CGFloat
+    /// Padding on each side of a button's icon + label.
+    var labelPadding: CGFloat
+
+    static let regular = UXActionBarMetrics(
+        horizontalInset: FrameSpacing.m - 2,
+        verticalInset: FrameSpacing.xs + 1,
+        buttonGap: FrameSpacing.xxs,
+        dividerInset: FrameSpacing.s,
+        labelPadding: FrameSpacing.s - 2
+    )
+
+    /// The two middle layouts tighten gaps so Insertar keeps its labels at
+    /// the 1180 pt window with the inspector open (about 8 pt of slack). The
+    /// outer insets stay.
+    static let compact = UXActionBarMetrics(
+        horizontalInset: FrameSpacing.m - 2,
+        verticalInset: FrameSpacing.xs + 1,
+        buttonGap: 0,
+        dividerInset: FrameSpacing.xxs,
+        labelPadding: FrameSpacing.xs - 1
+    )
+
+    static func metrics(compact isCompact: Bool) -> UXActionBarMetrics {
+        isCompact ? .compact : .regular
+    }
+
+    /// Bar height: button height plus the vertical inset on both sides.
+    var barHeight: CGFloat { FrameControlHeight.compact + 2 * verticalInset }
+}
+
 enum UXActionBarLabelMode: CaseIterable, Hashable {
     /// Everything labeled.
     case all
@@ -336,7 +376,8 @@ struct UXEditorActionBar: View {
             measurementCopies(badges: badges, model: model)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 34)
+        .frame(height: UXActionBarMetrics.regular.barHeight)
+        .layoutProbe("actionbar.bar")
         .background {
             RoundedRectangle(cornerRadius: FrameRadius.container, style: .continuous)
                 .fill(theme.panelBackground)
@@ -382,7 +423,8 @@ struct UXEditorActionBar: View {
         badges: UXProjectBadges,
         model: UXActionBarModel
     ) -> some View {
-        HStack(spacing: 0) {
+        let metrics = UXActionBarMetrics.metrics(compact: compactMetrics)
+        return HStack(spacing: 0) {
             ForEach(Array(UXActionGroup.allCases.enumerated()), id: \.element.id) { index, group in
                 if group == .project {
                     // Proyecto opens other windows rather than acting on the
@@ -394,12 +436,10 @@ struct UXEditorActionBar: View {
                     Rectangle()
                         .fill(theme.divider)
                         .frame(width: 1, height: 16)
-                        .padding(.horizontal, compactMetrics ? FrameSpacing.xxs : FrameSpacing.s - 2)
+                        .padding(.horizontal, metrics.dividerInset)
                         .accessibilityHidden(true)
                 }
-                // Compact tiers keep the original tight packing so Insertar
-                // keeps its labels at the 1180 pt window with the inspector.
-                HStack(spacing: compactMetrics ? 0 : FrameSpacing.xxs) {
+                HStack(spacing: metrics.buttonGap) {
                     ForEach(group.actions) { action in
                         UXActionButton(
                             action: action,
@@ -413,7 +453,7 @@ struct UXEditorActionBar: View {
                                 for: action,
                                 language: appState.currentLanguage
                             ),
-                            labelHorizontalPadding: compactMetrics ? 3 : 4,
+                            labelHorizontalPadding: metrics.labelPadding,
                             isPreviewHovered: previewHoveredAction == action
                         ) {
                             UXEditorActionPerformer.perform(
@@ -429,8 +469,8 @@ struct UXEditorActionBar: View {
                 .accessibilityLabel(appState.localized(group.titleKey))
             }
         }
-        .padding(.horizontal, FrameSpacing.xs)
-        .padding(.vertical, FrameSpacing.xs)
+        .padding(.horizontal, metrics.horizontalInset)
+        .padding(.vertical, metrics.verticalInset)
     }
 
     private func tooltip(for action: UXEditorAction, model: UXActionBarModel) -> String {
@@ -484,7 +524,7 @@ struct UXActionButton: View {
         emphasis: UXActionEmphasis = .standard,
         badgeCount: Int? = nil,
         badgeAccessibility: String? = nil,
-        labelHorizontalPadding: CGFloat = 4,
+        labelHorizontalPadding: CGFloat = UXActionBarMetrics.regular.labelPadding,
         isPreviewHovered: Bool = false,
         perform: @escaping () -> Void
     ) {

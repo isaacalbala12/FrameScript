@@ -37,6 +37,7 @@ extension L10n {
         boardStrings,
         resolvePackStrings,
         uxStrings,
-        fullScriptStrings
+        fullScriptStrings,
+        clarityStrings
     ]
 }

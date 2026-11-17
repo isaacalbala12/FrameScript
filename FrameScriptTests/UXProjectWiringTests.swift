@@ -471,7 +471,7 @@ final class UXProjectWiringTests: ProductionTestCase {
         }
         let cases: [Case] = [
             // All groups labeled.
-            Case(width: 1_300, present: ["Pausa corta", "Analizar escena", "Grabar toma", "Producción"], absent: []),
+            Case(width: 1_420, present: ["Pausa corta", "Analizar escena", "Grabar toma", "Producción"], absent: []),
             // Proyecto collapses first.
             Case(width: 1_100, present: ["Pausa corta", "Analizar escena", "Grabar toma"], absent: ["Investigación"]),
             // IA collapses next.
@@ -496,7 +496,7 @@ final class UXProjectWiringTests: ProductionTestCase {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading),
                 name: name,
                 suite: "UXProjectWiringTests",
-                size: CGSize(width: 1_400, height: 120),
+                size: CGSize(width: 1_500, height: 120),
                 appearance: .light,
                 language: .spanish,
                 appState: appState

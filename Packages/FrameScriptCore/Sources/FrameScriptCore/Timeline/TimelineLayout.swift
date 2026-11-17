@@ -356,7 +356,9 @@ public enum TimelineLayoutBuilder {
                     start: sceneStart + rawStart * scale,
                     end: sceneStart + rawEnd * scale,
                     sourceRange: paragraph.range,
-                    label: excerpt(paragraph.text)
+                    // What you will say: cues, pauses and emphasis marks are removed.
+                    // A paragraph that is only a cue gets an empty label.
+                    label: excerpt(ScriptMarkup.spokenText(paragraph.text))
                 ))
             }
 

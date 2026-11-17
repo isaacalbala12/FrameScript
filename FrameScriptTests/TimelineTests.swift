@@ -140,10 +140,13 @@ final class TimelineTests: XCTestCase {
 
         for block in layout.blocks {
             let x = viewport.x(for: block.start + block.duration / 2)
-            let laneHeight = metrics.height(for: block.track)
-                / CGFloat(block.track == .takes ? TimelineLayoutBuilder.maximumTakeLanes : 1)
-            let y = metrics.yOffset(for: block.track)
-                + laneHeight * (CGFloat(block.lane) + 0.5)
+            let y: CGFloat
+            if block.track == .takes {
+                let rect = metrics.takeLaneRect(lane: block.lane, lanesUsed: layout.maximumLane(on: .takes) + 1)
+                y = metrics.yOffset(for: .takes) + rect.offset + rect.height / 2
+            } else {
+                y = metrics.yOffset(for: block.track) + metrics.height(for: block.track) / 2
+            }
             let hit = TimelineHitTester.block(
                 at: CGPoint(x: x, y: y),
                 layout: layout,
@@ -170,16 +173,17 @@ final class TimelineTests: XCTestCase {
         let metrics = TimelineTrackMetrics.standard
         let viewport = TimelineViewport(pointsPerSecond: 8)
         let takeTop = metrics.yOffset(for: .takes)
-        let laneHeight = metrics.takeRowHeight / CGFloat(TimelineLayoutBuilder.maximumTakeLanes)
+        let rect0 = metrics.takeLaneRect(lane: 0, lanesUsed: 2)
+        let rect1 = metrics.takeLaneRect(lane: 1, lanesUsed: 2)
 
         let lane0 = TimelineHitTester.block(
-            at: CGPoint(x: 4, y: takeTop + laneHeight * 0.5),
+            at: CGPoint(x: 4, y: takeTop + rect0.offset + rect0.height / 2),
             layout: layout,
             metrics: metrics,
             viewport: viewport
         )
         let lane1 = TimelineHitTester.block(
-            at: CGPoint(x: 4, y: takeTop + laneHeight * 1.5),
+            at: CGPoint(x: 4, y: takeTop + rect1.offset + rect1.height / 2),
             layout: layout,
             metrics: metrics,
             viewport: viewport

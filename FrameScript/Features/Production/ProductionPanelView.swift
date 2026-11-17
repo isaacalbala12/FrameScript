@@ -28,9 +28,17 @@ struct ProductionPanelView: View {
     @State private var newTaskSceneID: UUID?
     @State private var editingTask: ChecklistTask?
     @State private var navigationMessage: String?
+    @State private var showsExplainer: Bool
 
-    init(initialGrouping: ProductionGrouping = .scene) {
+    private let explainerStore: ProductionExplainerStore
+
+    init(
+        initialGrouping: ProductionGrouping = .scene,
+        explainerStore: ProductionExplainerStore = ProductionExplainerStore()
+    ) {
         _grouping = State(initialValue: initialGrouping)
+        self.explainerStore = explainerStore
+        _showsExplainer = State(initialValue: !explainerStore.isDismissed)
     }
 
     private var snapshot: ProductionSnapshot {
@@ -73,6 +81,11 @@ struct ProductionPanelView: View {
                 .frame(height: ProductionPanelMetrics.headerHeight)
             Divider()
                 .overlay(theme.divider)
+            if showsExplainer {
+                explainer
+                Divider()
+                    .overlay(theme.divider)
+            }
             filterBar
                 .frame(height: ProductionPanelMetrics.filterHeight)
             Divider()
@@ -129,6 +142,20 @@ struct ProductionPanelView: View {
             }
 
             Button {
+                showsExplainer.toggle()
+                if !showsExplainer { explainerStore.dismiss() }
+            } label: {
+                Image(systemName: showsExplainer ? "questionmark.circle.fill" : "questionmark.circle")
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.cursorPlain)
+            .foregroundStyle(theme.secondaryText)
+            .help(appState.localized("production.explainer.help"))
+            .accessibilityLabel(appState.localized("production.explainer.help"))
+            .accessibilityIdentifier("production-explainer-toggle")
+
+            Button {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
@@ -140,9 +167,36 @@ struct ProductionPanelView: View {
             .help(appState.localized("production.panel.close"))
             .accessibilityLabel(appState.localized("production.panel.close"))
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 18)
+        .padding(.horizontal, FrameSpacing.xl)
+        .padding(.top, FrameSpacing.l + 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: - Explainer
+
+    private var explainer: some View {
+        HStack(alignment: .top, spacing: FrameSpacing.m) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(theme.accentText)
+            Text(appState.localized("production.explainer.body"))
+                .font(.system(size: 12))
+                .foregroundStyle(theme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: FrameSpacing.s)
+            Button(appState.localized("production.explainer.dismiss")) {
+                explainerStore.dismiss()
+                showsExplainer = false
+            }
+            .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
+            .accessibilityIdentifier("production-explainer-dismiss")
+        }
+        .padding(.horizontal, FrameSpacing.xl)
+        .padding(.vertical, FrameSpacing.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.accentSoft)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("production-explainer")
     }
 
     // MARK: - Filters
@@ -156,10 +210,10 @@ struct ProductionPanelView: View {
                         kindChip(kind)
                     }
                 }
-                .padding(.horizontal, 24)
+                .padding(.horizontal, FrameSpacing.xl)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: FrameSpacing.m) {
                 Picker("", selection: $selectedSceneID) {
                     Text(appState.localized("production.filter.allScenes"))
                         .tag(UUID?.none)
@@ -173,19 +227,22 @@ struct ProductionPanelView: View {
                 // with the title and the kind chips (was centered in 190 pt).
                 .frame(width: 190, alignment: .leading)
 
-                Picker("", selection: $grouping) {
-                    Text(appState.localized("production.group.scene"))
-                        .tag(ProductionGrouping.scene)
-                    Text(appState.localized("production.group.kind"))
-                        .tag(ProductionGrouping.kind)
+                HStack(spacing: FrameSpacing.s) {
+                    Text(appState.localized("production.group.label"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.secondaryText)
+                    ProductionGroupingControl(
+                        grouping: $grouping,
+                        sceneTitle: appState.localized("production.group.scene"),
+                        kindTitle: appState.localized("production.group.kind")
+                    )
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 190, alignment: .leading)
+                .help(appState.localized("production.group.help"))
 
                 Toggle(appState.localized("production.filter.showDone"), isOn: $showsDone)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(FrameCheckboxToggleStyle())
                     .font(.system(size: 11))
+                    .help(appState.localized("production.filter.showDone.help"))
 
                 Spacer(minLength: 4)
 
@@ -199,9 +256,9 @@ struct ProductionPanelView: View {
                         .accessibilityIdentifier("production-navigation-message")
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, FrameSpacing.xl)
         }
-        .padding(.vertical, 12)
+        .padding(.vertical, FrameSpacing.m)
     }
 
     private func kindChip(_ kind: ProductionItemKind?) -> some View {
@@ -246,6 +303,7 @@ struct ProductionPanelView: View {
             }
         }
         .buttonStyle(.cursorPlain)
+        .help(appState.localized(ProductionExplanation.tooltipKey(for: kind)))
         .accessibilityIdentifier("production-chip-\(kind?.rawValue ?? "all")")
     }
 
@@ -262,8 +320,8 @@ struct ProductionPanelView: View {
                         sectionView(section)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
+                .padding(.horizontal, FrameSpacing.xl)
+                .padding(.vertical, FrameSpacing.l)
             }
         }
     }
@@ -313,6 +371,13 @@ struct ProductionPanelView: View {
                     item: item,
                     title: title(for: item),
                     reason: reasonLabel(for: item),
+                    explanation: ProductionExplanation.explanation(
+                        for: item,
+                        language: appState.currentLanguage,
+                        recordShortcut: appState.settings.activeShortcut(for: .recordTake)?.display
+                    ),
+                    actionTitle: ProductionExplanation.actionKey(for: item)
+                        .map { appState.localized($0) },
                     detail: detail(for: item),
                     isManual: item.reason == .manualTask,
                     kindIcon: kindIcon(item.kind),
@@ -355,10 +420,11 @@ struct ProductionPanelView: View {
             .frame(width: 160)
 
             Button(appState.localized("production.task.add"), action: addTask)
+                .buttonStyle(.framePrimary)
                 .disabled(newTaskText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("production-task-add")
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, FrameSpacing.xl)
     }
 
     // MARK: - Actions
@@ -409,31 +475,7 @@ struct ProductionPanelView: View {
     // MARK: - Presentation helpers
 
     private func title(for item: ProductionItem) -> String {
-        if !item.sourceText.isEmpty {
-            return item.sourceText
-        }
-        switch item.reason {
-        case .sceneNeedsTake:
-            if let order = item.sceneOrder {
-                return String(format: appState.localized("production.item.scene"), max(0, order) + 1)
-            }
-            return appState.localized("production.item.sceneFallback")
-        case .bRollNeedsFootage, .bRollNeedsAsset:
-            return indexedTitle(appState.localized("production.item.bRoll"), index: item.sourceIndex)
-        case .editingNeedsWork:
-            return indexedTitle(appState.localized("production.item.editing"), index: item.sourceIndex)
-        case .claimNeedsVerification:
-            return appState.localized("production.item.claim")
-        case .publishingChecklist(let checklistItem):
-            return appState.localized(checklistItem.titleKey)
-        case .manualTask:
-            return appState.localized("production.item.task")
-        }
-    }
-
-    private func indexedTitle(_ base: String, index: Int?) -> String {
-        guard let index else { return base }
-        return "\(base) \(index + 1)"
+        ProductionExplanation.title(for: item, language: appState.currentLanguage)
     }
 
     private func reasonLabel(for item: ProductionItem) -> String {
@@ -527,6 +569,8 @@ private struct ProductionRow: View {
     let item: ProductionItem
     let title: String
     let reason: String
+    let explanation: String
+    let actionTitle: String?
     let detail: String?
     let isManual: Bool
     let kindIcon: String
@@ -560,7 +604,13 @@ private struct ProductionRow: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
 
+                Text(explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 HStack(spacing: 5) {
+                    originTag
                     Text(reason)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(reasonColor)
@@ -616,21 +666,20 @@ private struct ProductionRow: View {
                 .fixedSize()
                 .foregroundStyle(theme.secondaryText)
                 .accessibilityLabel(appState.localized("production.task.more"))
-            } else {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(theme.tertiaryText)
-                    .padding(.top, 6)
+            } else if let actionTitle {
+                Button(actionTitle, action: onNavigate)
+                    .buttonStyle(FrameSecondaryButtonStyle(size: .compact))
+                    .accessibilityIdentifier("production-action-\(item.id)")
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(.horizontal, FrameLayout.cardPadding)
+        .padding(.vertical, FrameSpacing.s + 1)
         .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
                 .fill(theme.cardBackground)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: FrameRadius.card, style: .continuous)
                 .stroke(theme.divider, lineWidth: 1)
         }
         .contentShape(Rectangle())
@@ -654,8 +703,92 @@ private struct ProductionRow: View {
         .accessibilityIdentifier("production-item-\(item.id)")
     }
 
+    /// «automática» for rows the app derives, «manual» for the writer's own.
+    private var originTag: some View {
+        Text(appState.localized(isManual ? "production.tag.manual" : "production.tag.auto"))
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(isManual ? theme.secondaryText : theme.accentText)
+            .padding(.horizontal, 6)
+            .frame(height: 15)
+            .background {
+                Capsule().fill(isManual ? theme.hover : theme.accentSoft)
+            }
+            .accessibilityIdentifier("production-tag-\(item.id)")
+    }
+
     private var onEditLabel: String {
         appState.localized("production.task.edit")
+    }
+}
+
+// MARK: - Controls
+
+/// Two-option control in the theme's accent instead of the system-blue
+/// segmented picker.
+struct ProductionGroupingControl: View {
+    @Environment(\.frameTheme) private var theme
+    @Binding var grouping: ProductionGrouping
+    let sceneTitle: String
+    let kindTitle: String
+
+    var body: some View {
+        HStack(spacing: FrameSpacing.xxs) {
+            segment(.scene, title: sceneTitle)
+            segment(.kind, title: kindTitle)
+        }
+        .padding(FrameSpacing.xxs)
+        .background {
+            RoundedRectangle(cornerRadius: FrameRadius.control + 2, style: .continuous)
+                .fill(theme.hover)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("production-grouping")
+    }
+
+    private func segment(_ value: ProductionGrouping, title: String) -> some View {
+        let isSelected = grouping == value
+        return Button {
+            grouping = value
+        } label: {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? FrameTheme.textColor(onFill: theme.accentStrong) : theme.secondaryText)
+                .padding(.horizontal, FrameSpacing.m)
+                .frame(height: 22)
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: FrameRadius.control, style: .continuous)
+                            .fill(theme.accentStrong)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.cursorPlain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("production-group-\(value.rawValue)")
+    }
+}
+
+/// Checkbox drawn in the theme accent (the system one is always system blue).
+struct FrameCheckboxToggleStyle: ToggleStyle {
+    @Environment(\.frameTheme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: FrameSpacing.s - 2) {
+                Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13))
+                    .foregroundStyle(configuration.isOn ? theme.accentStrong : theme.tertiaryText)
+                configuration.label
+                    .foregroundStyle(theme.secondaryText)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.cursorPlain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(configuration.isOn ? "1" : "0")
     }
 }
 
