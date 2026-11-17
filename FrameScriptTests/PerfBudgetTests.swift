@@ -213,7 +213,7 @@ final class PerfBudgetTests: FrameScriptTestCase {
         }
         let median = samples.sorted()[samples.count / 2]
         // Measured ~13 ms (Debug test host) for ~300 paragraphs.
-        XCTAssertLessThan(median, 60, "canvas redraw median \(median) ms")
+        XCTAssertLessThan(median, 30, "canvas redraw median \(median) ms")
     }
 
     // MARK: - Main window budgets
