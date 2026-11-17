@@ -192,11 +192,11 @@ struct SidebarRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        ZStack(alignment: .trailing) {
+        ZStack(alignment: .topTrailing) {
             Button(action: action) {
                 SidebarRowLayout(
                     isSelected: isSelected,
-                    trailingInset: researchUnconfirmedCount > 0 ? 36 : FrameLayout.sidebarRowInset,
+                    trailingInset: researchUnconfirmedCount > 0 ? 46 : FrameLayout.sidebarRowInset,
                     fill: rowFill
                 ) {
                     Text(String(format: "%02d", scene.order + 1))
@@ -222,6 +222,7 @@ struct SidebarRow: View {
             // Sibling button, not nested inside the row button, so the badge
             // opens the research panel instead of only selecting the scene.
             ResearchSidebarBadge(sceneID: scene.id, count: researchUnconfirmedCount)
+                .padding(.top, FrameSpacing.m) // measured: puts the badge on the rhythm badge's top edge
                 .padding(.trailing, FrameLayout.sidebarRowInset)
         }
         .onHover { isHovering = $0 }

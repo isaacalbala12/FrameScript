@@ -14,11 +14,7 @@ struct TimelineWorkspaceView: View {
     @State private var isPending = true
     @State private var selectedBlockID: String?
     @State private var selectedSceneID: UUID?
-    /// True until the writer zooms by hand: the canvas then keeps the whole
-    /// video fitted through rebuilds and window resizes.
-    @State private var followsFit = true
     @State private var canvasWidth: CGFloat = 0
-    @State private var lastFitPointsPerSecond: Double?
 
     /// Width the timeline canvas gets: the pane minus the track-label column
     /// (112 + divider) and a small right margin.
@@ -44,9 +40,9 @@ struct TimelineWorkspaceView: View {
                 isPending: isPending,
                 onSelectBlock: select,
                 onMoveScene: moveScene,
-                onZoomIn: { followsFit = false; zoom.zoomIn() },
-                onZoomOut: { followsFit = false; zoom.zoomOut() },
-                onZoomChange: { followsFit = false; zoom.setPointsPerSecond($0) },
+                onZoomIn: zoom.zoomIn,
+                onZoomOut: zoom.zoomOut,
+                onZoomChange: { zoom.setPointsPerSecond($0) },
                 onFit: fitToWidth,
                 isFitted: TimelineZoom.isFitted(
                     pointsPerSecond: zoom.pointsPerSecond,
@@ -111,26 +107,11 @@ struct TimelineWorkspaceView: View {
 
     /// Explicit «Ajustar»: fit now and resume following the canvas.
     private func fitToWidth() {
-        followsFit = true
-        applyFit()
+        zoom.fitAndFollow(totalDuration: layout.totalDuration, availableWidth: fitWidth)
     }
 
-    /// Rebuilds and resizes re-fit only while the zoom is still the one the
-    /// last fit chose. A manual zoom (slider, pinch, ⌘+/⌘-) stops the following.
     private func refitIfFollowing() {
-        guard followsFit else { return }
-        if let lastFitPointsPerSecond,
-           abs(zoom.pointsPerSecond - lastFitPointsPerSecond) > 0.0001 {
-            followsFit = false
-            return
-        }
-        applyFit()
-    }
-
-    private func applyFit() {
-        guard layout.totalDuration > 0 else { return }
-        zoom.fit(totalDuration: layout.totalDuration, availableWidth: fitWidth)
-        lastFitPointsPerSecond = zoom.pointsPerSecond
+        zoom.refitIfFollowing(totalDuration: layout.totalDuration, availableWidth: fitWidth)
     }
 
     // MARK: Actions

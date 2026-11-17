@@ -287,18 +287,48 @@ final class TimelineViewState {
 
     func reset() {
         pointsPerSecond = TimelineZoom.defaultPointsPerSecond
+        followsFit = true
+        lastFitPointsPerSecond = nil
     }
 
     func setPointsPerSecond(_ value: Double) {
         pointsPerSecond = TimelineZoom.clamp(value)
     }
 
-    /// «Ajustar»: the whole video across `availableWidth`.
-    func fit(totalDuration: TimeInterval, availableWidth: Double) {
+    // MARK: Fit-to-width following
+
+    /// True until the writer zooms by hand. Lives here (not in the view) so a
+    /// manual zoom survives leaving the Timeline and coming back.
+    private(set) var followsFit = true
+    private var lastFitPointsPerSecond: Double?
+
+    /// «Ajustar»: fit the whole video across `availableWidth` and resume
+    /// following the canvas on rebuilds and resizes.
+    func fitAndFollow(totalDuration: TimeInterval, availableWidth: Double) {
+        followsFit = true
+        applyFit(totalDuration: totalDuration, availableWidth: availableWidth)
+    }
+
+    /// Called on rebuilds and resizes. Re-fits only while the zoom is still
+    /// the one the last fit chose; any other zoom (slider, pinch, ⌘+/⌘-, +/-)
+    /// stops the following.
+    func refitIfFollowing(totalDuration: TimeInterval, availableWidth: Double) {
+        guard followsFit else { return }
+        if let lastFitPointsPerSecond,
+           abs(pointsPerSecond - lastFitPointsPerSecond) > 0.0001 {
+            followsFit = false
+            return
+        }
+        applyFit(totalDuration: totalDuration, availableWidth: availableWidth)
+    }
+
+    private func applyFit(totalDuration: TimeInterval, availableWidth: Double) {
+        guard totalDuration > 0 else { return }
         pointsPerSecond = TimelineZoom.fitPointsPerSecond(
             totalDuration: totalDuration,
             availableWidth: availableWidth
         )
+        lastFitPointsPerSecond = pointsPerSecond
     }
 }
 

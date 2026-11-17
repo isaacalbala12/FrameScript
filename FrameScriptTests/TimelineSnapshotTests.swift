@@ -24,7 +24,7 @@ final class TimelineSnapshotTests: XCTestCase {
         }
         XCTAssertEqual(L10n.tr("timeline.title", language: .spanish), "Línea de tiempo del guion")
         XCTAssertEqual(L10n.tr("timeline.track.narration", language: .spanish), "Narración")
-        XCTAssertEqual(L10n.tr("timeline.dragHint", language: .spanish), "Arrastra una escena para cambiar el orden.")
+        XCTAssertEqual(L10n.tr("timeline.dragHint", language: .spanish), "Arrastra para reordenar")
     }
 
     func testTimelinePanelSnapshotMatrix() throws {

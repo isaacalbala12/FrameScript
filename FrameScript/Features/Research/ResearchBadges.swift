@@ -17,14 +17,19 @@ struct ResearchSidebarBadge: View {
             Button {
                 appState.openResearchPanel(sceneID: sceneID)
             } label: {
-                Text("\(count)")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(theme.warning)
-                    .padding(.horizontal, 5)
-                    .frame(height: 15)
-                    .background {
-                        Capsule().fill(theme.warning.opacity(0.15))
-                    }
+                HStack(spacing: 2) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(theme.accentText)
+                .padding(.horizontal, 5)
+                .frame(height: 15)
+                .background {
+                    Capsule().fill(theme.accentSoft)
+                }
+                .layoutProbe("sidebar.badge.research")
             }
             .buttonStyle(.cursorPlain)
             .help(String(format: appState.localized("research.badgeHelp"), count))

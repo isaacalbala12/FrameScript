@@ -205,11 +205,11 @@ final class ProductionClarityTests: FrameScriptTestCase {
         let item = try XCTUnwrap(ProductionChecklistCenter.shared.snapshot.items.first { $0.reason == .sceneNeedsTake })
         XCTAssertEqual(
             ProductionExplanation.explanation(for: item, language: .spanish, recordShortcut: "⌘R"),
-            "Esta escena aún no tiene ninguna toma buena. Grábala con ⌘R."
+            "Esta escena aún no tiene ninguna toma buena. Grábala con el botón «Grabar toma» (⌘R)."
         )
         XCTAssertEqual(
             ProductionExplanation.explanation(for: item, language: .spanish, recordShortcut: nil),
-            "Esta escena aún no tiene ninguna toma buena. Grábala con Grabar toma."
+            "Esta escena aún no tiene ninguna toma buena. Grábala con el botón «Grabar toma»."
         )
         XCTAssertEqual(ProductionExplanation.actionKey(for: item), "production.action.record")
         // The real shortcut comes from the user's settings.
@@ -307,7 +307,7 @@ final class TimelineClarityTests: FrameScriptTestCase {
         XCTAssertGreaterThan(layout.totalDuration, TimelineEmptyState.minimumDuration)
         let state = TimelineViewState()
         let available = 760.0
-        state.fit(totalDuration: layout.totalDuration, availableWidth: available)
+        state.fitAndFollow(totalDuration: layout.totalDuration, availableWidth: available)
         XCTAssertLessThan(state.pointsPerSecond, TimelineZoom.maximumPointsPerSecond, "not the old 400%")
         XCTAssertEqual(
             TimelineViewport(pointsPerSecond: state.pointsPerSecond).contentWidth(totalDuration: layout.totalDuration),
@@ -340,6 +340,11 @@ final class TimelineClarityTests: FrameScriptTestCase {
         let blocks = layout.blocks(on: .scenes)
         XCTAssertEqual(
             TimelineBlockLabel.label(for: blocks[0], layout: layout, language: .spanish),
+            "01 · Gancho",
+            "the block label has no « · Real» suffix so the title fits"
+        )
+        XCTAssertEqual(
+            TimelineBlockLabel.sceneTooltip(for: blocks[0], layout: layout, language: .spanish),
             "01 · Gancho · Real"
         )
         XCTAssertEqual(
@@ -405,6 +410,125 @@ final class TimelineClarityTests: FrameScriptTestCase {
         let appState = DesignReviewSnapshotTests.makeAppState(project: ClarityFixtures.realistic(), defaults: makeDefaults()).0
         let layout = TimelineLayoutBuilder.build(appState.timelineInput())
         let block = layout.blocks(on: .scenes)[1]
-        XCTAssertEqual(TimelineBlockLabel.sceneTooltip(for: block, layout: layout), "02 · Qué es y quién lo hace")
+        XCTAssertEqual(TimelineBlockLabel.sceneTooltip(for: block, layout: layout), "02 · Qué es y quién lo hace · Real")
+    }
+
+    func testNarrationLabelsAreCutAtWholeWordsWithAnEllipsis() {
+        let text = "Llega y el segundo coche mientras la pista"
+        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 1_000), text)
+        for width in stride(from: 10 as CGFloat, through: 260, by: 5) {
+            let cut = TimelineBlockLabel.wholeWords(text, inWidth: width)
+            if cut.isEmpty { continue }
+            XCTAssertTrue(cut.hasSuffix("…"), "\(cut) at \(width)")
+            let words = cut.dropLast().split(separator: " ")
+            XCTAssertTrue(text.hasPrefix(words.joined(separator: " ")), "\(cut) is whole words")
+            XCTAssertTrue(TimelineBlockLabel.fits(cut, inWidth: width), "\(cut) fits \(width)")
+        }
+        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 8), "", "no word fits: draw nothing")
+    }
+
+    // MARK: Fit following (F6, F7)
+
+    func testManualZoomStopsAutoFitAndAjustarResumesIt() {
+        let state = TimelineViewState()
+        let total = 360.0
+        state.fitAndFollow(totalDuration: total, availableWidth: 900)
+        let fitted = state.pointsPerSecond
+        XCTAssertTrue(state.followsFit)
+        // A resize refits while following.
+        state.refitIfFollowing(totalDuration: total, availableWidth: 600)
+        XCTAssertEqual(state.pointsPerSecond, 600 / total, accuracy: 0.0001)
+        XCTAssertNotEqual(state.pointsPerSecond, fitted)
+        // Manual zoom (the path ⌘=, ⌘- and + use) then a resize: no refit.
+        state.zoomIn()
+        let manual = state.pointsPerSecond
+        state.refitIfFollowing(totalDuration: total, availableWidth: 900)
+        XCTAssertFalse(state.followsFit)
+        XCTAssertEqual(state.pointsPerSecond, manual)
+        state.refitIfFollowing(totalDuration: total, availableWidth: 400)
+        XCTAssertEqual(state.pointsPerSecond, manual, "stays manual on every later resize")
+        // Slider path.
+        let other = TimelineViewState()
+        other.fitAndFollow(totalDuration: total, availableWidth: 900)
+        other.zoomFraction = 0.9
+        other.refitIfFollowing(totalDuration: total, availableWidth: 500)
+        XCTAssertFalse(other.followsFit)
+        // «Ajustar» resumes following.
+        state.fitAndFollow(totalDuration: total, availableWidth: 900)
+        XCTAssertTrue(state.followsFit)
+        XCTAssertEqual(state.pointsPerSecond, 900 / total, accuracy: 0.0001)
+        state.refitIfFollowing(totalDuration: total, availableWidth: 700)
+        XCTAssertEqual(state.pointsPerSecond, 700 / total, accuracy: 0.0001)
+    }
+
+    func testSharedStateKeepsTheManualZoomAcrossVisits() {
+        let shared = TimelineViewState.shared
+        shared.fitAndFollow(totalDuration: 300, availableWidth: 900)
+        shared.zoomOut()
+        shared.refitIfFollowing(totalDuration: 300, availableWidth: 900)
+        let manual = shared.pointsPerSecond
+        XCTAssertFalse(shared.followsFit)
+        // A new Timeline view reads the same object: nothing refits it.
+        TimelineViewState.shared.refitIfFollowing(totalDuration: 300, availableWidth: 900)
+        XCTAssertEqual(TimelineViewState.shared.pointsPerSecond, manual)
+        shared.reset()
+        shared.fitAndFollow(totalDuration: 300, availableWidth: 900)
+    }
+}
+
+@MainActor
+final class SidebarBadgeAlignmentTests: FrameScriptTestCase {
+    func testRhythmAndResearchBadgesShareTheTitleTopEdge() throws {
+        let sink = LayoutProbeSink()
+        var project = ClarityFixtures.realistic()
+        let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
+        scene.scriptText = Array(repeating: "palabra", count: 90).joined(separator: " ") + "."
+        let (appState, inspector) = DesignReviewSnapshotTests.makeAppState(project: project, defaults: makeDefaults())
+        _ = appState.addResearchClaim(text: "Dato de prueba", status: .probable, sceneIDs: [scene.id], needsVerification: true)
+        RhythmReviewCenter.shared.refreshNow(project: appState.project, settings: appState.settings)
+        defer { RhythmReviewCenter.shared.clear() }
+        // The analysis runs off the main thread; wait for it.
+        for _ in 0..<100 where RhythmReviewCenter.shared.warningCount(for: scene.id) == 0 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertGreaterThan(RhythmReviewCenter.shared.warningCount(for: scene.id), 0, "fixture needs a rhythm warning")
+        project = appState.project
+        SnapshotRenderer.render(
+            AppShellView(inspectorState: inspector).environment(\.layoutProbeSink, sink),
+            name: "sidebar-badges", suite: "SidebarBadgeAlignmentTests",
+            size: CGSize(width: 1512, height: 949), appearance: .dark, language: .spanish, appState: appState
+        )
+        let rhythm = sink.frames("sidebar.badge.rhythm")
+        let research = sink.frames("sidebar.badge.research")
+        XCTAssertGreaterThanOrEqual(research.count, 1, "\(research)")
+        // Every scene shares the long sentence, so pair each research badge
+        // with the rhythm badge of its own row.
+        for c in research {
+            guard let r = rhythm.min(by: { abs($0.midY - c.midY) < abs($1.midY - c.midY) }) else {
+                XCTFail("no rhythm badge for \(c)")
+                continue
+            }
+            XCTAssertEqual(r.minY, c.minY, accuracy: 1, "badges share one top edge: \(r) vs \(c)")
+            XCTAssertLessThan(r.maxX, c.minX, "rhythm sits left of research, not on top of it: \(r) vs \(c)")
+        }
+    }
+
+    func testSidebarBadgesLightSnapshot() throws {
+        let project = ClarityFixtures.realistic()
+        let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
+        scene.scriptText = Array(repeating: "palabra", count: 90).joined(separator: " ") + "."
+        let (appState, inspector) = DesignReviewSnapshotTests.makeAppState(project: project, defaults: makeDefaults())
+        _ = appState.addResearchClaim(text: "Dato de prueba", status: .probable, sceneIDs: [scene.id], needsVerification: true)
+        RhythmReviewCenter.shared.refreshNow(project: appState.project, settings: appState.settings)
+        defer { RhythmReviewCenter.shared.clear() }
+        // The analysis runs off the main thread; wait for it.
+        for _ in 0..<100 where RhythmReviewCenter.shared.warningCount(for: scene.id) == 0 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        SnapshotRenderer.render(
+            AppShellView(inspectorState: inspector),
+            name: "sidebar-badges-light", suite: "SidebarBadgeAlignmentTests",
+            size: CGSize(width: 1512, height: 949), appearance: .light, language: .spanish, appState: appState
+        )
     }
 }

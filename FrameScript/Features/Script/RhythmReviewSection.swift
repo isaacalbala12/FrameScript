@@ -144,14 +144,19 @@ struct RhythmSidebarBadge: View {
 
     var body: some View {
         if count > 0 {
-            Text("\(count)")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(theme.warning)
-                .padding(.horizontal, 5)
-                .frame(height: 15)
-                .background {
-                    Capsule().fill(theme.warning.opacity(0.15))
-                }
+            HStack(spacing: 2) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 8, weight: .semibold))
+                Text("\(count)")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(theme.warning)
+            .padding(.horizontal, 5)
+            .frame(height: 15)
+            .background {
+                Capsule().fill(theme.warning.opacity(0.15))
+            }
+            .layoutProbe("sidebar.badge.rhythm")
                 .help(L10n.plural("rhythm.badgeAccessibility", count: count, language: appState.currentLanguage))
                 .accessibilityLabel(L10n.plural("rhythm.badgeAccessibility", count: count, language: appState.currentLanguage))
         }

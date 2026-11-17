@@ -218,13 +218,15 @@ struct TimelinePanelView: View {
 
     private var footer: some View {
         HStack(spacing: FrameSpacing.l) {
-            legendChip(color: theme.accent.color.opacity(0.8), title: text("timeline.legend.real"))
-                .help(text("timeline.legend.real.help"))
-            legendChip(color: theme.accent.color.opacity(0.2), title: text("timeline.legend.estimated"))
-                .help(text("timeline.legend.estimated.help"))
-            legendChip(color: theme.warning, title: text("timeline.legend.pause"))
-                .help(text("timeline.legend.pause.help"))
-            if warningCount > 0 {
+            if !showsEmptyState {
+                legendChip(color: theme.accent.color.opacity(0.8), title: text("timeline.legend.real"))
+                    .help(text("timeline.legend.real.help"))
+                legendChip(color: theme.accent.color.opacity(0.2), title: text("timeline.legend.estimated"))
+                    .help(text("timeline.legend.estimated.help"))
+                legendChip(color: theme.warning, title: text("timeline.legend.pause"))
+                    .help(text("timeline.legend.pause.help"))
+            }
+            if !showsEmptyState, warningCount > 0 {
                 legendChip(
                     color: theme.warning,
                     title: L10n.plural(
@@ -356,7 +358,7 @@ private struct TimelineCanvasView: View {
                 Color.clear
                     .frame(width: width, height: metrics.height(for: .scenes))
                     .offset(x: x, y: metrics.yOffset(for: .scenes))
-                    .help(TimelineBlockLabel.sceneTooltip(for: block, layout: layout))
+                    .help(TimelineBlockLabel.sceneTooltip(for: block, layout: layout, language: language))
             }
         }
     }
@@ -545,6 +547,9 @@ private struct TimelineCanvasView: View {
                 labelWidthNeeded = 0
             }
         }
+        if block.track == .narration {
+            label = TimelineBlockLabel.wholeWords(label, inWidth: width - 12)
+        }
         if !label.isEmpty, width >= labelWidthNeeded {
             let textColor = theme.primaryText
             context.drawLayer { layer in
@@ -552,7 +557,7 @@ private struct TimelineCanvasView: View {
                     layer.clip(to: Path(CGRect(
                         x: rect.minX,
                         y: rect.minY,
-                        width: max(0, rect.width - 42),
+                        width: max(0, rect.width - (width > 120 ? 42 : 4)),
                         height: rect.height
                     )))
                 } else {
@@ -712,11 +717,12 @@ enum TimelineBlockLabel {
     ) -> String {
         switch block.track {
         case .scenes:
-            let hasReal = layout.scene(id: block.sceneID)?.hasRealTake == true
             let number = sceneNumber(for: block, layout: layout)
             let title = block.label.trimmingCharacters(in: .whitespacesAndNewlines)
             let base = title.isEmpty ? number : "\(number) · \(title)"
-            return hasReal ? "\(base) · \(text("timeline.real", language: language))" : base
+            // Real vs estimated shows in the fill and the Tomas track; the
+            // block keeps room for the title. The tooltip says it in words.
+            return base
         case .narration:
             return block.label
         case .pauses:
@@ -739,14 +745,33 @@ enum TimelineBlockLabel {
     /// Rough text width at the canvas font, to decide between the full label
     /// and the bare number without drawing a cut-off word.
     static func fits(_ label: String, inWidth width: CGFloat) -> Bool {
-        CGFloat(label.count) * 6.3 + 4 <= width
+        CGFloat(label.count) * 7 + 4 <= width
+    }
+
+    /// Longest run of whole words that fits `width`, with an ellipsis when
+    /// words were dropped; empty when not even one word fits.
+    static func wholeWords(_ label: String, inWidth width: CGFloat) -> String {
+        if fits(label, inWidth: width) { return label }
+        var kept: [Substring] = []
+        for word in label.split(separator: " ") {
+            let candidate = (kept + [word]).joined(separator: " ") + "…"
+            guard fits(candidate, inWidth: width) else { break }
+            kept.append(word)
+        }
+        return kept.isEmpty ? "" : kept.joined(separator: " ") + "…"
     }
 
     /// Full "01 · Title" for the hover tooltip.
-    static func sceneTooltip(for block: TimelineBlock, layout: TimelineLayout) -> String {
+    static func sceneTooltip(
+        for block: TimelineBlock,
+        layout: TimelineLayout,
+        language: AppLanguage = .spanish
+    ) -> String {
         let number = sceneNumber(for: block, layout: layout)
         let title = block.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? number : "\(number) · \(title)"
+        let base = title.isEmpty ? number : "\(number) · \(title)"
+        guard layout.scene(id: block.sceneID)?.hasRealTake == true else { return base }
+        return "\(base) · \(L10n.tr("timeline.real", language: language))"
     }
 
     /// Two-digit scene number (`01`), matching the sidebar.
