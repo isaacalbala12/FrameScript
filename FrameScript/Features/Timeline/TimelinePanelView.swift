@@ -1,3 +1,4 @@
+import AppKit
 import FrameScriptCore
 import SwiftUI
 
@@ -537,18 +538,16 @@ private struct TimelineCanvasView: View {
         var label = label(for: block)
         var labelWidthNeeded = minimumLabelWidth(for: block.track)
         if block.track == .scenes {
-            // Full "01 · Title" only when it fits whole; otherwise just the
-            // number (the title stays in the tooltip). Never a cut-off word.
+            // Number plus as many whole words of the title as fit, then «…»;
+            // the number alone only when not even one word fits.
             let reserved: CGFloat = width > 120 ? 48 : 12
-            if !TimelineBlockLabel.fits(label, inWidth: width - reserved) {
-                label = TimelineBlockLabel.sceneNumber(for: block, layout: layout)
-                labelWidthNeeded = 22
-            } else {
-                labelWidthNeeded = 0
-            }
+            label = TimelineBlockLabel.sceneLabel(
+                for: block, layout: layout, inWidth: width - reserved, language: language
+            )
+            labelWidthNeeded = 0
         }
         if block.track == .narration {
-            label = TimelineBlockLabel.wholeWords(label, inWidth: width - 12)
+            label = TimelineBlockLabel.wholeWords(label, inWidth: width - 12, fontSize: 10)
         }
         if !label.isEmpty, width >= labelWidthNeeded {
             let textColor = theme.primaryText
@@ -742,23 +741,43 @@ enum TimelineBlockLabel {
         }
     }
 
-    /// Rough text width at the canvas font, to decide between the full label
-    /// and the bare number without drawing a cut-off word.
-    static func fits(_ label: String, inWidth width: CGFloat) -> Bool {
-        CGFloat(label.count) * 7 + 4 <= width
+    /// Real width of `text` in the canvas font (system, medium).
+    static func textWidth(_ text: String, fontSize: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    static func fits(_ label: String, inWidth width: CGFloat, fontSize: CGFloat = 11) -> Bool {
+        textWidth(label, fontSize: fontSize) <= width
     }
 
     /// Longest run of whole words that fits `width`, with an ellipsis when
     /// words were dropped; empty when not even one word fits.
-    static func wholeWords(_ label: String, inWidth width: CGFloat) -> String {
-        if fits(label, inWidth: width) { return label }
+    static func wholeWords(_ label: String, inWidth width: CGFloat, fontSize: CGFloat = 11) -> String {
+        if fits(label, inWidth: width, fontSize: fontSize) { return label }
         var kept: [Substring] = []
         for word in label.split(separator: " ") {
             let candidate = (kept + [word]).joined(separator: " ") + "…"
-            guard fits(candidate, inWidth: width) else { break }
+            guard fits(candidate, inWidth: width, fontSize: fontSize) else { break }
             kept.append(word)
         }
         return kept.isEmpty ? "" : kept.joined(separator: " ") + "…"
+    }
+
+    /// «02 · Qué es…»: the number plus whole title words that fit, or just the
+    /// number when not even one word does.
+    static func sceneLabel(
+        for block: TimelineBlock,
+        layout: TimelineLayout,
+        inWidth width: CGFloat,
+        language: AppLanguage
+    ) -> String {
+        let number = sceneNumber(for: block, layout: layout)
+        let title = block.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return number }
+        let prefix = "\(number) · "
+        let words = wholeWords(title, inWidth: width - textWidth(prefix, fontSize: 11))
+        return words.isEmpty ? number : prefix + words
     }
 
     /// Full "01 · Title" for the hover tooltip.

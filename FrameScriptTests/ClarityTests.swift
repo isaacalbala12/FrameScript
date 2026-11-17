@@ -407,6 +407,20 @@ final class TimelineClarityTests: FrameScriptTestCase {
     func testNarrowSceneBlocksShowTheNumberOnlyAndKeepTheTitleInTheTooltip() {
         XCTAssertTrue(TimelineBlockLabel.fits("01 · Gancho", inWidth: 120))
         XCTAssertFalse(TimelineBlockLabel.fits("01 · Qué es y quién lo hace", inWidth: 60))
+        let narrow = DesignReviewSnapshotTests.makeAppState(project: ClarityFixtures.realistic(), defaults: makeDefaults()).0
+        let sceneLayout = TimelineLayoutBuilder.build(narrow.timelineInput())
+        let second = sceneLayout.blocks(on: .scenes)[1]
+        // ~140 pt block: number plus whole words and «…».
+        let mid = TimelineBlockLabel.sceneLabel(for: second, layout: sceneLayout, inWidth: 110, language: .spanish)
+        XCTAssertTrue(mid.hasPrefix("02 · "), mid)
+        XCTAssertTrue(mid.hasSuffix("…"), mid)
+        XCTAssertTrue(TimelineBlockLabel.fits(mid, inWidth: 110), "measured with the real font: \(mid)")
+        XCTAssertEqual(
+            TimelineBlockLabel.sceneLabel(for: second, layout: sceneLayout, inWidth: 400, language: .spanish),
+            "02 · Qué es y quién lo hace"
+        )
+        // Not even one word fits next to the number: number only.
+        XCTAssertEqual(TimelineBlockLabel.sceneLabel(for: second, layout: sceneLayout, inWidth: 30, language: .spanish), "02")
         let appState = DesignReviewSnapshotTests.makeAppState(project: ClarityFixtures.realistic(), defaults: makeDefaults()).0
         let layout = TimelineLayoutBuilder.build(appState.timelineInput())
         let block = layout.blocks(on: .scenes)[1]
@@ -415,16 +429,16 @@ final class TimelineClarityTests: FrameScriptTestCase {
 
     func testNarrationLabelsAreCutAtWholeWordsWithAnEllipsis() {
         let text = "Llega y el segundo coche mientras la pista"
-        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 1_000), text)
+        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 1_000, fontSize: 10), text)
         for width in stride(from: 10 as CGFloat, through: 260, by: 5) {
-            let cut = TimelineBlockLabel.wholeWords(text, inWidth: width)
-            if cut.isEmpty { continue }
+            let cut = TimelineBlockLabel.wholeWords(text, inWidth: width, fontSize: 10)
+            if cut.isEmpty || cut == text { continue }
             XCTAssertTrue(cut.hasSuffix("…"), "\(cut) at \(width)")
             let words = cut.dropLast().split(separator: " ")
             XCTAssertTrue(text.hasPrefix(words.joined(separator: " ")), "\(cut) is whole words")
-            XCTAssertTrue(TimelineBlockLabel.fits(cut, inWidth: width), "\(cut) fits \(width)")
+            XCTAssertTrue(TimelineBlockLabel.fits(cut, inWidth: width, fontSize: 10), "\(cut) fits \(width)")
         }
-        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 8), "", "no word fits: draw nothing")
+        XCTAssertEqual(TimelineBlockLabel.wholeWords(text, inWidth: 8, fontSize: 10), "", "no word fits: draw nothing")
     }
 
     // MARK: Fit following (F6, F7)
@@ -478,7 +492,7 @@ final class TimelineClarityTests: FrameScriptTestCase {
 
 @MainActor
 final class SidebarBadgeAlignmentTests: FrameScriptTestCase {
-    func testRhythmAndResearchBadgesShareTheTitleTopEdge() throws {
+    func testRhythmAndResearchBadgesAreCenteredOnTheDurationLine() throws {
         let sink = LayoutProbeSink()
         var project = ClarityFixtures.realistic()
         let scene = try XCTUnwrap(project.scenes.sortedByOrder.first)
@@ -508,7 +522,12 @@ final class SidebarBadgeAlignmentTests: FrameScriptTestCase {
                 XCTFail("no rhythm badge for \(c)")
                 continue
             }
-            XCTAssertEqual(r.minY, c.minY, accuracy: 1, "badges share one top edge: \(r) vs \(c)")
+            XCTAssertEqual(r.midY, c.midY, accuracy: 1, "badges share one center line: \(r) vs \(c)")
+            let duration = sink.frames("sidebar.duration").min { abs($0.midY - c.midY) < abs($1.midY - c.midY) }
+            if let duration {
+                XCTAssertEqual(duration.midY, c.midY, accuracy: 1.5, "badges are centered on the duration text: \(duration) vs \(c)")
+                XCTAssertGreaterThanOrEqual(r.minX, duration.maxX - 1, "badges come after the duration")
+            }
             XCTAssertLessThan(r.maxX, c.minX, "rhythm sits left of research, not on top of it: \(r) vs \(c)")
         }
     }

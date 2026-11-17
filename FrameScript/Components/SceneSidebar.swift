@@ -192,11 +192,11 @@ struct SidebarRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .bottomTrailing) {
             Button(action: action) {
                 SidebarRowLayout(
                     isSelected: isSelected,
-                    trailingInset: researchUnconfirmedCount > 0 ? 46 : FrameLayout.sidebarRowInset,
+                    trailingInset: FrameLayout.sidebarRowInset,
                     fill: rowFill
                 ) {
                     Text(String(format: "%02d", scene.order + 1))
@@ -212,9 +212,18 @@ struct SidebarRow: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 } detail: {
-                    SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
+                    // Badges live on the second line, after the duration, so the
+                    // title keeps the full row width.
+                    HStack(spacing: FrameSpacing.xs) {
+                        SceneDurationInlineText(summary: appState.sceneDurationSummary(for: scene))
+                            .layoutProbe("sidebar.duration")
+                        Spacer(minLength: 0)
+                        RhythmSidebarBadge(sceneID: scene.id)
+                    }
+                    // Room for the research badge, which is a sibling button.
+                    .padding(.trailing, researchUnconfirmedCount > 0 ? 34 : 0)
                 } trailing: {
-                    RhythmSidebarBadge(sceneID: scene.id)
+                    EmptyView()
                 }
             }
             .buttonStyle(.cursorPlain)
@@ -222,7 +231,7 @@ struct SidebarRow: View {
             // Sibling button, not nested inside the row button, so the badge
             // opens the research panel instead of only selecting the scene.
             ResearchSidebarBadge(sceneID: scene.id, count: researchUnconfirmedCount)
-                .padding(.top, FrameSpacing.m) // measured: puts the badge on the rhythm badge's top edge
+                .padding(.bottom, FrameSpacing.s - 1) // centers it on the duration line
                 .padding(.trailing, FrameLayout.sidebarRowInset)
         }
         .onHover { isHovering = $0 }
